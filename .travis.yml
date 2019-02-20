@@ -1,0 +1,17 @@
+language: go
+os:
+  - linux
+  - osx
+go:
+  - 1.11.x
+go_import_path: github.com/kataras/fastws
+install:
+  - go get ./...
+script:
+  - go test -v -cover ./...
+after_script:
+  # examples
+  - cd ./_examples
+  - go get ./...
+  - go test -v -cover ./...
+  - cd ../

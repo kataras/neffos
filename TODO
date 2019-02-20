@@ -1,0 +1,4 @@
+r = wsutil.NewReader(conn, ws.StateServerSide)
+w = wsutil.NewWriter(conn, ws.StateServerSide, ws.OpText)
+decoder = json.NewDecoder(r)
+encoder = json.NewEncoder(w)
