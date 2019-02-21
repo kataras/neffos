@@ -36,6 +36,7 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	// If not nil its `Write` will be used instead, on `Encode` its `Write` +`Flush`.
 	// Defaults to a buffered writer, if nil then it will write all data without buffering.
 	Writer    *wsutil.Writer
+	Flush     bool // if true and Writer is not nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
 	WriteCode ws.OpCode
 	// WriteTimeout time allowed to write a message to the connection.
 	// 0 means no timeout.
@@ -64,6 +65,7 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	c.Reader = rd
 	c.WriteCode = ws.OpBinary
 	c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
+	c.Flush = true
 }
 
 func (c *Conn) Err() error {
@@ -99,7 +101,7 @@ func (c *Conn) Encode(v interface{}) error {
 		return err
 	}
 
-	if c.Writer != nil {
+	if c.Writer != nil && !c.Flush { // Flushed already if c.Flush is true.
 		return c.Writer.Flush()
 	}
 
@@ -156,7 +158,13 @@ func (c *Conn) Write(b []byte) (int, error) {
 			return 0, err
 		}
 
-		err = c.Writer.Flush()
+		if c.Flush {
+			err = c.Writer.Flush()
+			if err != nil {
+				return 0, err
+			}
+		}
+
 		return n, err
 	}
 

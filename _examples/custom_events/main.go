@@ -36,10 +36,12 @@ func put(c *fastws.Conn) {
 
 // remove "c" from all events.
 func del(c *fastws.Conn) {
+
 	mu.Lock()
 	for evt, conns := range Events {
 		for i, conn := range conns {
 			if c.ID == conn.ID {
+				// println("delete " + c.ID + " from " + evt)
 				Events[evt] = append(conns[:i], conns[i+1:]...)
 				break // break "conns".
 			}
@@ -141,7 +143,6 @@ func server() {
 		err := c.Err()
 		// if err `IsDisconnected`, then it is unexpected disconnection from the client-side.
 		if closed := fastws.IsDisconnected(err); closed {
-			del(c)
 			return false
 		}
 
