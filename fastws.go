@@ -57,13 +57,13 @@ func writeError(w http.ResponseWriter, statusCode int) {
 	fmt.Fprintln(w, http.StatusText(statusCode))
 }
 
-func (f *FastWS) handleError(c *Conn, err error) bool {
-	if err == nil || f.OnError == nil {
-		return false
+func (fws *FastWS) HandleError(c *Conn, err error) bool {
+	if err == nil || fws.OnError == nil {
+		return true
 	}
 
 	c.reason = err
-	return f.OnError(c)
+	return fws.OnError(c)
 }
 
 type ErrUpgrade struct {
@@ -80,7 +80,16 @@ func IsUpgrade(err error) bool {
 	return ok
 }
 
+// IsDisconnected reports whether the "err" is a timeout or a closed connection error.
 func IsDisconnected(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return IsClosed(err) || IsTimeout(err)
+}
+
+func IsClosed(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -101,7 +110,20 @@ func IsDisconnected(err error) bool {
 	return false
 }
 
-func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
+func IsTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if netErr, ok := err.(*net.OpError); ok {
+		// poll.TimeoutError is the /internal/poll of the go language itself, we can't use it directly.
+		return netErr.Timeout()
+	}
+
+	return false
+}
+
+func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		// RCF rfc2616 https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
 		// The response MUST include an Allow header containing a list of valid methods for the requested resource.
@@ -112,7 +134,7 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if f.CheckOrigin != nil && !f.CheckOrigin(r) {
+	if fws.CheckOrigin != nil && !fws.CheckOrigin(r) {
 		writeError(w, http.StatusForbidden)
 		return
 	}
@@ -121,11 +143,11 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 		Request: r,
 		Header:  make(http.Header),
 	}
-	c.ID = f.IDGenerator(c)
+	c.ID = fws.IDGenerator(c)
 
-	if f.OnUpgrade != nil {
-		err := f.OnUpgrade(c)
-		if !f.handleError(c, err) {
+	if fws.OnUpgrade != nil {
+		err := fws.OnUpgrade(c)
+		if !fws.HandleError(c, err) {
 			if abort, ok := err.(ErrUpgrade); ok && abort.Code > 0 {
 				// this is the only error that we fire back.
 				writeError(w, abort.Code)
@@ -137,13 +159,13 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	upgrader := ws.HTTPUpgrader{
 		Header:  c.Header,
-		Timeout: f.HandshakeTimeout,
+		Timeout: fws.HandshakeTimeout,
 	}
 
 	conn, _, hs, err := upgrader.Upgrade(r, w)
 	if err != nil {
 		abort := ErrUpgrade{err, http.StatusServiceUnavailable}
-		if !f.handleError(c, abort) {
+		if !fws.HandleError(c, abort) {
 			writeError(w, abort.Code)
 		}
 
@@ -152,52 +174,57 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		conn.Close()
-		if f.OnDisconnected != nil {
-			f.OnDisconnected(c)
+		if fws.OnDisconnected != nil {
+			fws.OnDisconnected(c)
 		}
 	}()
 
 	c.establish(conn, hs, ws.StateServerSide)
 
-	if f.OnConnected != nil {
-		err = f.OnConnected(c)
-		if !f.handleError(c, err) {
-			return
+	if fws.OnConnected != nil {
+		err = fws.OnConnected(c)
+		if err != c.reason { // sometimes the user may want to call the `HandleError` manually, we don't want to push the same error twice.
+			if !fws.HandleError(c, err) {
+				return
+			}
 		}
 	}
 }
 
-func (f *FastWS) UpgradeTCP(conn net.Conn) {
+func (fws *FastWS) UpgradeTCP(conn net.Conn) {
 	c := new(Conn)
-	c.ID = f.IDGenerator(c)
+	c.ID = fws.IDGenerator(c)
 	c.NetConn = conn
 
-	if f.OnUpgrade != nil {
-		err := f.OnUpgrade(c)
-		if !f.handleError(c, err) {
+	if fws.OnUpgrade != nil {
+		err := fws.OnUpgrade(c)
+		if !fws.HandleError(c, err) {
 			return
 		}
 	}
 
-	hs, err := f.TCPUpgrader.Upgrade(conn)
+	hs, err := fws.TCPUpgrader.Upgrade(conn)
 	if err != nil {
-		f.handleError(c, err)
+		fws.HandleError(c, err)
 		return
 	}
 
 	defer func() {
 		conn.Close()
-		if f.OnDisconnected != nil {
-			f.OnDisconnected(c)
+		if fws.OnDisconnected != nil {
+			fws.OnDisconnected(c)
 		}
 	}()
 
 	c.establish(conn, hs, ws.StateServerSide)
 
-	if f.OnConnected != nil {
-		err = f.OnConnected(c)
-		if !f.handleError(c, err) {
-			return
+	if fws.OnConnected != nil {
+		err = fws.OnConnected(c)
+		if err != c.reason { // sometimes the user may want to call the `HandleError` manually, we don't want to push the same error twice.
+			if !fws.HandleError(c, err) {
+				return
+			}
 		}
+
 	}
 }

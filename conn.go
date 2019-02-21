@@ -70,6 +70,19 @@ func (c *Conn) Err() error {
 	return c.reason
 }
 
+func (c *Conn) String() (s string) {
+	if c.NetConn == nil {
+		return
+	}
+
+	if c.ID != "" {
+		s = c.ID + " "
+	}
+
+	s += "<" + c.NetConn.RemoteAddr().String() + ">"
+	return
+}
+
 type (
 	Encoder interface{ Encode(v interface{}) error }
 	Decoder interface{ Decode(vPtr interface{}) error }

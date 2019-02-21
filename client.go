@@ -36,9 +36,16 @@ func dial(ctx context.Context, url string) (*Conn, error) {
 		url = "ws://" + url
 	}
 
+	// for some reason the underline Dialer does not hanle deadlines as expected.
+	deadline, hasDeadline := ctx.Deadline()
+
 	conn, _, hs, err := ws.DefaultDialer.Dial(ctx, url)
 	if err != nil {
 		return nil, err
+	}
+
+	if hasDeadline {
+		conn.SetDeadline(deadline)
 	}
 
 	return WrapConn(conn, hs, ws.StateClientSide), nil

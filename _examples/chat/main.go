@@ -6,7 +6,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,9 +13,6 @@ import (
 
 	"github.com/kataras/fastws"
 )
-
-var errCustomDisconnected = errors.New("force close")
-var errUnexpectedFormat = errors.New("unexpected format")
 
 const endpoint = "localhost:8080"
 
@@ -43,11 +39,11 @@ func server() {
 	ws.OnError = func(c *fastws.Conn) bool {
 		err := c.Err()
 		if fastws.IsDisconnected(err) {
-			log.Printf("[%s:%s] remote connection has been manually disconnected", c.NetConn.RemoteAddr().String(), c.ID)
+			log.Printf("[%s] remote connection has been manually closed", c.String())
 			return false
 		}
 
-		log.Printf("on error: %#+v\n", c.Err())
+		log.Printf("[%s] Errored: %#+v", c.String(), err)
 		return true
 	}
 
