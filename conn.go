@@ -19,7 +19,7 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	Request *http.Request
 	Header  http.Header
 
-	// After connected succesfuly.
+	// After connected succesfuly or even before connected, on raw tcp connection for NetConn.
 	NetConn   net.Conn
 	Handshake ws.Handshake
 	State     ws.State
@@ -62,7 +62,7 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	c.State = state
 	c.ControlHandler = controlHandler
 	c.Reader = rd
-	c.WriteCode = ws.OpText
+	c.WriteCode = ws.OpBinary
 	c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
 }
 
@@ -138,7 +138,13 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 
 	if c.Writer != nil {
-		return c.Writer.Write(b)
+		n, err := c.Writer.Write(b)
+		if err != nil {
+			return 0, err
+		}
+
+		err = c.Writer.Flush()
+		return n, err
 	}
 
 	err := wsutil.WriteMessage(c.NetConn, c.State, c.WriteCode, b)
@@ -153,13 +159,13 @@ func (c *Conn) ReadBinary() ([]byte, error) {
 	return ioutil.ReadAll(c)
 }
 
-func (c *Conn) ReadText() string {
+func (c *Conn) ReadText() (string, error) {
 	b, err := c.ReadBinary()
 	if err != nil {
-		return ""
+		return "", err
 	}
 
-	return string(b)
+	return string(b), nil
 }
 
 func (c *Conn) ReadJSON(vPtr interface{}) error {

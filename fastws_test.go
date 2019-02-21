@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type testValue struct {
@@ -32,7 +33,13 @@ func TestEncoding(t *testing.T) {
 		// return c.WriteJSON(expectedFromServer)
 	}
 
-	go http.ListenAndServe("localhost:8080", http.HandlerFunc(f.UpgradeHTTP))
+	srv := http.Server{
+		Addr:    "localhost:8080",
+		Handler: http.HandlerFunc(f.UpgradeHTTP),
+	}
+	defer srv.Close()
+	go srv.ListenAndServe()
+	time.Sleep(500 * time.Millisecond)
 
 	c, err := Dial(nil, "ws://localhost:8080")
 	if err != nil {

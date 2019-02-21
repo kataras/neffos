@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/iris-contrib/go.uuid"
@@ -12,10 +14,10 @@ import (
 	"github.com/gobwas/ws"
 )
 
-type IDGenerator func() string
+type IDGenerator func(*Conn) string
 
 // DefaultIDGenerator returns a random unique for a new connection.
-var DefaultIDGenerator IDGenerator = func() string {
+var DefaultIDGenerator IDGenerator = func(_ *Conn) string {
 	id, err := uuid.NewV4()
 	if err != nil {
 		return strconv.FormatInt(time.Now().Unix(), 10)
@@ -39,9 +41,9 @@ type FastWS struct {
 	TCPUpgrader ws.Upgrader
 
 	// Events.
-	OnConnect      func(*Conn) error
+	OnUpgrade      func(*Conn) error
 	OnConnected    func(*Conn) error
-	OnError        func(*Conn) bool // Conn#Err()
+	OnError        func(*Conn) bool // Conn#Err(), if false disconnect if true means that it is handled.
 	OnDisconnected func(*Conn)
 }
 
@@ -64,13 +66,9 @@ func (f *FastWS) handleError(c *Conn, err error) bool {
 	return f.OnError(c)
 }
 
-type Abort struct {
-	error
-	StatusCode int
-}
-
 type ErrUpgrade struct {
 	error
+	Code int
 }
 
 func IsUpgrade(err error) bool {
@@ -80,6 +78,27 @@ func IsUpgrade(err error) bool {
 
 	_, ok := err.(ErrUpgrade)
 	return ok
+}
+
+func IsDisconnected(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if netErr, ok := err.(*net.OpError); ok {
+		if netErr.Err == nil {
+			return false
+		}
+
+		if sysErr, ok := netErr.Err.(*os.SyscallError); ok {
+			if sysErr.Err == nil {
+				return false
+			}
+			return strings.HasSuffix(sysErr.Err.Error(), "closed by the remote host.")
+		}
+	}
+
+	return false
 }
 
 func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -99,17 +118,17 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := &Conn{
-		ID:      f.IDGenerator(),
 		Request: r,
 		Header:  make(http.Header),
 	}
+	c.ID = f.IDGenerator(c)
 
-	if f.OnConnect != nil {
-		err := f.OnConnect(c)
+	if f.OnUpgrade != nil {
+		err := f.OnUpgrade(c)
 		if !f.handleError(c, err) {
-			if abort, ok := err.(Abort); ok {
+			if abort, ok := err.(ErrUpgrade); ok && abort.Code > 0 {
 				// this is the only error that we fire back.
-				writeError(w, abort.StatusCode)
+				writeError(w, abort.Code)
 			}
 
 			return
@@ -123,7 +142,11 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn, _, hs, err := upgrader.Upgrade(r, w)
 	if err != nil {
-		f.handleError(c, ErrUpgrade{err})
+		abort := ErrUpgrade{err, http.StatusServiceUnavailable}
+		if !f.handleError(c, abort) {
+			writeError(w, abort.Code)
+		}
+
 		return
 	}
 
@@ -145,7 +168,17 @@ func (f *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FastWS) UpgradeTCP(conn net.Conn) {
-	c := &Conn{ID: f.IDGenerator()}
+	c := new(Conn)
+	c.ID = f.IDGenerator(c)
+	c.NetConn = conn
+
+	if f.OnUpgrade != nil {
+		err := f.OnUpgrade(c)
+		if !f.handleError(c, err) {
+			return
+		}
+	}
+
 	hs, err := f.TCPUpgrader.Upgrade(conn)
 	if err != nil {
 		f.handleError(c, err)
