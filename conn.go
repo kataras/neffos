@@ -61,10 +61,10 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 
 	// These can be customized before each `Write`, `WriteWithCode` and `Encode`.
 
-	// If not nil its `Write` will be used instead, on `Encode` its `Write` +`Flush`.
+	// If non-nil its `Write` will be used instead, on `Encode` its `Write` +`Flush`.
 	// Defaults to a buffered writer, if nil then it will write all data without buffering.
 	Writer    *wsutil.Writer
-	Flush     bool // if true and Writer is not nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
+	Flush     bool // if true and Writer is non-nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
 	WriteCode ws.OpCode
 	// WriteTimeout time allowed to write a message to the connection, can be altered before `Write`, `WriteWithCode` and `Encoder`.
 	// Defaults to no timeout.
