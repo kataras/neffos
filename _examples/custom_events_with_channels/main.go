@@ -1,3 +1,7 @@
+// Package main shows a simple case of events/rooms to chat between clients using channels.
+// Run:
+// $ go build && ./custom_events_with_channels server # x1
+// $ ./custom_events_with_channels client # x2
 package main
 
 import (
@@ -8,117 +12,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/kataras/fastws"
 )
 
 const endpoint = "localhost:8080"
-
-var (
-	// Events holds the registered connection's events.
-	// key = event, value = connections listening to,
-	// the default event for each connection is its ID,
-	// therefore each new connection has an event with its own ID filled here.
-	Events = make(map[string][]*fastws.Conn)
-	// The "defaultEvent" is one more default event that all connections are subscribed automatically too,
-	// so they can share messages.
-	defaultEvent = "public"
-	mu           sync.RWMutex // locker for `events`.
-)
-
-func put(c *fastws.Conn) {
-	mu.Lock()
-	Events[c.ID] = []*fastws.Conn{c}
-	mu.Unlock()
-}
-
-// remove "c" from all events.
-func del(c *fastws.Conn) {
-
-	mu.Lock()
-	for evt, conns := range Events {
-		for i, conn := range conns {
-			if c.ID == conn.ID {
-				// println("delete " + c.ID + " from " + evt)
-				Events[evt] = append(conns[:i], conns[i+1:]...)
-				break // break "conns".
-			}
-		}
-	}
-	mu.Unlock()
-}
-
-func subscribe(c *fastws.Conn, event string) {
-	mu.RLock()
-	conns := Events[event]
-	mu.RUnlock()
-
-	for _, conn := range conns { // always non-nil because it defaults to itself.
-		if c.ID == conn.ID {
-			// already subscribed.
-			return
-		}
-	}
-
-	mu.Lock()
-	Events[event] = append(conns, c)
-	mu.Unlock()
-}
-
-func unsubscribe(c *fastws.Conn, event string) {
-	mu.RLock()
-	conns := Events[event]
-	mu.RUnlock()
-
-	for i := range conns {
-		if c.ID == conns[i].ID {
-			conns = append(conns[:i], conns[i+1:]...)
-			mu.Lock()
-			Events[event] = conns
-			mu.Unlock()
-			break
-		}
-	}
-}
-
-func broadcast(c *fastws.Conn, msg publishMessage) (err error) {
-	msg.From = c.ID
-
-	mu.RLock()
-	defer mu.RUnlock()
-
-	conns := Events[msg.Event]
-	for _, conn := range conns {
-		if conn.ID == c.ID { // except "myself".
-			continue
-		}
-
-		err = conn.Encode(msg)
-		if err != nil {
-			return err
-		}
-	}
-
-	return
-}
-
-// when someone publishes to event, they subscribed automatically, for the shake of simplicity.
-type publishMessage struct {
-	From  string `json:"from"`  // the connection id.
-	Event string `json:"event"` // the event to publish to.
-	Text  string `json:"text"`  // the message text.
-}
-
-func (msg publishMessage) String() string {
-	return fmt.Sprintf("<%s> %s", msg.From, msg.Text)
-}
-
-// type subscribeMessage struct {
-// 	ConnID string `json:"connID"` // the connection id.
-// 	Event  string `json:"event"`  // the event to listen to.
-// }
 
 func main() {
 	args := os.Args[1:]
@@ -138,6 +37,15 @@ func main() {
 }
 
 func server() {
+	bus := &eventBus{
+		events:      make(map[string][]*fastws.Conn),
+		broadcastCh: make(chan publishMessage),
+		actionCh:    make(chan action),
+		errorCh:     make(chan error),
+	}
+
+	go bus.start()
+
 	ws := fastws.New()
 	ws.OnError = func(c *fastws.Conn) bool {
 		err := c.Err()
@@ -167,34 +75,34 @@ func server() {
 	ws.OnConnected = func(c *fastws.Conn) error {
 		c.SetEncoding(json.NewEncoder(c), json.NewDecoder(c))
 
-		put(c)
-		defer del(c)
+		bus.put(c)
+		defer bus.del(c)
 
 		// subscribe to the default, the public one automatically.
-		subscribe(c, defaultEvent)
+		bus.subscribe(c, defaultEvent)
 
 		var msg publishMessage
 
 		for {
-			err := c.Decode(&msg)
-			if err != nil {
+			select {
+			case err := <-bus.errorCh:
 				if !ws.HandleError(c, err) {
 					return err
 				}
-				continue
-				// Or break and disconnect by firing the "OnError" with the "err" automatically:
-				// return err
-			}
-
-			msg.From = c.ID // server-side "from" set for "security".
-			err = broadcast(c, msg)
-			if err != nil {
-				if !ws.HandleError(c, err) {
-					return err
+			default:
+				err := c.Decode(&msg)
+				if err != nil {
+					if !ws.HandleError(c, err) {
+						return err
+					}
+					continue
+					// Or break and disconnect by firing the "OnError" with the "err" automatically:
+					// return err
 				}
-				continue
-			}
 
+				msg.From = c.ID // server-side "from" set for "security".
+				bus.broadcast(msg)
+			}
 		}
 	}
 
