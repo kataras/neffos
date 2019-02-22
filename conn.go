@@ -13,33 +13,61 @@ import (
 	"github.com/gobwas/ws/wsutil"
 )
 
+// Conn is stream-oriented websocket connection.
+// Both server and client sides uses it.
+// Its fields can be customized after connection established.
 type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner can be used.
+	// ID is the unique identifier for this Conn, it is only used on its `String()`
+	// but callers can use it for higher level features as well.
+	//
+	// Look at `FastWS#IDGenerator` to change how this string field is generated.
 	ID string
 
+	// Request is the underline HTTP request value.
 	Request *http.Request
-	Header  http.Header
+	// Header is a server-side only field.
+	// It can be modified on the `OnUpgrade` event to send custom headers on HTTP upgrade.
+	Header http.Header
 
-	// After connected succesfuly or even before connected, on raw tcp connection for NetConn.
-	NetConn   net.Conn
+	// After connected succesfuly.
+
+	// NetConn is available at the `OnConnected` state for server-side and
+	// after `Dial` for client-side.
+	// It is the underline generic network connection.
+	NetConn net.Conn
+	// Handshake is available for reading at the `OnConnected` state for server-side
+	// and after `Dial` for client-side.
 	Handshake ws.Handshake
-	State     ws.State
+	// State is available for reading at the `OnConnected` state for server-side
+	// and after `Dial` for client-side.
+	State ws.State
 
-	// These can be customized before each `Read`.
+	// These can be customized before each `Read` and `Decode`.
+
+	// ControlHandler is the underline `gobwas/wsutil#FrameHandlerFunc` which
+	// can be modified to a custom FrameHandlerFunc before `Read` and `Decode`.
+	//
+	// It is available for both server and client sides at `OnConnected` and after `Dial`.
 	ControlHandler wsutil.FrameHandlerFunc
-	Reader         *wsutil.Reader
-	// ReadTimeout time allowed to read a message from the connection.
-	// 0 means no timeout.
+	// ControlHandler is the underline `gobwas/wsutil#Reader` which
+	// can be modified to a custom FrameHandlerFunc before `Read` and `Decode`.
+	//
+	// It is available for both server and client sides at `OnConnected` and after `Dial`.
+	Reader *wsutil.Reader
+	// ReadTimeout time allowed to read a message from the connection, can be altered before `Read` and `Decode`.
+	// It is available for both server and client sides at `OnConnected` and after `Dial`.
+	// Defaults to no timeout.
 	ReadTimeout time.Duration
 
-	// These can be customized before each `Write`.
+	// These can be customized before each `Write`, `WriteWithCode` and `Encode`.
 
 	// If not nil its `Write` will be used instead, on `Encode` its `Write` +`Flush`.
 	// Defaults to a buffered writer, if nil then it will write all data without buffering.
 	Writer    *wsutil.Writer
 	Flush     bool // if true and Writer is not nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
 	WriteCode ws.OpCode
-	// WriteTimeout time allowed to write a message to the connection.
-	// 0 means no timeout.
+	// WriteTimeout time allowed to write a message to the connection, can be altered before `Write`, `WriteWithCode` and `Encoder`.
+	// Defaults to no timeout.
 	WriteTimeout time.Duration
 
 	encoder Encoder
@@ -68,6 +96,7 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	c.Flush = true
 }
 
+// Err may return the reason of an error, available at the `OnError` event for server-side.
 func (c *Conn) Err() error {
 	return c.reason
 }
@@ -169,6 +198,42 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 
 	err := wsutil.WriteMessage(c.NetConn, c.State, c.WriteCode, b)
+	if err != nil {
+		return 0, err
+	}
+
+	return len(b), nil
+}
+
+// OpCode a type alias for `ws#OpCode`.
+type OpCode = ws.OpCode
+
+// Operation codes defined by specification.
+// See https://tools.ietf.org/html/rfc6455#section-5.2
+const (
+	// OpText denotes a text data message. The text message payload is
+	// interpreted as UTF-8 encoded text data.
+	OpText OpCode = ws.OpText
+	// OpBinary denotes a binary data message.
+	OpBinary OpCode = ws.OpBinary
+	// OpClose denotes a close control message.
+	OpClose OpCode = ws.OpClose
+
+	// OpPing denotes a ping control message. The optional message payload
+	// is UTF-8 encoded text.
+	OpPing OpCode = ws.OpPing
+	// OpPong denotes a ping control message. The optional message payload
+	// is UTF-8 encoded text.
+	OpPong OpCode = ws.OpPong
+)
+
+// WriteWithCode writes to the connection by passing bypasses the `Writer` and `WriterCode`.
+func (c *Conn) WriteWithCode(opCode OpCode, b []byte) (int, error) {
+	if c.WriteTimeout > 0 {
+		c.NetConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
+	}
+
+	err := wsutil.WriteMessage(c.NetConn, c.State, opCode, b)
 	if err != nil {
 		return 0, err
 	}

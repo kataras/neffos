@@ -177,5 +177,4 @@ func startClientPublisher(c *fastws.Conn) error {
 			log.Println(err)
 		}
 	}
-
 }
