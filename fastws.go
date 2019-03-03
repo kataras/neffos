@@ -36,7 +36,7 @@ var DefaultIDGenerator IDGenerator = func(_ *Conn) string {
 //
 // Its main methods are `UpgradeHTTP` and `UpgradeTCP`.
 type FastWS struct {
-	// IDGenerator is used to generate unique identifier for each new icoming websocket client.
+	// IDGenerator is used to generate unique identifier for each new incoming websocket client.
 	// By default it will generate random UUID.
 	// See `Conn.ID` for more.
 	IDGenerator IDGenerator
@@ -49,17 +49,17 @@ type FastWS struct {
 	// Defaults to an empty one, can be used
 	// to customize the Read and Write buffer sizes
 	// and add callbacks like `OnRequest`, `OnHost` and etc.
-	// Useful only on `UpgradeTCP`.
-	TCPUpgrader ws.Upgrader
+	// Useful only on `Upgrade`.
+	Upgrader ws.Upgrader
 
 	// OnUpgrade runs before the upgrade process, it is the first event that is called.
 	// From which you can customize the Conn's properties.
 	// If the result is non-nil error then it aborts the process
 	// and, when HTTP, sends a 403 error
-	// to the client(Use `ErrUpgrade.Code` to customze the error type),
+	// to the client(Use `ErrUpgrade.Code` to customize the error type),
 	// unless the `OnError` handles it and returned true.
 	OnUpgrade func(*Conn) error
-	// OnConnected is notified about new incomning websocket clients.
+	// OnConnected is notified about new incoming websocket clients.
 	// It is the most critical callback, it runs when a new client is connected, after `OnUpgrade`.
 	// It accepts the connected `Conn`
 	// and may return a non-nil error to be passed on the `OnError` callback.
@@ -75,9 +75,6 @@ type FastWS struct {
 	// Look `IsTimeout`, `IsClosed` and `IsDisconnected` error check helpers too,
 	// this pattern allows the caller to define its own custom errors and handle them in one place.
 	OnError func(*Conn) bool // Conn#Err(), if false disconnect if true means that it is handled.
-	// OnDisconnected accepts a `Conn` and returns nothing.
-	// It is the callback that runs after the `OnConnected`, and it is the final one.
-	OnDisconnected func(*Conn)
 }
 
 // New returns a new websocket server, read `FastWS` struct type docs for more.
@@ -141,6 +138,8 @@ func IsClosed(err error) bool {
 			}
 			return strings.HasSuffix(sysErr.Err.Error(), "closed by the remote host.")
 		}
+
+		return strings.HasSuffix(err.Error(), "use of closed network connection")
 	}
 
 	return false
@@ -218,13 +217,6 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer func() {
-		conn.Close()
-		if fws.OnDisconnected != nil {
-			fws.OnDisconnected(c)
-		}
-	}()
-
 	c.establish(conn, hs, ws.StateServerSide)
 
 	if fws.OnConnected != nil {
@@ -235,15 +227,16 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
 }
 
-// UpgradeTCP zero-copy upgrades connection to websocket.
+// Upgrade zero-copy upgrades connection to websocket.
 // It interprets given conn as connection with incoming HTTP Upgrade request.
 // It is a caller responsibility to manage i/o timeouts on conn.
 //
 // It calls `OnUpgrade` before upgrade, Upgrade action happens and if succeed,
 // `OnConnected` is called and `OnDisconnected` on exit.
-func (fws *FastWS) UpgradeTCP(conn net.Conn) {
+func (fws *FastWS) Upgrade(conn net.Conn) {
 	c := new(Conn)
 	c.ID = fws.IDGenerator(c)
 	c.NetConn = conn
@@ -255,18 +248,11 @@ func (fws *FastWS) UpgradeTCP(conn net.Conn) {
 		}
 	}
 
-	hs, err := fws.TCPUpgrader.Upgrade(conn)
+	hs, err := fws.Upgrader.Upgrade(conn)
 	if err != nil {
 		fws.HandleError(c, err)
 		return
 	}
-
-	defer func() {
-		conn.Close()
-		if fws.OnDisconnected != nil {
-			fws.OnDisconnected(c)
-		}
-	}()
 
 	c.establish(conn, hs, ws.StateServerSide)
 
@@ -277,6 +263,5 @@ func (fws *FastWS) UpgradeTCP(conn net.Conn) {
 				return
 			}
 		}
-
 	}
 }

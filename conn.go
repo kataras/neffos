@@ -17,7 +17,7 @@ import (
 // Both server and client sides uses it.
 // Its fields can be customized after connection established.
 type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner can be used.
-	// ID is the unique identifier for this Conn, it is only used on its `String()`
+	// ID is the unique identifier for this Conn, it is only used on server-side and its `Conn.tring()`
 	// but callers can use it for higher level features as well.
 	//
 	// Look at `FastWS#IDGenerator` to change how this string field is generated.
@@ -147,33 +147,53 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		c.NetConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 	}
 
-readstep:
-	hdr, err := c.Reader.NextFrame()
-	if err != nil {
-		return 0, err
+	if c.Reader == nil {
+		for {
+			data, opCode, err := wsutil.ReadData(c.NetConn, c.State)
+			if err != nil {
+				return 0, err
+			}
+
+			if opCode&ws.OpText == 0 && opCode&ws.OpBinary == 0 {
+				continue
+			}
+
+			n = copy(b, data[:])
+			return n, io.EOF
+		}
 	}
 
-	if hdr.OpCode == ws.OpClose {
-		return 0, io.EOF
-	}
-
-	if hdr.OpCode.IsControl() {
-		err = c.ControlHandler(hdr, c.Reader)
+	for {
+		hdr, err := c.Reader.NextFrame()
 		if err != nil {
+			if err == io.EOF {
+				return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
+			}
 			return 0, err
 		}
-		goto readstep
-	}
 
-	if hdr.OpCode&ws.OpText == 0 && hdr.OpCode&ws.OpBinary == 0 {
-		err = c.Reader.Discard()
-		if err != nil {
-			return 0, err
+		if hdr.OpCode == ws.OpClose {
+			return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
 		}
-		goto readstep
-	}
 
-	return c.Reader.Read(b)
+		if hdr.OpCode.IsControl() {
+			err = c.ControlHandler(hdr, c.Reader)
+			if err != nil {
+				return 0, err
+			}
+			continue
+		}
+
+		if hdr.OpCode&ws.OpText == 0 && hdr.OpCode&ws.OpBinary == 0 {
+			err = c.Reader.Discard()
+			if err != nil {
+				return 0, err
+			}
+			continue
+		}
+
+		return c.Reader.Read(b)
+	}
 }
 
 func (c *Conn) Write(b []byte) (int, error) {

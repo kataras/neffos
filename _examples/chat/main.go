@@ -43,7 +43,7 @@ func server() {
 			return false
 		}
 
-		log.Printf("[%s] Errored: %#+v", c.String(), err)
+		log.Printf("[%s] Errorred: %#+v", c.String(), err)
 		return true
 	}
 

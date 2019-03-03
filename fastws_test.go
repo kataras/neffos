@@ -39,7 +39,7 @@ func TestEncoding(t *testing.T) {
 	}
 	defer srv.Close()
 	go srv.ListenAndServe()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	c, err := Dial(nil, "ws://localhost:8080")
 	if err != nil {

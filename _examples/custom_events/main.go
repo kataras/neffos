@@ -146,14 +146,8 @@ func server() {
 			return false
 		}
 
-		log.Printf("[%s] Errored: %v", c.String(), err)
+		log.Printf("[%s] Errorred: %v", c.String(), err)
 		return true
-	}
-
-	// For expected disconnection, from server-side.
-	// Fire any error on `OnConnected` exit to fire it.
-	ws.OnDisconnected = func(c *fastws.Conn) {
-		log.Printf("[%s] Disconnected.", c.String())
 	}
 
 	// fired before Upgrade,
@@ -165,6 +159,8 @@ func server() {
 	}
 
 	ws.OnConnected = func(c *fastws.Conn) error {
+		defer log.Printf("[%s] Disconnected.", c.String())
+
 		c.SetEncoding(json.NewEncoder(c), json.NewDecoder(c))
 
 		put(c)
@@ -238,7 +234,7 @@ func startClientSubscriber(c *fastws.Conn) error {
 			if fastws.IsDisconnected(err) {
 				return err
 			}
-			log.Printf("Errrored: %#+v", err)
+			log.Printf("Errorred: %#+v", err)
 			continue
 		}
 

@@ -1,0 +1,163 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+	"runtime"
+	"sync/atomic"
+	"time"
+
+	"github.com/kataras/fastws/_examples/advanced/ws"
+
+	"github.com/kataras/fastws"
+)
+
+const (
+	endpoint     = "localhost:8080"
+	totalClients = 35000 // max depends on the OS, read more below.
+	// For example for windows:
+	//
+	// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
+	// $ netsh int ipv4 set dynamicport udp start=10000 num=36000
+	// $ netsh int ipv6 set dynamicport tcp start=10000 num=36000
+	// $ netsh int ipv6 set dynamicport udp start=10000 num=36000
+	//
+	// Optionally but good practice if you want to re-test over and over,
+	// close all apps and execute:
+	//
+	// $ net session /delete
+	//
+	// Note that this test is hardly depends on the host machine,
+	// maybe there is a case where those settings does not apply to your system.
+	verbose = false
+	maxC    = 0
+)
+
+func main() {
+	srv := ws.New()
+
+	// websocket.Config{PingPeriod: ((60 * time.Second) * 9) / 10}
+
+	started := false
+
+	go func() {
+		allowNZero := 0
+
+		dur := 1500 * time.Millisecond
+		if totalClients >= 64000 {
+			// if more than 64000 then let's perform those checks every x seconds instead,
+			// either way works.
+			dur = 4 * time.Second
+		}
+		t := time.NewTicker(dur)
+		defer func() {
+			t.Stop()
+			printMemUsage()
+			os.Exit(0)
+		}()
+
+		//	var started bool
+		for {
+			<-t.C
+
+			n := srv.GetTotalConnections()
+			connectedN := atomic.LoadUint64(&totalConnected)
+			disconnectedN := atomic.LoadUint64(&totalDisconnected)
+
+			// if verbose {
+			log.Printf("INFO: Current connections[%d] vs WS counter[%d] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
+			//	}
+
+			// if n > 0 {
+			// 	started = true
+			// 	if maxC > 0 && n > maxC {
+			// 		log.Printf("current connections[%d] > MaxConcurrentConnections[%d]", n, maxC)
+			// 		return
+			// 	}
+			// }
+
+			if started {
+				if disconnectedN == totalClients && connectedN == totalClients {
+					if n != 0 {
+						log.Printf("ALL CLIENTS DISCONNECTED BUT %d LEFTOVERS ON CONNECTIONS LIST.", n)
+					} else {
+						log.Println("ALL CLIENTS DISCONNECTED SUCCESSFULLY.")
+					}
+					return
+				} else if n == 0 {
+					if allowNZero < 10 {
+						// Allow 0 active connections just ten times.
+						// It is actually a dynamic timeout of 10*the expected total connections variable.
+						// It exists for two reasons:
+						// 1: user delays to start client,
+						// 2: live connections may be disconnected so we are waiting for new one (randomly)
+						allowNZero++
+						continue
+					}
+					log.Printf("%d/%d CLIENTS WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
+						totalClients-totalConnected, totalClients)
+
+					return
+				}
+			}
+		}
+	}()
+
+	srv.OnJoin("", func(c ws.Conn) error {
+		started = true
+		atomic.AddUint64(&totalConnected, 1)
+		return nil
+	})
+
+	// if c.Err() != nil {
+	// 	log.Fatalf("[%d] upgrade failed: %v", atomic.LoadUint64(&totalConnected)+1, c.Err())
+	// 	return
+	// }
+
+	srv.OnError("", func(c ws.Conn, err error) { handleErr(c, err) })
+	srv.OnLeave("", handleDisconnect)
+	srv.On("", "chat", func(c ws.Conn, data []byte) error {
+		c.Emit("chat", data)
+		return nil
+	})
+
+	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
+	log.Fatal(http.ListenAndServe(endpoint, srv))
+}
+
+var totalConnected uint64
+
+func handleConnection(c ws.Conn) {
+
+}
+
+var totalDisconnected uint64
+
+func handleDisconnect(c ws.Conn) {
+	newC := atomic.AddUint64(&totalDisconnected, 1)
+	if verbose {
+		log.Printf("[%d] client [%s] disconnected!\n", newC, c.ID())
+	}
+}
+
+func handleErr(c ws.Conn, err error) {
+	if !fastws.IsDisconnected(err) {
+		log.Printf("client [%s] errorred: %v\n", c.ID(), err)
+	}
+
+}
+
+func toMB(b uint64) uint64 {
+	return b / 1024 / 1024
+}
+
+func printMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	log.Printf("Alloc = %v MiB", toMB(m.Alloc))
+	log.Printf("\tTotalAlloc = %v MiB", toMB(m.TotalAlloc))
+	log.Printf("\tSys = %v MiB", toMB(m.Sys))
+	log.Printf("\tNumGC = %v\n", m.NumGC)
+	log.Printf("\tNumGoRoutines = %d\n", runtime.NumGoroutine())
+}
