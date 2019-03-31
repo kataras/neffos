@@ -74,6 +74,17 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	decoder Decoder
 
 	reason error
+
+	// OnError fires whenever an error returned from `FastWS#OnUpgrade` or `FastWS#OnConnected`.
+	// If it is from `OnUpgrade` then the boolean result will define if
+	// the connection should be closed (force client disconnect) with "true" or
+	// log and ignore the error with "false" if error is not a "closed type" (see below).
+	// If it is from `OnConnected` then the result does not really matter.
+	// It accepts the  error which contains the last known reason that it raised the `OnError` callback.
+	//
+	// Look `IsTimeout`, `IsClosed` and `IsDisconnected` error check helpers too,
+	// this pattern allows the caller to define its own custom errors and handle them in one place.
+	OnError func(err error) bool
 }
 
 func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
@@ -94,6 +105,20 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	c.WriteCode = ws.OpBinary
 	c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
 	c.Flush = true
+}
+
+func (c *Conn) HandleError(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	c.reason = err
+
+	if c.OnError == nil {
+		return false
+	}
+
+	return c.OnError(err)
 }
 
 // Err may return the reason of an error, available at the `OnError` event for server-side.

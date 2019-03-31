@@ -1,8 +1,8 @@
 package main
 
 import (
-	// "bufio"
-	// "bytes"
+	"bufio"
+	"bytes"
 	"context"
 	"io/ioutil"
 	"log"
@@ -22,8 +22,8 @@ var (
 )
 
 const (
-	totalClients = 35000 // max depends on the OS.
-	verbose      = false
+	totalClients = 100000 // max depends on the OS.
+	verbose      = true
 )
 
 var connectionFailures uint64
@@ -64,20 +64,26 @@ func main() {
 	wg := new(sync.WaitGroup)
 	wg.Add(totalClients)
 
-	// for i := 0; i < totalClients; i++ {
-	// 	go connect(wg, time.Second-time.Duration(rand.Int63n(3))*time.Second)
-	// }
-
+	relaxCPU := 15 * time.Second // this may not be useful if host contains high-end hardware.
+	lastRelaxCPU := time.Now()
+	var alive time.Duration
 	for i := 0; i < totalClients; i++ {
 		if i%2 == 0 {
-			time.Sleep(time.Duration(rand.Int63n(3)) * time.Millisecond)
+			time.Sleep(time.Duration(rand.Int63n(4)) * time.Millisecond)
+			alive = 2*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+		} else if i%3 == 0 {
+			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
+			alive = 3*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+		} else {
+			alive = 4*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		}
 
-		if i%3 == 0 {
-			time.Sleep(time.Duration(rand.Int63n(5)) * time.Millisecond)
+		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
+			time.Sleep(relaxCPU)
+			lastRelaxCPU = time.Now()
 		}
 
-		go connect(wg, 1*time.Second-time.Duration(rand.Int63n(7))*time.Millisecond)
+		go connect(wg, alive)
 	}
 
 	wg.Wait()
@@ -135,69 +141,55 @@ func main() {
 	log.Println("-- Finished.")
 }
 
-var msg = []byte("my message")
+// var msg = []byte("my message")
 
 var counter uint32
 
-func connect(wg *sync.WaitGroup, alive time.Duration) error {
+func connect(wg *sync.WaitGroup, alive time.Duration) {
 	defer wg.Done()
 
 	// t := atomic.AddUint32(&counter, 1)
 
 	// log.Printf("[%d] try to connect\n", t)
-	c, err := ws.Dial(context.Background(), url, "")
+	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
+	// defer cancel()
+	ctx := context.Background()
+	client, err := ws.Dial(ctx, url, ws.Events{
+		"chat": func(c ws.NSConn, msg ws.Message) error {
+			if verbose {
+				log.Println(string(msg.Body))
+			}
+			return nil
+		},
+	})
 
 	if err != nil {
 		//	log.Printf("[%d] %s\n", t, err)
 		atomic.AddUint64(&connectionFailures, 1)
 		collectError("connect", err)
-		return err
+		return
+		// return err
 	}
-	// if alive > 0 {
-	// 	c.UnderlyingConn().NetConn.SetDeadline(time.Now().Add(alive))
-	// }
 
-	c.OnError(func(err error) {
-		log.Printf("error: %v", err)
-	})
+	c := client.Connect("")
 
-	// c.(func() {
+	// c.HandleFunc("chat", func(c ws.Conn, message []byte) error {
 	// 	if verbose {
-	// 		log.Printf("I am disconnected after [%s].", alive)
+	// 		log.Println(string(message))
 	// 	}
-
-	// 	disconnected = true
+	// 	return nil
 	// })
 
-	c.On("chat", func(message []byte) error {
-		if verbose {
-			log.Println(string(message))
+	r := ioutil.NopCloser(bytes.NewBuffer(testdata))
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		if text := scanner.Bytes(); len(text) > 1 {
+			c.Emit("chat", text)
 		}
-		return nil
-	})
+	}
 
-	c.Emit("chat", msg)
-	// r := ioutil.NopCloser(bytes.NewBuffer(testdata))
-	// scanner := bufio.NewScanner(r)
-	// for scanner.Scan() {
-	// 	if text := scanner.Bytes(); len(text) > 1 {
-	// 		c.Emit("chat", text)
-	// 		// go c.Emit("chat", "[2] "+text)
-	// 	}
-	// }
-
-	//	if alive > 0 {
-	//	time.Sleep(alive)
-	// time.Sleep(500 * time.Millisecond)
-	// c.Close()
-	// if verbose {
-	// 	log.Printf("I am disconnected after [%s].", alive)
-	// }
-	//}
-
+	// time.Sleep(2 * time.Second)
 	time.Sleep(alive)
 	c.Close()
-
-	// return scanner.Err()
-	return nil
+	// time.Sleep(alive)
 }

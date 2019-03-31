@@ -1,8 +1,9 @@
 package ws
 
 import (
+	"fmt"
+	"sync"
 	"sync/atomic"
-	// "time"
 
 	"github.com/kataras/fastws"
 )
@@ -10,46 +11,46 @@ import (
 type Conn interface {
 	UnderlyingConn() *fastws.Conn
 	ID() string
-	Emit(string, []byte)
+	Write(namespace string, event string, body []byte, err error)
 	Close()
 	String() string
+	IsClient() bool
+}
+
+type NSConn interface {
+	Conn
+	Emit(event string, body []byte)
+	Disconnect()
 }
 
 type conn struct {
-	underline *fastws.Conn
-	rooms     map[string]*Room
-	ns        map[string]*connOnRoom
+	underline  *fastws.Conn
+	namespaces Namespaces
+
+	connectedNamespaces map[string]*nsConn
+	mu                  sync.RWMutex
 
 	closeCh chan struct{}
 	out     chan []byte
-	in      chan []byte
-
-	once uint32
+	once    uint32
 
 	server *Server
 }
 
-type connOnRoom struct {
-	*conn
-	room string
-}
-
-func (c *connOnRoom) Emit(event string, body []byte) {
-	c.write(c.room, event, body)
-}
-
-func newConn(underline *fastws.Conn, rooms map[string]*Room) *conn {
+func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 	c := &conn{
-		underline: underline,
-		rooms:     rooms,
-		ns:        make(map[string]*connOnRoom),
-
-		closeCh: make(chan struct{}),
-		out:     make(chan []byte, 256),
-		// in:      make(chan []byte),
+		underline:           underline,
+		namespaces:          namespaces,
+		connectedNamespaces: make(map[string]*nsConn),
+		closeCh:             make(chan struct{}),
+		out:                 make(chan []byte, 256),
 	}
 
 	return c
+}
+
+func (c *conn) IsClient() bool {
+	return c.server == nil
 }
 
 var (
@@ -69,15 +70,34 @@ func (c *conn) startWriter() {
 			}
 			_, err := c.underline.Write(b)
 			if err != nil {
+				c.underline.HandleError(err)
 				return
 			}
 
-			// for i, n := 0, len(c.out); i < n; i++ {
-			// 	c.underline.Write(newline)
-			// 	c.underline.Write(<-c.out)
-			// }
+			for i, n := 0, len(c.out); i < n; i++ {
+				c.underline.Write(newline)
+				c.underline.Write(<-c.out)
+			}
 		}
 	}
+}
+
+type CloseError struct {
+	error
+	Code int
+}
+
+func (err CloseError) Error() string {
+	return fmt.Sprintf("[%d] %s", err.Code, err.error.Error())
+}
+
+func isCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	_, ok := err.(CloseError)
+	return ok
 }
 
 func (c *conn) startReader() {
@@ -89,161 +109,106 @@ func (c *conn) startReader() {
 			return
 		}
 
-		if err = c.messageReceived(b); err != nil {
-			return
+		msg := deserializeMessage(nil, b)
+
+		// log.Printf("conn:startReader:msg:\n%#+v\n", msg)
+
+		if msg.isConnect {
+			if c.IsClient() {
+				// client-side.
+
+				// catch the ID of the namespace connect event.
+				c.underline.ID = string(msg.Body)
+				// log.Printf("SET ID: [%s]", c.ID())
+			} else {
+				// server-side.
+				c.mu.RLock()
+				_, alreadyConnected := c.connectedNamespaces[msg.Namespace]
+				c.mu.RUnlock()
+
+				if alreadyConnected {
+					continue
+				}
+
+				events, ok := c.namespaces[msg.Namespace]
+				if !ok {
+					continue
+				}
+
+				conn := newNSConn(c, msg.Namespace, events)
+
+				err := events.fireOnNamespaceConnect(conn, msg)
+				if err != nil {
+					msg.Body = nil
+					msg.Err = err
+					c.write(msg)
+					if isCloseError(err) {
+						return // close the connection.
+					}
+					continue
+				}
+
+				c.addNSConn(msg.Namespace, conn)
+				// send the ID with the same event.
+				msg.Body = []byte(c.ID())
+				c.write(msg)
+			}
+
+			continue
 		}
+
+		if msg.isDisconnect {
+			if !c.IsClient() {
+				c.mu.RLock()
+				conn, ok := c.connectedNamespaces[msg.Namespace]
+				c.mu.RUnlock()
+				if !ok {
+					continue
+				}
+
+				events, ok := c.namespaces[msg.Namespace]
+				if !ok {
+					continue
+				}
+
+				err := events.fireOnNamespaceDisconnect(conn, msg)
+				if err != nil {
+					msg.Body = nil
+					msg.Err = err
+					c.write(msg)
+					if isCloseError(err) {
+						return // close the connection.
+					}
+					continue
+				}
+
+				c.mu.Lock()
+				delete(c.connectedNamespaces, msg.Namespace)
+				c.mu.Unlock()
+			}
+
+			continue
+		}
+
+		c.mu.RLock()
+		nsConn, ok := c.connectedNamespaces[msg.Namespace]
+		c.mu.RUnlock()
+		if !ok {
+			// see client.go#Connect for the client-side.
+			continue
+		}
+
+		err = nsConn.events.fireEvent(nsConn, msg)
+		if err != nil {
+			c.Write(msg.Namespace, msg.Event, nil, err)
+			if isCloseError(err) {
+				return // close the connection.
+			}
+			continue
+		}
+
 	}
 }
-
-// func (c *conn) serve() error {
-// 	go c.startWriter()
-// 	return c.startReader()
-// }
-
-// func (c *conn) serve() error {
-// 	// go c.startReader()
-
-// 	defer c.Close()
-
-// 	go func() {
-// 		for {
-// 			select {
-// 			case <-c.closeCh:
-// 				// close(c.in)
-// 				// close(c.out)
-// 				return
-// 			case msg, ok := <-c.out:
-// 				if !ok {
-// 					return
-// 				}
-// 				b := serializeOutput(msg)
-// 				_, err := c.underline.Write(b)
-// 				if err != nil {
-// 					c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 						typ: roomError,
-// 						err: err,
-// 					})
-// 					return
-// 				}
-
-// 			}
-// 		}
-// 	}()
-
-// 	err := c.startReader()
-// 	return err
-// }
-
-func (c *conn) messageReceived(b []byte) error {
-	msg := deserializeInput(b)
-
-	err := c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-		typ: roomMessage,
-		msg: msg,
-	})
-
-	return err
-}
-
-// func (c *conn) startReader() error {
-// 	for {
-// 		b, err := c.underline.ReadBinary()
-// 		if err != nil {
-// 			if fastws.IsDisconnected(err) {
-// 				return nil
-// 			}
-
-// 			// c.rooms[""].handle(c.wrapConnRoom(""), roomAction{
-// 			// 	typ: roomError,
-// 			// 	err: err,
-// 			// })
-// 			return err
-// 		}
-
-// 		if err = c.messageReceived(b); err != nil {
-// 			return err
-// 		}
-
-// 		// select {
-// 		// case <-c.closeCh:
-// 		// 	return nil
-// 		// case c.in <- b:
-// 		// case <-time.After(500 * time.Millisecond):
-
-// 		// 	return nil
-// 		// }
-
-// 		// msg := deserializeInput(b)
-
-// 		// err = c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 		// 	typ: roomMessage,
-// 		// 	msg: msg,
-// 		// })
-// 		// if err != nil {
-// 		// 	return err
-// 		// }
-// 	}
-// }
-
-// func (c *conn) startWriter() {
-// 	defer c.Close()
-
-// 	for {
-// 		select {
-// 		case <-c.closeCh:
-// 			return
-// 		case msg, ok := <-c.out:
-// 			if !ok {
-// 				return
-// 			}
-// 			b := serializeOutput(msg)
-// 			_, err := c.underline.Write(b)
-// 			if err != nil {
-// 				c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 					typ: roomError,
-// 					err: err,
-// 				})
-// 			}
-// 		}
-// 	}
-// }
-
-// func (c *conn) write(room, event string, body []byte) {
-// 	msg := message{
-// 		room:  room,
-// 		event: event,
-// 		body:  body,
-// 	}
-
-// 	b := serializeOutput(msg)
-// 	_, err := c.underline.Write(b)
-// 	if err != nil {
-// 		c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 			typ: roomError,
-// 			err: err,
-// 		})
-// 	}
-// }
-
-// func (c *conn) startWriter() {
-// 	defer c.Close()
-
-// 	for {
-// 		select {
-// 		case <-c.closeCh:
-// 			return
-// 		case msg := <-c.out:
-// 			b := serializeOutput(msg)
-// 			_, err := c.underline.Write(b)
-// 			if err != nil {
-// 				c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 					typ: roomError,
-// 					err: err,
-// 				})
-// 			}
-// 		}
-// 	}
-// }
 
 func (c *conn) ID() string {
 	return c.underline.ID
@@ -259,7 +224,7 @@ func (c *conn) UnderlyingConn() *fastws.Conn {
 
 func (c *conn) Close() {
 	if atomic.CompareAndSwapUint32(&c.once, 0, 1) {
-		c.leaveAll()
+		c.disconnectAll()
 		go func() {
 			if c.server != nil {
 				c.server.disconnect <- c
@@ -274,85 +239,52 @@ func (c *conn) Close() {
 	}
 }
 
-func (c *conn) wrapConnRoom(room string) *connOnRoom {
-	conn, ok := c.ns[room]
-	if !ok {
-		conn = &connOnRoom{
-			conn: c,
-			room: room,
-		}
-		c.ns[room] = conn
-
-		c.rooms[room].handle(conn, roomAction{
-			typ: roomJoin,
-		})
-	}
-
-	return conn
+func (c *conn) addNSConn(namespace string, conn *nsConn) {
+	c.mu.Lock()
+	c.connectedNamespaces[namespace] = conn
+	c.mu.Unlock()
 }
 
-func (c *conn) leave(room string) {
-	c.rooms[room].handle(c.wrapConnRoom(room), roomAction{
-		typ: roomLeave,
-	})
+func (c *conn) disconnect(namespace string) {
+	c.mu.Lock()
+	delete(c.connectedNamespaces, namespace)
+	c.mu.Unlock()
 
-	delete(c.ns, room)
+	println("send disconnect message for namespace: " + namespace)
+	c.write(Message{Namespace: namespace, isDisconnect: true})
 }
 
-func (c *conn) leaveAll() {
-	for room := range c.ns {
-		c.leave(room)
-	}
-}
-
-func (c *conn) write(room, event string, body []byte) {
+func (c *conn) disconnectAll() {
 	select {
 	case <-c.closeCh:
 		return
-	case c.out <- serializeOutput(message{
-		room:  room,
-		event: event,
-		body:  body,
-	}):
+	default:
+		println("conn.go:L260 send disconnect")
+		c.mu.Lock()
+		msg := Message{isDisconnect: true}
+		for namespace := range c.connectedNamespaces {
+			delete(c.connectedNamespaces, namespace)
+			msg.Namespace = namespace
+			c.write(msg)
+		}
+		c.mu.Unlock()
 	}
 }
 
-// func (c *conn) startReader() error {
-// 	defer c.Close()
+func (c *conn) Write(namespace, event string, body []byte, err error) {
+	// log.Printf("conn:Write:\nnamespace:%s\nevent:%s\nbody:%s\nerr:%v", namespace, event, string(body), err)
+	c.write(Message{
+		Namespace: namespace,
+		Event:     event,
+		Body:      body,
+		Err:       err,
+	})
+}
 
-// 	for {
-// 		b, err := c.underline.ReadBinary()
-// 		if err != nil {
-// 			if fastws.IsDisconnected(err) {
-// 				return nil
-// 			}
-
-// 			c.rooms[""].handle(c.wrapConnRoom(""), roomAction{
-// 				typ: roomError,
-// 				err: err,
-// 			})
-
-// 			return err
-// 		}
-// 		c.in <- b
-// 	}
-// }
-
-// func (c *conn) read() error {
-// 	var (
-// 		msg message
-// 		err error
-// 	)
-
-// 	select {
-// 	case b := <-c.in:
-// 		msg = deserializeInput(b)
-// 		err = c.rooms[msg.room].handle(c.wrapConnRoom(msg.room), roomAction{
-// 			typ: roomMessage,
-// 			msg: msg,
-// 		})
-// 		return err
-// 	case <-c.closeCh:
-// 		return nil
-// 	}
-// }
+func (c *conn) write(msg Message) {
+	select {
+	case <-c.closeCh:
+		return
+	case c.out <- serializeMessage(nil, msg):
+	}
+}

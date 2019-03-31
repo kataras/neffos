@@ -66,15 +66,6 @@ type FastWS struct {
 	// When this callback exits the connection with this client is terminated,
 	// most common case is to perform a for loop and read, send messages.
 	OnConnected func(*Conn) error
-	// OnError fires whenever an error returned from `OnUpgrade` or `OnConnected`.
-	// If it is from `OnUpgrade` then the boolean result will define if
-	// the connection should be closed (force client disconnect) with "true" or log and ignore the error with "false".
-	// If it is from `OnConnected` then the result does not really matter.
-	// It accepts the `Conn`, the error is the `Conn.Err()` which contains the last known reason that it raised the `OnError` callback.
-	//
-	// Look `IsTimeout`, `IsClosed` and `IsDisconnected` error check helpers too,
-	// this pattern allows the caller to define its own custom errors and handle them in one place.
-	OnError func(*Conn) bool // Conn#Err(), if false disconnect if true means that it is handled.
 }
 
 // New returns a new websocket server, read `FastWS` struct type docs for more.
@@ -86,15 +77,6 @@ func writeError(w http.ResponseWriter, statusCode int) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)
 	fmt.Fprintln(w, http.StatusText(statusCode))
-}
-
-func (fws *FastWS) HandleError(c *Conn, err error) bool {
-	if err == nil || fws.OnError == nil {
-		return true
-	}
-
-	c.reason = err
-	return fws.OnError(c)
 }
 
 type ErrUpgrade struct {
@@ -190,7 +172,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if fws.OnUpgrade != nil {
 		err := fws.OnUpgrade(c)
-		if !fws.HandleError(c, err) {
+		if !c.HandleError(err) {
 			if abort, ok := err.(ErrUpgrade); ok && abort.Code > 0 {
 				// this is the only error that we fire back.
 				writeError(w, abort.Code)
@@ -210,7 +192,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, _, hs, err := upgrader.Upgrade(r, w)
 	if err != nil {
 		abort := ErrUpgrade{err, http.StatusServiceUnavailable}
-		if !fws.HandleError(c, abort) {
+		if !c.HandleError(abort) {
 			writeError(w, abort.Code)
 		}
 
@@ -222,7 +204,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	if fws.OnConnected != nil {
 		err = fws.OnConnected(c)
 		if err != c.reason { // sometimes the user may want to call the `HandleError` manually, we don't want to push the same error twice.
-			if !fws.HandleError(c, err) {
+			if !c.HandleError(err) {
 				return
 			}
 		}
@@ -243,14 +225,14 @@ func (fws *FastWS) Upgrade(conn net.Conn) {
 
 	if fws.OnUpgrade != nil {
 		err := fws.OnUpgrade(c)
-		if !fws.HandleError(c, err) {
+		if !c.HandleError(err) {
 			return
 		}
 	}
 
 	hs, err := fws.Upgrader.Upgrade(conn)
 	if err != nil {
-		fws.HandleError(c, err)
+		c.HandleError(err)
 		return
 	}
 
@@ -259,7 +241,7 @@ func (fws *FastWS) Upgrade(conn net.Conn) {
 	if fws.OnConnected != nil {
 		err = fws.OnConnected(c)
 		if err != c.reason { // sometimes the user may want to call the `HandleError` manually, we don't want to push the same error twice.
-			if !fws.HandleError(c, err) {
+			if !c.HandleError(err) {
 				return
 			}
 		}

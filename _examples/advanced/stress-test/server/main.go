@@ -15,7 +15,7 @@ import (
 
 const (
 	endpoint     = "localhost:8080"
-	totalClients = 35000 // max depends on the OS, read more below.
+	totalClients = 100000 // max depends on the OS, read more below.
 	// For example for windows:
 	//
 	// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -35,9 +35,12 @@ const (
 )
 
 func main() {
-	srv := ws.New()
-
-	// websocket.Config{PingPeriod: ((60 * time.Second) * 9) / 10}
+	srv := ws.New(ws.Events{
+		"chat": func(c ws.NSConn, msg ws.Message) error {
+			c.Emit("chat", msg.Body)
+			return nil
+		},
+	})
 
 	started := false
 
@@ -86,9 +89,9 @@ func main() {
 					}
 					return
 				} else if n == 0 {
-					if allowNZero < 10 {
+					if allowNZero < 15 {
 						// Allow 0 active connections just ten times.
-						// It is actually a dynamic timeout of 10*the expected total connections variable.
+						// It is actually a dynamic timeout of 15*the expected total connections variable.
 						// It exists for two reasons:
 						// 1: user delays to start client,
 						// 2: live connections may be disconnected so we are waiting for new one (randomly)
@@ -100,27 +103,24 @@ func main() {
 
 					return
 				}
+				allowNZero = 0
 			}
 		}
 	}()
 
-	srv.OnJoin("", func(c ws.Conn) error {
+	srv.OnConnect = func(c ws.Conn) error {
 		started = true
 		atomic.AddUint64(&totalConnected, 1)
 		return nil
-	})
+	}
 
 	// if c.Err() != nil {
 	// 	log.Fatalf("[%d] upgrade failed: %v", atomic.LoadUint64(&totalConnected)+1, c.Err())
 	// 	return
 	// }
 
-	srv.OnError("", func(c ws.Conn, err error) { handleErr(c, err) })
-	srv.OnLeave("", handleDisconnect)
-	srv.On("", "chat", func(c ws.Conn, data []byte) error {
-		c.Emit("chat", data)
-		return nil
-	})
+	//	srv.OnError("", func(c ws.Conn, err error) { handleErr(c, err) })
+	srv.OnDisconnect = handleDisconnect
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
 	log.Fatal(http.ListenAndServe(endpoint, srv))

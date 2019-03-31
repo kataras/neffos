@@ -7,40 +7,37 @@ import (
 )
 
 type Client struct {
-	Conn
-	room *Room
+	conn *conn
 }
 
-func (c *Client) OnError(cb func(error)) {
-	c.room.OnError = func(conn Conn, err error) {
-		cb(err)
+func (c *Client) Connect(namespace string) NSConn {
+	if events, ok := c.conn.namespaces[namespace]; ok {
+		nsConn := newNSConn(c.conn, namespace, events)
+		c.conn.addNSConn(namespace, nsConn)
+		c.conn.write(Message{Namespace: namespace, isConnect: true})
+
+		return nsConn
 	}
+
+	return nil
 }
 
-func (c *Client) On(event string, cb func([]byte) error) {
-	c.room.On(event, func(conn Conn, data []byte) error {
-		return cb(data)
-	})
+func (c *Client) Close() {
+	c.conn.Close()
 }
 
-func Dial(ctx context.Context, url, ns string) (*Client, error) {
-	underline, err := fastws.Dial(ctx, url+"?ns="+ns)
+func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
+	underline, err := fastws.Dial(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
-	room := newRoom()
-	conn := newConn(underline, map[string]*Room{
-		ns: room,
-	})
-
-	c := conn.wrapConnRoom(ns)
+	c := newConn(underline, connHandler.getNamespaces())
 	go c.startWriter()
 	go c.startReader()
 
 	client := &Client{
-		Conn: c,
-		room: room,
+		conn: c,
 	}
 
 	return client, nil

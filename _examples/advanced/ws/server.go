@@ -1,14 +1,19 @@
 package ws
 
 import (
+	"errors"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/kataras/fastws"
 )
 
 type Server struct {
-	rooms map[string]*Room
+	mu         sync.RWMutex
+	NSAcceptor NSAcceptor
+	namespaces Namespaces
+
 	// connections chan *conn
 	ws    *fastws.FastWS
 	count uint64
@@ -17,32 +22,40 @@ type Server struct {
 	connect     chan *conn
 	disconnect  chan *conn
 	broadcast   chan []byte
+
+	OnError      func(c Conn, err error) bool
+	OnConnect    func(c Conn) error
+	OnDisconnect func(c Conn)
 }
 
-func New() *Server {
+func New(connHandler connHandler) *Server {
 	ws := fastws.New()
 	s := &Server{
-		rooms:       make(map[string]*Room),
+		namespaces: connHandler.getNamespaces(),
+
 		connections: make(map[*conn]struct{}),
-		connect:     make(chan *conn),
+		connect:     make(chan *conn, 1),
 		disconnect:  make(chan *conn),
+
 		// connections: make(chan *conn, 1),
-		ws: ws,
+		ws:         ws,
+		NSAcceptor: DefaultNSAcceptor,
 	}
 
 	ws.OnConnected = s.onConnected
-	ws.OnError = func(conn *fastws.Conn) bool {
-		// TODO: for testing.
-		// if !fastws.IsDisconnected(conn.Err()) {
-		// 	println("[DEBUG] ws.OnError: " + conn.Err().Error())
-		// }
-
-		return false
-	}
-
 	go s.start()
 
 	return s
+}
+
+func (s *Server) SetIDGenerator(gen func(*http.Request) string) {
+	if gen == nil {
+		s.ws.IDGenerator = fastws.DefaultIDGenerator
+	}
+
+	s.ws.IDGenerator = func(c *fastws.Conn) string {
+		return gen(c.Request)
+	}
 }
 
 func (s *Server) start() {
@@ -56,16 +69,15 @@ func (s *Server) start() {
 				delete(s.connections, c)
 				close(c.out)
 				atomic.AddUint64(&s.count, ^uint64(0))
+				if s.OnDisconnect != nil {
+					s.OnDisconnect(c)
+				}
 			}
 		case b := <-s.broadcast:
 			for c := range s.connections {
 				select {
 				case c.out <- b:
 				default:
-					// c.leaveAll()
-					// close(c.out)
-					// close(c.closeCh)
-					// c.underline.NetConn.Close()
 					close(c.out)
 					delete(s.connections, c)
 					atomic.AddUint64(&s.count, ^uint64(0))
@@ -73,36 +85,6 @@ func (s *Server) start() {
 			}
 		}
 	}
-}
-
-func (s *Server) getRoom(name string) *Room {
-	room, ok := s.rooms[name]
-	if !ok {
-		room = newRoom()
-		s.rooms[name] = room
-	}
-
-	return room
-}
-
-func (s *Server) OnJoin(room string, cb func(Conn) error) {
-	r := s.getRoom(room)
-	r.OnJoin = cb
-}
-
-func (s *Server) OnLeave(room string, cb func(Conn)) {
-	r := s.getRoom(room)
-	r.OnLeave = cb
-}
-
-func (s *Server) OnError(room string, cb func(Conn, error)) {
-	r := s.getRoom(room)
-	r.OnError = cb
-}
-
-func (s *Server) On(room, event string, cb EventListener) {
-	r := s.getRoom(room)
-	r.On(event, cb)
 }
 
 func (s *Server) Close() error {
@@ -118,23 +100,46 @@ func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
+var ErrBadNamespace = errors.New("bad namespace")
+var ErrForbiddenNamespace = errors.New("forbidden namespace")
+
 func (s *Server) onConnected(conn *fastws.Conn) error {
-	c := newConn(conn, s.rooms)
+	// namespace := conn.Request.URL.Query().Get("ns")
+	// if !s.NSAcceptor(conn.Request, namespace) {
+	// 	return ErrForbiddenNamespace
+	// }
+
+	// events, ok := s.namespaces[namespace]
+	// if !ok {
+	// 	return ErrBadNamespace
+	// }
+
+	c := newConn(conn, s.namespaces)
 	c.server = s
 
-	// s.connections <- c
-	room := conn.Request.URL.Query().Get("ns")
+	//	nsConn := c.getNSConnection(namespace)
 
-	c.wrapConnRoom(room)
+	if s.OnError != nil {
+		conn.OnError = func(err error) bool {
+			if fastws.IsDisconnected(err) {
+				return false
+			}
+
+			return s.OnError(c, err)
+		}
+	}
+
 	s.connect <- c
 	go c.startWriter()
 	go c.startReader()
+
+	if s.OnConnect != nil {
+		if err := s.OnConnect(c); err != nil {
+			return err
+		}
+	}
+
+	// events.fireOnNamespaceConnect(c, Message{Namespace: namespace, isConnect: true})
+
 	return nil
 }
-
-// func (s *Server) Start() {
-// 	for {
-// 		c := <-s.connections
-// 		go c.serve()
-// 	}
-// }
