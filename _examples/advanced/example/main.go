@@ -16,30 +16,60 @@ const endpoint = "localhost:8080"
 var handler = ws.Namespaces{
 	"default": ws.Events{
 		ws.OnNamespaceConnect: func(c ws.NSConn, msg ws.Message) error {
-			log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
-			return nil
+			if msg.Err != nil {
+				log.Printf("This client can't connect because of: %v", msg.Err)
+				return nil
+			}
+
+			err := fmt.Errorf("Server says that you are not allowed here")
+			/* comment this to see that the server-side will
+			no allow to for this socket to be connected to the "default" namespace
+			and an error will be logged to the client. */
+			err = nil
+			if err == nil {
+				log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
+			}
+
+			return err
 		},
 		ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
-			log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
-			return nil
+			if msg.Err != nil {
+				log.Printf("This client can't disconnect yet, server does not allow that action, reason: %v", msg.Err)
+				return nil
+			}
+
+			err := fmt.Errorf("Server says that you are not allowed to be disconnected yet")
+			/* here if you comment this, the return error will mean that
+			the disconnect message from client-side will be ignored from the server
+			and the connection would be still available to send message to the "default" namespace
+			it will not be disconnected.*/
+			err = nil
+
+			if err == nil {
+				log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
+			}
+
+			return err
 		},
 		"chat": func(c ws.NSConn, msg ws.Message) error {
 			if !c.IsClient() {
+				// this is possible too:
+				// if bytes.Equal(msg.Body, []byte("force disconnect")) {
+				// 	println("force disconnect")
+				// 	return c.Disconnect()
+				// }
+
 				log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
 				c.Emit(msg.Event, msg.Body)
-			} else {
-				if bytes.Equal(msg.Body, []byte("exit")) {
-					c.Disconnect()
-					return nil
-				}
 			}
 
 			log.Printf("---------------------\n[%s] %s", c.ID(), msg.Body)
-
 			return nil
 		},
 	},
 }
+
+const namespace = "default"
 
 func main() {
 	args := os.Args[1:]
@@ -77,7 +107,24 @@ func server() {
 	}
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
-	http.ListenAndServe(endpoint, srv)
+	go http.ListenAndServe(endpoint, srv)
+
+	fmt.Fprint(os.Stdout, ">> ")
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		if !scanner.Scan() {
+			log.Printf("ERROR: %v", scanner.Err())
+			return
+		}
+
+		text := scanner.Bytes()
+		if bytes.Equal(text, []byte("force disconnect")) {
+			for _, conn := range srv.GetConnectionsByNamespace(namespace) {
+				conn.Disconnect()
+			}
+		}
+		fmt.Fprint(os.Stdout, ">> ")
+	}
 }
 
 func client() {
@@ -85,8 +132,9 @@ func client() {
 	if err != nil {
 		panic(err)
 	}
+	// defer client.Close()
 
-	c := client.Connect("default")
+	c := client.Connect(namespace)
 
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -98,10 +146,12 @@ func client() {
 
 		text := scanner.Bytes()
 
-		// if bytes.Equal(text, []byte("exit")) {
-		// 	c.Disconnect()
-		// 	return
-		// }
+		if bytes.Equal(text, []byte("exit")) {
+			if err := c.Disconnect(); err != nil {
+				log.Printf("from server: %v", err)
+			}
+			continue
+		}
 
 		fmt.Fprint(os.Stdout, ">> ")
 		c.Emit("chat", text)

@@ -14,7 +14,7 @@ func (c *Client) Connect(namespace string) NSConn {
 	if events, ok := c.conn.namespaces[namespace]; ok {
 		nsConn := newNSConn(c.conn, namespace, events)
 		c.conn.addNSConn(namespace, nsConn)
-		c.conn.write(Message{Namespace: namespace, isConnect: true})
+		c.conn.write(Message{Namespace: namespace, isConnect: true, Event: OnNamespaceConnect})
 
 		return nsConn
 	}

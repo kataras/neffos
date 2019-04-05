@@ -7,11 +7,11 @@ type nsConn struct {
 }
 
 func (c *nsConn) Emit(event string, body []byte) {
-	c.Write(c.namespace, event, body, nil)
+	c.conn.Write(c.namespace, event, body)
 }
 
-func (c *nsConn) Disconnect() {
-	c.conn.disconnect(c.namespace)
+func (c *nsConn) Disconnect() error {
+	return c.conn.disconnect(c.namespace)
 }
 
 func newNSConn(c *conn, namespace string, events Events) *nsConn {
@@ -19,5 +19,21 @@ func newNSConn(c *conn, namespace string, events Events) *nsConn {
 		conn:      c,
 		namespace: namespace,
 		events:    events,
+	}
+}
+
+type nsConns struct {
+	conns []*nsConn
+}
+
+func (c *nsConns) Emit(event string, body []byte) {
+	for _, s := range c.conns {
+		s.Emit(event, body)
+	}
+}
+
+func (c *nsConns) Disconnect() {
+	for _, s := range c.conns {
+		s.Disconnect()
 	}
 }

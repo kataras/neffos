@@ -23,11 +23,11 @@ func TestEncoding(t *testing.T) {
 		}
 	)
 	f := New()
-	f.OnError = func(c *Conn) bool {
-		t.Fatal(c.Err())
-		return false // disconnect.
-	}
 	f.OnConnected = func(c *Conn) error {
+		c.OnError = func(err error) bool {
+			t.Fatal(c.Err())
+			return false // disconnect.
+		}
 		c.SetEncoding(json.NewEncoder(c), json.NewDecoder(c))
 		return c.Encode(expectedFromServer)
 		// return c.WriteJSON(expectedFromServer)

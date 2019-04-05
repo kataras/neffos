@@ -18,6 +18,8 @@ type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<is
 	isConnect    bool
 	isDisconnect bool
 	isInvalid    bool
+
+	handled bool
 }
 
 type (
@@ -93,6 +95,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		isConnect,
 		isDisconnect,
 		isInvalid,
+		false,
 	}
 }
 

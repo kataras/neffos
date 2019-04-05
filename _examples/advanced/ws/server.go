@@ -67,7 +67,7 @@ func (s *Server) start() {
 		case c := <-s.disconnect:
 			if _, ok := s.connections[c]; ok {
 				delete(s.connections, c)
-				close(c.out)
+				// close(c.out)
 				atomic.AddUint64(&s.count, ^uint64(0))
 				if s.OnDisconnect != nil {
 					s.OnDisconnect(c)
@@ -98,6 +98,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
+}
+
+func (s *Server) Broadcast(body []byte) {
+	s.broadcast <- body
+}
+
+func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
+	conns := make(map[string]NSConn)
+
+	s.mu.RLock()
+	for c := range s.connections {
+		if ns, ok := c.connectedNamespaces[namespace]; ok {
+			conns[ns.ID()] = ns
+		}
+	}
+	s.mu.RUnlock()
+
+	return conns
+}
+
+func (s *Server) GetConnections() map[string]Conn {
+	conns := make(map[string]Conn)
+
+	s.mu.RLock()
+	for c := range s.connections {
+		conns[c.ID()] = c
+	}
+	s.mu.RUnlock()
+
+	return conns
 }
 
 var ErrBadNamespace = errors.New("bad namespace")
