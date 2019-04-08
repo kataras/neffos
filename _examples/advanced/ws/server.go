@@ -21,7 +21,7 @@ type Server struct {
 	connections map[*conn]struct{}
 	connect     chan *conn
 	disconnect  chan *conn
-	broadcast   chan []byte
+	board       chan func(Conn)
 
 	OnError      func(c Conn, err error) bool
 	OnConnect    func(c Conn) error
@@ -36,6 +36,7 @@ func New(connHandler connHandler) *Server {
 		connections: make(map[*conn]struct{}),
 		connect:     make(chan *conn, 1),
 		disconnect:  make(chan *conn),
+		board:       make(chan func(Conn)),
 
 		// connections: make(chan *conn, 1),
 		ws:         ws,
@@ -73,15 +74,24 @@ func (s *Server) start() {
 					s.OnDisconnect(c)
 				}
 			}
-		case b := <-s.broadcast:
+			// case msg := <-s.broadcast:
+			// 	for c := range s.connections {
+			// 		if msg.from != "" && msg.from == c.ID() {
+			// 			continue
+			// 		}
+			// 		c.write(msg)
+			// 		// select {
+			// 		// case c.out <- msg.Body:
+			// 		// default:
+			// 		// 	close(c.out)
+			// 		// 	delete(s.connections, c)
+			// 		// 	atomic.AddUint64(&s.count, ^uint64(0))
+			// 		// }
+			// 	}
+			// }
+		case fn := <-s.board:
 			for c := range s.connections {
-				select {
-				case c.out <- b:
-				default:
-					close(c.out)
-					delete(s.connections, c)
-					atomic.AddUint64(&s.count, ^uint64(0))
-				}
+				fn(c)
 			}
 		}
 	}
@@ -100,10 +110,11 @@ func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
-func (s *Server) Broadcast(body []byte) {
-	s.broadcast <- body
+func (s *Server) Broadcast(fn func(Conn)) {
+	s.board <- fn
 }
 
+// not thread safe.
 func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
 	conns := make(map[string]NSConn)
 
@@ -118,6 +129,7 @@ func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
 	return conns
 }
 
+// not thread safe.
 func (s *Server) GetConnections() map[string]Conn {
 	conns := make(map[string]Conn)
 

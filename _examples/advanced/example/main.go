@@ -119,9 +119,21 @@ func server() {
 
 		text := scanner.Bytes()
 		if bytes.Equal(text, []byte("force disconnect")) {
-			for _, conn := range srv.GetConnectionsByNamespace(namespace) {
-				conn.Disconnect()
-			}
+			// for _, conn := range srv.GetConnectionsByNamespace(namespace) {
+			// 	conn.Disconnect()
+			// }
+			// srv.Broadcast(nil, ws.Message{
+			// 	Namespace: namespace,
+			// 	Event:     ws.OnNamespaceDisconnect,
+			// })
+			srv.Broadcast(func(c ws.Conn) {
+				c.Close()
+				// c.DisconnectFrom(namespace)
+			})
+		} else {
+			srv.Broadcast(func(c ws.Conn) {
+				c.Write(namespace, "chat", text)
+			})
 		}
 		fmt.Fprint(os.Stdout, ">> ")
 	}
@@ -153,8 +165,12 @@ func client() {
 			continue
 		}
 
+		ok := c.Emit("chat", text)
+		if !ok {
+			break
+		}
+
 		fmt.Fprint(os.Stdout, ">> ")
-		c.Emit("chat", text)
 	}
 
 }

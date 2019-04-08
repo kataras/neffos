@@ -20,6 +20,7 @@ type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<is
 	isInvalid    bool
 
 	handled bool
+	from    string // the CONN ID, filled automatically.
 }
 
 type (
@@ -96,6 +97,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		isDisconnect,
 		isInvalid,
 		false,
+		"",
 	}
 }
 

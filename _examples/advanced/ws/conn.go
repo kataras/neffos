@@ -11,15 +11,17 @@ import (
 type Conn interface {
 	UnderlyingConn() *fastws.Conn
 	ID() string
-	Write(namespace string, event string, body []byte)
+	Write(namespace string, event string, body []byte) bool
 	Close()
 	String() string
 	IsClient() bool
+	DisconnectFrom(namespace string) error
+	DisconnectFromAll()
 }
 
 type NSConn interface {
 	Conn
-	Emit(event string, body []byte)
+	Emit(event string, body []byte) bool
 	Disconnect() error
 }
 
@@ -211,7 +213,7 @@ func (c *conn) startReader() {
 			}
 			continue
 		} else if msg.isDisconnect && !c.IsClient() {
-			c.deleteNSConn(msg.Namespace)
+			c.deleteNSConn(msg.Namespace, true)
 			// send back the disconnect message without error.
 			c.write(msg)
 		}
@@ -231,13 +233,93 @@ func (c *conn) UnderlyingConn() *fastws.Conn {
 	return c.underline
 }
 
+func (c *conn) addNSConn(namespace string, conn *nsConn) {
+	c.mu.Lock()
+	c.connectedNamespaces[namespace] = conn
+	c.mu.Unlock()
+}
+
+func (c *conn) deleteNSConn(namespace string, lock bool) {
+	if lock {
+		c.mu.Lock()
+		delete(c.connectedNamespaces, namespace)
+		c.mu.Unlock()
+		return
+	}
+
+	delete(c.connectedNamespaces, namespace)
+}
+
+func (c *conn) ask(msg Message) (Message, bool) {
+	if !atomic.CompareAndSwapUint32(&c.waiting, 0, 1) {
+		return Message{}, false // only one message can be waited, i.e user can't execute thins like Disconnect in a different go routine.
+	}
+
+	c.write(msg)
+
+	msg, ok := <-c.waitingMessage
+	return msg, ok
+}
+
+// DisconnectFrom gracefully disconnects from a namespace.
+func (c *conn) DisconnectFrom(namespace string) error {
+	c.mu.RLock()
+	ns := c.connectedNamespaces[namespace]
+	c.mu.RUnlock()
+
+	if ns == nil {
+		return ErrBadNamespace
+	}
+
+	disconnectMsg := Message{Namespace: namespace, Event: OnNamespaceDisconnect, isDisconnect: true}
+	return c.writeDisconnect(disconnectMsg, true)
+}
+
+func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
+	if c.IsClient() {
+		msg, ok := c.ask(disconnectMsg)
+		if !ok {
+			return nil
+		}
+
+		if !msg.isError {
+			// if all ok, remove it.
+			c.deleteNSConn(disconnectMsg.Namespace, lock)
+		}
+
+		return msg.Err
+	}
+	// when server calls it.
+	c.deleteNSConn(disconnectMsg.Namespace, lock)
+
+	c.write(disconnectMsg) // we don't care about client to respond, server can force disconnect action of a connection from a namespace.
+	return nil
+}
+
+// DisconnectFromAll gracefully disconnects from all namespaces.
+func (c *conn) DisconnectFromAll() {
+	c.mu.Lock()
+	disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
+	for namespace := range c.connectedNamespaces {
+		disconnectMsg.Namespace = namespace
+		c.writeDisconnect(disconnectMsg, false)
+	}
+	c.mu.Unlock()
+}
+
 func (c *conn) isClosed() bool {
 	return atomic.LoadUint32(&c.once) > 0
 }
 
 func (c *conn) Close() {
 	if atomic.CompareAndSwapUint32(&c.once, 0, 1) {
-		c.deleteAllConnectedNS()
+		// fire the namespaces' disconnect event for both server and client.
+		disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
+		for _, ns := range c.connectedNamespaces {
+			disconnectMsg.Namespace = ns.namespace
+			ns.events.fireOnNamespaceDisconnect(ns, disconnectMsg)
+		}
+
 		go func() {
 			if c.server != nil {
 				c.server.disconnect <- c
@@ -252,86 +334,20 @@ func (c *conn) Close() {
 	}
 }
 
-func (c *conn) addNSConn(namespace string, conn *nsConn) {
-	c.mu.Lock()
-	c.connectedNamespaces[namespace] = conn
-	c.mu.Unlock()
-}
-
-func (c *conn) deleteNSConn(namespace string) {
-	c.mu.Lock()
-	delete(c.connectedNamespaces, namespace)
-	c.mu.Unlock()
-}
-
-func (c *conn) ask(msg Message) (Message, bool) {
-	if !atomic.CompareAndSwapUint32(&c.waiting, 0, 1) {
-		return Message{}, false // only one message can be waited, i.e user can't execute thins like Disconnect in a different go routine.
-	}
-
-	c.write(msg)
-
-	msg, ok := <-c.waitingMessage
-	return msg, ok
-}
-
-func (c *conn) disconnect(namespace string) error {
-	c.mu.RLock()
-	ns := c.connectedNamespaces[namespace]
-	c.mu.RUnlock()
-
-	if ns == nil {
-		return ErrBadNamespace
-	}
-
-	disconnectMsg := Message{Namespace: namespace, Event: OnNamespaceDisconnect, isDisconnect: true}
-
-	if c.IsClient() {
-		msg, ok := c.ask(disconnectMsg)
-		if !ok {
-			return nil
-		}
-
-		if !msg.isError {
-			// if all ok, remove it.
-			c.deleteNSConn(namespace)
-		}
-
-		return msg.Err
-	}
-	// when server calls it.
-	c.deleteNSConn(namespace)
-
-	c.write(disconnectMsg) // we don't care about client to respond, server can force disconnect action of a connection from a namespace.
-	return nil
-}
-
-func (c *conn) deleteAllConnectedNS() {
-	c.mu.Lock()
-	msg := Message{isDisconnect: true}
-	for namespace := range c.connectedNamespaces {
-		msg.Namespace = namespace
-		if c.IsClient() {
-			c.write(msg)
-		}
-		delete(c.connectedNamespaces, namespace)
-	}
-	c.mu.Unlock()
-}
-
-func (c *conn) Write(namespace, event string, body []byte) {
+func (c *conn) Write(namespace, event string, body []byte) bool {
 	// log.Printf("conn:Write:\nnamespace:%s\nevent:%s\nbody:%s", namespace, event, string(body))
-	c.write(Message{
+	return c.write(Message{
 		Namespace: namespace,
 		Event:     event,
 		Body:      body,
 	})
 }
 
-func (c *conn) write(msg Message) {
+func (c *conn) write(msg Message) bool {
 	select {
 	case <-c.closeCh:
-		return
+		return false
 	case c.out <- serializeMessage(nil, msg):
+		return true
 	}
 }
