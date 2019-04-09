@@ -21,7 +21,8 @@ type Server struct {
 	connections map[*conn]struct{}
 	connect     chan *conn
 	disconnect  chan *conn
-	board       chan func(Conn)
+	actions     chan func(Conn)
+	closed      uint32
 
 	OnError      func(c Conn, err error) bool
 	OnConnect    func(c Conn) error
@@ -36,7 +37,7 @@ func New(connHandler connHandler) *Server {
 		connections: make(map[*conn]struct{}),
 		connect:     make(chan *conn, 1),
 		disconnect:  make(chan *conn),
-		board:       make(chan func(Conn)),
+		actions:     make(chan func(Conn)),
 
 		// connections: make(chan *conn, 1),
 		ws:         ws,
@@ -60,6 +61,8 @@ func (s *Server) SetIDGenerator(gen func(*http.Request) string) {
 }
 
 func (s *Server) start() {
+	atomic.StoreUint32(&s.closed, 0)
+
 	for {
 		select {
 		case c := <-s.connect:
@@ -74,22 +77,7 @@ func (s *Server) start() {
 					s.OnDisconnect(c)
 				}
 			}
-			// case msg := <-s.broadcast:
-			// 	for c := range s.connections {
-			// 		if msg.from != "" && msg.from == c.ID() {
-			// 			continue
-			// 		}
-			// 		c.write(msg)
-			// 		// select {
-			// 		// case c.out <- msg.Body:
-			// 		// default:
-			// 		// 	close(c.out)
-			// 		// 	delete(s.connections, c)
-			// 		// 	atomic.AddUint64(&s.count, ^uint64(0))
-			// 		// }
-			// 	}
-			// }
-		case fn := <-s.board:
+		case fn := <-s.actions:
 			for c := range s.connections {
 				fn(c)
 			}
@@ -97,12 +85,19 @@ func (s *Server) start() {
 	}
 }
 
-func (s *Server) Close() error {
-	// TODO:
-	return nil
+func (s *Server) Close() {
+	if atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
+		s.Do(func(c Conn) {
+			c.Close()
+		})
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if atomic.LoadUint32(&s.closed) > 0 {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	s.ws.UpgradeHTTP(w, r)
 }
 
@@ -110,8 +105,8 @@ func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
-func (s *Server) Broadcast(fn func(Conn)) {
-	s.board <- fn
+func (s *Server) Do(fn func(Conn)) {
+	s.actions <- fn
 }
 
 // not thread safe.

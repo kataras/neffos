@@ -126,12 +126,12 @@ func server() {
 			// 	Namespace: namespace,
 			// 	Event:     ws.OnNamespaceDisconnect,
 			// })
-			srv.Broadcast(func(c ws.Conn) {
+			srv.Do(func(c ws.Conn) {
 				c.Close()
 				// c.DisconnectFrom(namespace)
 			})
 		} else {
-			srv.Broadcast(func(c ws.Conn) {
+			srv.Do(func(c ws.Conn) {
 				c.Write(namespace, "chat", text)
 			})
 		}
@@ -146,7 +146,10 @@ func client() {
 	}
 	// defer client.Close()
 
-	c := client.Connect(namespace)
+	c, err := client.Connect(namespace)
+	if err != nil {
+		panic(err)
+	}
 
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)

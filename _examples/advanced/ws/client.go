@@ -10,20 +10,12 @@ type Client struct {
 	conn *conn
 }
 
-func (c *Client) Connect(namespace string) NSConn {
-	if events, ok := c.conn.namespaces[namespace]; ok {
-		nsConn := newNSConn(c.conn, namespace, events)
-		c.conn.addNSConn(namespace, nsConn)
-		c.conn.write(Message{Namespace: namespace, isConnect: true, Event: OnNamespaceConnect})
-
-		return nsConn
-	}
-
-	return nil
-}
-
 func (c *Client) Close() {
 	c.conn.Close()
+}
+
+func (c *Client) Connect(namespace string) (NSConn, error) {
+	return c.conn.Connect(namespace)
 }
 
 func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
