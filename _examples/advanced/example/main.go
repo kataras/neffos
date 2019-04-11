@@ -127,8 +127,8 @@ func server() {
 			// 	Event:     ws.OnNamespaceDisconnect,
 			// })
 			srv.Do(func(c ws.Conn) {
-				c.Close()
-				// c.DisconnectFrom(namespace)
+				// c.Close()
+				c.DisconnectFrom(namespace)
 			})
 		} else {
 			srv.Do(func(c ws.Conn) {
@@ -171,6 +171,8 @@ func client() {
 		ok := c.Emit("chat", text)
 		if !ok {
 			break
+		} else {
+			println("ok")
 		}
 
 		fmt.Fprint(os.Stdout, ">> ")

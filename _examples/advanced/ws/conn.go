@@ -187,7 +187,6 @@ func (c *conn) startReader() {
 		nsConn, ok := c.connectedNamespaces[msg.Namespace]
 		c.mu.RUnlock()
 		if !ok {
-			println(msg.Namespace + " does not exist")
 			// see client.go#Connect for the client-side.
 			continue
 		}
@@ -200,10 +199,12 @@ func (c *conn) startReader() {
 			if isCloseError(err) {
 				return // close the connection.
 			}
-		} else if msg.isDisconnect && !c.IsClient() {
+		} else if msg.isDisconnect {
+			if !c.IsClient() {
+				// send back the disconnect message without error.
+				c.write(msg)
+			}
 			c.deleteNSConn(msg.Namespace, true)
-			// send back the disconnect message without error.
-			c.write(msg)
 		}
 
 	}
@@ -262,7 +263,12 @@ func (c *conn) DisconnectFrom(namespace string) error {
 	}
 
 	disconnectMsg := Message{Namespace: namespace, Event: OnNamespaceDisconnect, isDisconnect: true}
-	return c.writeDisconnect(disconnectMsg, true)
+	err := c.writeDisconnect(disconnectMsg, true)
+	if err != nil {
+		return err
+	}
+
+	return ns.events.fireEvent(ns, disconnectMsg)
 }
 
 func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
@@ -314,7 +320,13 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 
 	ns := newNSConn(c, namespace, events)
 	c.addNSConn(ns)
-	return ns, nil
+
+	err := events.fireEvent(ns, Message{
+		Namespace: namespace,
+		Event:     OnNamespaceConnect,
+		isConnect: true,
+	})
+	return ns, err
 }
 
 // DisconnectFromAll gracefully disconnects from all namespaces.
@@ -365,6 +377,15 @@ func (c *conn) Write(namespace, event string, body []byte) bool {
 }
 
 func (c *conn) write(msg Message) bool {
+	if !msg.isConnect && !msg.isDisconnect {
+		c.mu.RLock()
+		_, ok := c.connectedNamespaces[msg.Namespace]
+		c.mu.RUnlock()
+		if !ok {
+			return false
+		}
+	}
+
 	select {
 	case <-c.closeCh:
 		return false
