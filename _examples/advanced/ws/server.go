@@ -22,7 +22,9 @@ type Server struct {
 	connect     chan *conn
 	disconnect  chan *conn
 	actions     chan func(Conn)
-	closed      uint32
+	broadcast   chan Message
+
+	closed uint32
 
 	OnError      func(c Conn, err error) bool
 	OnConnect    func(c Conn) error
@@ -38,7 +40,7 @@ func New(connHandler connHandler) *Server {
 		connect:     make(chan *conn, 1),
 		disconnect:  make(chan *conn),
 		actions:     make(chan func(Conn)),
-
+		broadcast:   make(chan Message),
 		// connections: make(chan *conn, 1),
 		ws:         ws,
 		NSAcceptor: DefaultNSAcceptor,
@@ -81,6 +83,13 @@ func (s *Server) start() {
 			for c := range s.connections {
 				fn(c)
 			}
+		case msg := <-s.broadcast:
+			for c := range s.connections {
+				if c.ID() == msg.from {
+					continue
+				}
+				c.write(msg)
+			}
 		}
 	}
 }
@@ -107,6 +116,14 @@ func (s *Server) GetTotalConnections() uint64 {
 
 func (s *Server) Do(fn func(Conn)) {
 	s.actions <- fn
+}
+
+func (s *Server) Broadcast(from Conn, msg Message) {
+	if from != nil {
+		msg.from = from.ID()
+	}
+
+	s.broadcast <- msg
 }
 
 // not thread safe.

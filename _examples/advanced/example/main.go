@@ -60,7 +60,9 @@ var handler = ws.Namespaces{
 				// }
 
 				log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
-				c.Emit(msg.Event, msg.Body)
+				//	c.Emit(msg.Event, msg.Body)
+				//	c.Server().Broadcast(nil, msg) // to all including this connection.
+				c.Server().Broadcast(c, msg) // to all except this connection.
 			}
 
 			log.Printf("---------------------\n[%s] %s", c.ID(), msg.Body)
@@ -171,8 +173,6 @@ func client() {
 		ok := c.Emit("chat", text)
 		if !ok {
 			break
-		} else {
-			println("ok")
 		}
 
 		fmt.Fprint(os.Stdout, ">> ")

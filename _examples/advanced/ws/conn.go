@@ -15,9 +15,11 @@ type Conn interface {
 	Close()
 	String() string
 	Connect(namespace string) (NSConn, error)
-	IsClient() bool
 	DisconnectFrom(namespace string) error
 	DisconnectFromAll()
+
+	IsClient() bool
+	Server() *Server
 }
 
 type NSConn interface {
@@ -58,6 +60,14 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 
 func (c *conn) IsClient() bool {
 	return c.server == nil
+}
+
+func (c *conn) Server() *Server {
+	if c.IsClient() {
+		return nil
+	}
+
+	return c.server
 }
 
 var (
