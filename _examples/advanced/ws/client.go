@@ -25,6 +25,11 @@ func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, er
 	}
 
 	c := newConn(underline, connHandler.getNamespaces())
+	err = c.ack()
+	if err != nil {
+		return nil, err
+	}
+
 	go c.startWriter()
 	go c.startReader()
 

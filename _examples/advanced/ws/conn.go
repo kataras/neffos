@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -70,6 +71,40 @@ func (c *conn) Server() *Server {
 	return c.server
 }
 
+var ackBinary = []byte("ACK")
+
+// this should run before startWriter and startReader.
+func (c *conn) ack() error {
+	if !c.IsClient() {
+		// server-side, first action is to send the id and then wait for confirmation.
+		_, err := c.underline.Write([]byte(c.underline.ID))
+		if err != nil {
+			return err
+		}
+
+		b, err := c.underline.ReadBinary()
+		if err != nil {
+			return err
+		}
+
+		if bytes.Equal(b, ackBinary) {
+			return nil
+		}
+		return CloseError{Code: -1}
+	}
+
+	// client-side, first action is to wait for the id and then send the confirmation.
+	id, err := c.underline.ReadBinary()
+	if err != nil {
+		return err
+	}
+
+	c.underline.ID = string(id)
+	_, err = c.underline.Write(ackBinary)
+	return err
+
+}
+
 var (
 	newline = []byte{'\n'}
 )
@@ -126,6 +161,7 @@ func (c *conn) startReader() {
 			println("DEBUG - ERROR conn.go: " + err.Error())
 			return
 		}
+
 		msg := deserializeMessage(nil, b)
 
 		if atomic.CompareAndSwapUint32(&c.waiting, 1, 0) {
@@ -133,7 +169,7 @@ func (c *conn) startReader() {
 			continue
 		}
 
-		// log.Printf("conn:startReader:msg:\n%#+v\n", msg)
+		fmt.Printf("conn:startReader:msg:\n%#+v\n", msg)
 
 		if msg.isError {
 			if msg.Event == "" { // global error, possible server-side.
@@ -161,7 +197,9 @@ func (c *conn) startReader() {
 			continue
 		}
 
-		if msg.isConnect && !c.IsClient() {
+		if msg.isConnect {
+			// came from server to the client.
+
 			c.mu.RLock()
 			_, alreadyConnected := c.connectedNamespaces[msg.Namespace]
 			c.mu.RUnlock()
@@ -175,8 +213,8 @@ func (c *conn) startReader() {
 				continue
 			}
 
-			conn := newNSConn(c, msg.Namespace, events)
-			err = events.fireEvent(conn, msg)
+			ns := newNSConn(c, msg.Namespace, events)
+			err = events.fireEvent(ns, msg)
 			if err != nil {
 				msg.Err = err
 				msg.Body = nil
@@ -184,11 +222,10 @@ func (c *conn) startReader() {
 				if isCloseError(err) {
 					return // close the connection.
 				}
+				continue
 			}
 
-			c.addNSConn(conn)
-			// send the ID with the same event.
-			msg.Body = []byte(c.ID())
+			c.addNSConn(ns)
 			c.write(msg)
 			continue
 		}
@@ -305,6 +342,14 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 var ErrWrite = fmt.Errorf("write closed")
 
 func (c *conn) Connect(namespace string) (NSConn, error) {
+	c.mu.RLock()
+	ns, alreadyConnected := c.connectedNamespaces[namespace]
+	c.mu.RUnlock()
+	if alreadyConnected {
+		println("already connected to " + namespace)
+		return ns, nil
+	}
+
 	events, ok := c.namespaces[namespace]
 	if !ok {
 		return nil, ErrBadNamespace
@@ -324,11 +369,9 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 		if msg.isError {
 			return nil, msg.Err
 		}
-
-		c.underline.ID = string(msg.Body)
 	}
 
-	ns := newNSConn(c, namespace, events)
+	ns = newNSConn(c, namespace, events)
 	c.addNSConn(ns)
 
 	err := events.fireEvent(ns, Message{

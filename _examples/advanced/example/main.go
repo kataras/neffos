@@ -98,6 +98,7 @@ func server() {
 
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
+		//	c.Connect(namespace) // auto-connect to a specific namespace.
 		return nil
 	}
 	srv.OnDisconnect = func(c ws.Conn) {

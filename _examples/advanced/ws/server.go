@@ -170,9 +170,6 @@ func (s *Server) onConnected(conn *fastws.Conn) error {
 
 	c := newConn(conn, s.namespaces)
 	c.server = s
-
-	//	nsConn := c.getNSConnection(namespace)
-
 	if s.OnError != nil {
 		conn.OnError = func(err error) bool {
 			if fastws.IsDisconnected(err) {
@@ -182,6 +179,11 @@ func (s *Server) onConnected(conn *fastws.Conn) error {
 			return s.OnError(c, err)
 		}
 	}
+
+	if err := c.ack(); err != nil {
+		return err
+	}
+	//	nsConn := c.getNSConnection(namespace)
 
 	s.connect <- c
 	go c.startWriter()
