@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/kataras/fastws/_examples/advanced/ws"
 )
@@ -98,7 +99,7 @@ func server() {
 
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
-		//	c.Connect(namespace) // auto-connect to a specific namespace.
+		c.Connect(namespace) // auto-connect to a specific namespace.
 		return nil
 	}
 	srv.OnDisconnect = func(c ws.Conn) {
@@ -149,6 +150,7 @@ func client() {
 	}
 	// defer client.Close()
 
+	time.Sleep(300 * time.Millisecond)
 	c, err := client.Connect(namespace)
 	if err != nil {
 		panic(err)

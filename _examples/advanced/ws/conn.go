@@ -81,13 +81,16 @@ func (c *conn) ack() error {
 		if err != nil {
 			return err
 		}
+		// println("server: wrote")
 
 		b, err := c.underline.ReadBinary()
+		// println("server: read")
 		if err != nil {
 			return err
 		}
 
 		if bytes.Equal(b, ackBinary) {
+			// println("server: ack got")
 			return nil
 		}
 		return CloseError{Code: -1}
@@ -98,11 +101,44 @@ func (c *conn) ack() error {
 	if err != nil {
 		return err
 	}
+	// println("client: read")
 
 	c.underline.ID = string(id)
 	_, err = c.underline.Write(ackBinary)
+	// println("client: write")
 	return err
 
+	// opposite:
+	// if c.IsClient() {
+	// 	// server-side, first action is to send the id and then wait for confirmation.
+	// 	_, err := c.underline.Write(ackBinary)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	// println("server: wrote")
+
+	// 	id, err := c.underline.ReadBinary()
+	// 	// println("server: read")
+	// 	if err != nil {
+	// 		return err
+	// 	}
+
+	// 	c.underline.ID = string(id)
+	// 	return nil
+	// }
+
+	// // client-side, first action is to wait for the id and then send the confirmation.
+	// b, err := c.underline.ReadBinary()
+	// if err != nil {
+	// 	return err
+	// }
+
+	// if bytes.Equal(b, ackBinary) {
+	// 	_, err = c.underline.Write([]byte(c.ID()))
+	// 	return err
+	// }
+
+	// return CloseError{Code: -1}
 }
 
 var (
@@ -163,13 +199,12 @@ func (c *conn) startReader() {
 		}
 
 		msg := deserializeMessage(nil, b)
+		// fmt.Printf("=============\n%#+v\n=============\n", msg)
 
 		if atomic.CompareAndSwapUint32(&c.waiting, 1, 0) {
 			c.waitingMessage <- msg
 			continue
 		}
-
-		fmt.Printf("conn:startReader:msg:\n%#+v\n", msg)
 
 		if msg.isError {
 			if msg.Event == "" { // global error, possible server-side.
@@ -205,6 +240,7 @@ func (c *conn) startReader() {
 			c.mu.RUnlock()
 
 			if alreadyConnected {
+				c.write(msg) // send the message back and continue, the client or server expects an answer.
 				continue
 			}
 
@@ -346,7 +382,6 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
 	if alreadyConnected {
-		println("already connected to " + namespace)
 		return ns, nil
 	}
 
