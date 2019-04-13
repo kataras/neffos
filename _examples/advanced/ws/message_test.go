@@ -61,12 +61,12 @@ func TestMessageSerialization(t *testing.T) {
 		},
 		{ // 6
 			msg: Message{
-				Namespace: "default",
+				Namespace: "",
 				Event:     "chat",
 				Err:       fmt.Errorf("an error message with many ; delimeters; like that;"),
 				isError:   true,
 			},
-			serialized: []byte("default;chat;1;0;0;an error message with many ; delimeters; like that;"),
+			serialized: []byte(";chat;1;0;0;an error message with many ; delimeters; like that;"),
 		},
 	}
 

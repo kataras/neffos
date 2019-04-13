@@ -115,13 +115,14 @@ func deserializeInput(b []byte) (
 		return
 	}
 
-	if namespaceB := dts[0]; len(namespaceB) == 0 {
-		isInvalid = true
-		return
-	} else {
-		namespace = string(namespaceB)
-	}
-
+	// namespace can be empty.
+	// if namespaceB := dts[0]; len(namespaceB) == 0 {
+	// 	isInvalid = true
+	// 	return
+	// } else {
+	// 	namespace = string(namespaceB)
+	// }
+	namespace = string(dts[0])
 	event = string(dts[1])
 	isError := bytes.Equal(dts[2], trueByte)
 	isConnect = bytes.Equal(dts[3], trueByte)

@@ -13,6 +13,7 @@ type Conn interface {
 	UnderlyingConn() *fastws.Conn
 	ID() string
 	Write(namespace string, event string, body []byte) bool
+	WriteWithCallback(namespace, event string, body []byte, callback func(msg Message) error) error
 	Close()
 	String() string
 	Connect(namespace string) (NSConn, error)
@@ -26,6 +27,7 @@ type Conn interface {
 type NSConn interface {
 	Conn
 	Emit(event string, body []byte) bool
+	EmitWithCallback(event string, body []byte, callback func(msg Message) error) error
 	Disconnect() error
 }
 
@@ -194,7 +196,7 @@ func (c *conn) startReader() {
 	for {
 		b, err := c.underline.ReadBinary()
 		if err != nil {
-			println("DEBUG - ERROR conn.go: " + err.Error())
+			// println("DEBUG - ERROR conn.go: " + err.Error())
 			return
 		}
 
@@ -462,6 +464,27 @@ func (c *conn) Write(namespace, event string, body []byte) bool {
 		Event:     event,
 		Body:      body,
 	})
+}
+
+func (c *conn) WriteWithCallback(namespace, event string, body []byte, callback func(msg Message) error) error {
+	if callback == nil {
+		ok := c.Write(namespace, event, body)
+		if !ok {
+			return ErrWrite
+		}
+	}
+
+	response, ok := c.ask(Message{
+		Namespace: namespace,
+		Event:     event,
+		Body:      body,
+	})
+
+	if !ok {
+		return ErrWrite
+	}
+
+	return callback(response)
 }
 
 func (c *conn) write(msg Message) bool {
