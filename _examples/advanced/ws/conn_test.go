@@ -40,7 +40,32 @@ func TestEmitWithCallback(t *testing.T) {
 	}
 	defer c.Close()
 
+	for i := 0; i < 5; i++ {
+		go c.EmitWithCallback(pingEvent, nil, func(msg Message) error {
+			if msg.wait == 0 {
+				t.Fatalf("msg.wait should be greater than zero but got %v", msg.wait)
+			}
+
+			if msg.Namespace != namespace {
+				t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
+			}
+
+			if msg.Event != pingEvent {
+				t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
+			}
+
+			if !bytes.Equal(msg.Body, pongMessage) {
+				t.Fatalf("from callback: expected %s but got %s", string(pongMessage), string(msg.Body))
+			}
+			return nil
+		})
+	}
+
 	c.EmitWithCallback(pingEvent, nil, func(msg Message) error {
+		if msg.wait != 1 {
+			t.Fatalf("msg.wait should is always be one after all received but got %v", msg.wait)
+		}
+
 		if msg.Namespace != namespace {
 			t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
 		}

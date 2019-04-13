@@ -29,7 +29,7 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	// It can be modified on the `OnUpgrade` event to send custom headers on HTTP upgrade.
 	Header http.Header
 
-	// After connected succesfuly.
+	// After connected successfully.
 
 	// NetConn is available at the `OnConnected` state for server-side and
 	// after `Dial` for client-side.

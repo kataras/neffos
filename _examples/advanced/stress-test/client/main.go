@@ -171,8 +171,10 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		// return err
 	}
 
-	c := client.Connect("")
-
+	c, err := client.Connect("")
+	if err != nil {
+		panic(err)
+	}
 	// c.HandleFunc("chat", func(c ws.Conn, message []byte) error {
 	// 	if verbose {
 	// 		log.Println(string(message))

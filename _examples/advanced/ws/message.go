@@ -3,24 +3,25 @@ package ws
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"sync/atomic"
 )
 
 var counter = new(uint64)
 
-func incrementCounter() {
-	atomic.AddUint64(counter, 1)
+func incrementCounter() uint64 {
+	return atomic.AddUint64(counter, 1)
 }
 
-func decrementCounter() {
-	atomic.AddUint64(counter, ^uint64(0))
+func decrementCounter() uint64 {
+	return atomic.AddUint64(counter, ^uint64(0))
 }
 
 func resetCounter() {
 	atomic.StoreUint64(counter, 0)
 }
 
-type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<body||error_message>
+type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<body||error_message>
 	Namespace string
 	Event     string
 	Body      []byte
@@ -36,6 +37,8 @@ type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<is
 	isInvalid bool
 
 	from string // the CONN ID, filled automatically.
+
+	wait uint64
 }
 
 type (
@@ -51,7 +54,7 @@ var (
 )
 
 func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
-	out = serializeOutput(msg.Namespace, msg.Event, msg.Body, msg.Err, msg.isConnect, msg.isDisconnect)
+	out = serializeOutput(msg.wait, msg.Namespace, msg.Event, msg.Body, msg.Err, msg.isConnect, msg.isDisconnect)
 
 	if encrypt != nil {
 		out = encrypt(out)
@@ -61,7 +64,7 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 }
 
 // <namespace>;<event>;<body>
-func serializeOutput(namespace string,
+func serializeOutput(wait uint64, namespace string,
 	event string,
 	body []byte,
 	err error,
@@ -72,6 +75,7 @@ func serializeOutput(namespace string,
 		isErrorByte      = falseByte
 		isConnectByte    = falseByte
 		isDisconnectByte = falseByte
+		waitByte         = falseByte
 	)
 
 	if err != nil {
@@ -91,7 +95,15 @@ func serializeOutput(namespace string,
 		isDisconnectByte = trueByte
 	}
 
+	if wait > 0 {
+		// buf := make([]byte, binary.MaxVarintLen64)
+		// n := binary.PutUvarint(buf, wait)
+		// waitByte = buf[:n]
+		waitByte = []byte(strconv.FormatUint(wait, 10))
+	}
+
 	return bytes.Join([][]byte{
+		waitByte,
 		[]byte(namespace),
 		[]byte(event),
 		isErrorByte,
@@ -106,7 +118,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		b = decrypt(b)
 	}
 
-	namespace, event, body, err, isConnect, isDisconnect, isInvalid := deserializeInput(b)
+	namespace, event, body, err, isConnect, isDisconnect, isInvalid, wait := deserializeInput(b)
 	return Message{
 		namespace,
 		event,
@@ -117,6 +129,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		isDisconnect,
 		isInvalid,
 		"",
+		wait,
 	}
 }
 
@@ -128,10 +141,11 @@ func deserializeInput(b []byte) (
 	isConnect bool,
 	isDisconnect bool,
 	isInvalid bool,
+	wait uint64,
 ) {
 
-	dts := bytes.SplitN(b, messageSeparator, 6)
-	if len(dts) != 6 {
+	dts := bytes.SplitN(b, messageSeparator, 7)
+	if len(dts) != 7 {
 		isInvalid = true
 		return
 	}
@@ -143,12 +157,21 @@ func deserializeInput(b []byte) (
 	// } else {
 	// 	namespace = string(namespaceB)
 	// }
-	namespace = string(dts[0])
-	event = string(dts[1])
-	isError := bytes.Equal(dts[2], trueByte)
-	isConnect = bytes.Equal(dts[3], trueByte)
-	isDisconnect = bytes.Equal(dts[4], trueByte)
-	if b := dts[5]; len(b) > 0 {
+
+	// wait, _ = binary.Uvarint(dts[0])
+	// wait = binary.LittleEndian.Uint64(dts[0])
+
+	if !bytes.Equal(dts[0], falseByte) {
+		// if not zero then try to convert it.
+		wait, _ = strconv.ParseUint(string(dts[0]), 10, 64)
+	}
+
+	namespace = string(dts[1])
+	event = string(dts[2])
+	isError := bytes.Equal(dts[3], trueByte)
+	isConnect = bytes.Equal(dts[4], trueByte)
+	isDisconnect = bytes.Equal(dts[5], trueByte)
+	if b := dts[6]; len(b) > 0 {
 		if isError {
 			err = errors.New(string(b))
 		} else {

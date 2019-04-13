@@ -42,8 +42,7 @@ type conn struct {
 	out     chan []byte
 	once    uint32
 
-	waitingMessage chan Message
-	waiting        uint32
+	waitingMessages map[uint64]chan Message
 
 	server *Server
 }
@@ -55,7 +54,7 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		connectedNamespaces: make(map[string]*nsConn),
 		closeCh:             make(chan struct{}),
 		out:                 make(chan []byte, 256),
-		waitingMessage:      make(chan Message),
+		waitingMessages:     make(map[uint64]chan Message),
 	}
 
 	return c
@@ -201,11 +200,13 @@ func (c *conn) startReader() {
 		}
 
 		msg := deserializeMessage(nil, b)
-		// fmt.Printf("=============\n%#+v\n=============\n", msg)
+		//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
 
-		if atomic.CompareAndSwapUint32(&c.waiting, 1, 0) {
-			c.waitingMessage <- msg
-			continue
+		if msg.wait > 0 {
+			if ch, ok := c.waitingMessages[msg.wait]; ok {
+				ch <- msg
+				continue
+			}
 		}
 
 		if msg.isError {
@@ -325,15 +326,18 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 }
 
 func (c *conn) ask(msg Message) (Message, bool) {
-	if !atomic.CompareAndSwapUint32(&c.waiting, 0, 1) {
-		return Message{}, false // only one message can be waited, i.e user can't execute thins like Disconnect in a different go routine.
-	}
-
+	msg.wait = incrementCounter()
+	// msg.wait = uint64(time.Now().Unix())
 	if !c.write(msg) {
 		return Message{}, false
 	}
 
-	msg, ok := <-c.waitingMessage
+	ch := make(chan Message)
+	c.waitingMessages[msg.wait] = ch
+	msg, ok := <-ch
+	delete(c.waitingMessages, msg.wait)
+	// msg.wait = decrementCounter()
+	decrementCounter()
 	return msg, ok
 }
 
