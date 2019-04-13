@@ -16,6 +16,27 @@ var DefaultNSAcceptor = func(r *http.Request, namespace string) bool {
 
 type MessageHandlerFunc func(NSConn, Message) error
 
+type reply struct {
+	Body []byte
+}
+
+func (r reply) Error() string {
+	return ""
+}
+
+func isReply(err error) ([]byte, bool) {
+	if err != nil {
+		if r, ok := err.(reply); ok {
+			return r.Body, true
+		}
+	}
+	return nil, false
+}
+
+func Reply(body []byte) error {
+	return reply{body}
+}
+
 // func (h MessageHandlerFunc) HandleMessage(c Conn, msg Message) error {
 // 	return h(c, msg)
 // }

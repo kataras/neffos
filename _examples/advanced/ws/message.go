@@ -3,7 +3,22 @@ package ws
 import (
 	"bytes"
 	"errors"
+	"sync/atomic"
 )
+
+var counter = new(uint64)
+
+func incrementCounter() {
+	atomic.AddUint64(counter, 1)
+}
+
+func decrementCounter() {
+	atomic.AddUint64(counter, ^uint64(0))
+}
+
+func resetCounter() {
+	atomic.StoreUint64(counter, 0)
+}
 
 type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<body||error_message>
 	Namespace string
@@ -17,7 +32,8 @@ type Message struct { // <namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<is
 
 	isConnect    bool
 	isDisconnect bool
-	isInvalid    bool
+
+	isInvalid bool
 
 	from string // the CONN ID, filled automatically.
 }
@@ -40,6 +56,7 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 	if encrypt != nil {
 		out = encrypt(out)
 	}
+
 	return out
 }
 
@@ -58,8 +75,12 @@ func serializeOutput(namespace string,
 	)
 
 	if err != nil {
-		body = []byte(err.Error())
-		isErrorByte = trueByte
+		if b, ok := isReply(err); ok {
+			body = b
+		} else {
+			body = []byte(err.Error())
+			isErrorByte = trueByte
+		}
 	}
 
 	if isConnect {

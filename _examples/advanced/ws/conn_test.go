@@ -10,14 +10,14 @@ import (
 func TestEmitWithCallback(t *testing.T) {
 	var (
 		namespace   = "default"
-		pongEvent   = "pong"
+		pingEvent   = "ping"
 		pongMessage = []byte("PONG MESSAGE")
 	)
 
 	server := New(Namespaces{namespace: Events{
-		"ping": func(c NSConn, msg Message) error {
-			c.Emit(pongEvent, pongMessage)
-			return nil
+		pingEvent: func(c NSConn, msg Message) error {
+			// c.Emit("event", pongMessage)
+			return Reply(pongMessage) // changes only body; ns,event remains.
 		}}})
 	defer server.Close()
 
@@ -40,13 +40,13 @@ func TestEmitWithCallback(t *testing.T) {
 	}
 	defer c.Close()
 
-	c.EmitWithCallback("ping", nil, func(msg Message) error {
+	c.EmitWithCallback(pingEvent, nil, func(msg Message) error {
 		if msg.Namespace != namespace {
 			t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
 		}
 
-		if msg.Event != pongEvent {
-			t.Fatalf("expected event to be %s but got %s instead", pongEvent, msg.Event)
+		if msg.Event != pingEvent {
+			t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
 		}
 
 		if !bytes.Equal(msg.Body, pongMessage) {
