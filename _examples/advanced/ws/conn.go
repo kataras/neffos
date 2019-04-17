@@ -2,6 +2,7 @@ package ws
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -261,12 +262,16 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 }
 
 func (c *conn) ask(msg Message) (Message, bool) {
+	if c.isClosed() {
+		return msg, false
+	}
+
 	var d uint64 = 1
 	if c.IsClient() {
 		d = 2
 	}
 	waitID := d * uint64(time.Now().Unix())
-	fmt.Printf("create a token with wait: %d\n", waitID)
+	fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
 	msg.wait = waitID
 	if !c.write(msg) {
 		return Message{}, false
@@ -325,6 +330,49 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 } // TODO: "exit" does not work.
 
 var ErrWrite = fmt.Errorf("write closed")
+
+func (c *conn) Connect3(ctx context.Context, namespace string) (NSConn, error) {
+
+	if ctx != nil {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			timer := time.NewTicker(100 * time.Millisecond)
+			defer timer.Stop()
+
+			for {
+				select {
+				case <-timer.C:
+					println("sleep")
+				case <-ctx.Done():
+					println("done")
+					return nil, context.DeadlineExceeded
+				default:
+					//	println("searching")
+					c.mu.RLock()
+					ns, ok := c.connectedNamespaces[namespace]
+					c.mu.RUnlock()
+					if ok {
+						return ns, nil
+					}
+				}
+			}
+		}
+	}
+
+	println("ask connect")
+	return c.Connect(namespace)
+}
+
+func (c *conn) WaitConnect(namespace string) NSConn {
+	for {
+		c.mu.RLock()
+		ns, ok := c.connectedNamespaces[namespace]
+		c.mu.RUnlock()
+		if ok {
+			return ns
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 func (c *conn) Connect(namespace string) (NSConn, error) {
 	c.mu.RLock()
@@ -449,6 +497,10 @@ func (c *conn) Close() {
 		for _, ns := range c.connectedNamespaces {
 			disconnectMsg.Namespace = ns.namespace
 			ns.events.fireOnNamespaceDisconnect(ns, disconnectMsg)
+		}
+
+		for wait := range c.waitingMessages {
+			delete(c.waitingMessages, wait)
 		}
 
 		go func() {

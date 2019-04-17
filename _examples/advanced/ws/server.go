@@ -88,6 +88,15 @@ func (s *Server) start() {
 				if c.ID() == msg.from {
 					continue
 				}
+
+				// if msg.Namespace == "" {
+				// 	for _, ns := range c.connectedNamespaces {
+				// 		msg.Namespace = ns.namespace
+				// 		ns.write(msg)
+				// 	}
+				// 	continue
+				// }
+
 				c.write(msg)
 			}
 		}

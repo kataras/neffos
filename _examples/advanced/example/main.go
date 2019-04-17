@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -106,9 +107,9 @@ func server() {
 
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
+		// time.Sleep(3 * time.Second)
 		c.Connect(namespace) // auto-connect to a specific namespace.
 		c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
-
 		// println("client connected")
 		return nil
 	}
@@ -164,7 +165,11 @@ func client() {
 	//	time.Sleep(6 * time.Second)
 
 	// time.Sleep(1 * time.Second)
-	c, err := client.Connect(namespace)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	// not empty context if we want to wait from server-side to force-connect this connection to that namespace,
+	// otherwise just pass nil as its first argument.
+	c, err := client.Connect(ctx, namespace)
 	if err != nil {
 		panic(err)
 	}

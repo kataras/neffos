@@ -14,12 +14,15 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
-func (c *Client) Connect(namespace string) (NSConn, error) {
-	return c.conn.Connect(namespace)
-}
+// func (c *Client) Connect(namespace string, waitFromServer bool) (NSConn, error) {
+// 	if waitFromServer {
+// 		return c.conn.WaitConnect(namespace), nil
+// 	}
+// 	return c.conn.Connect(namespace)
+// }
 
-func (c *Client) Connect2(namespace string) (NSConn, error) {
-	return c.conn.getNSConn(namespace)
+func (c *Client) Connect(ctx context.Context, namespace string) (NSConn, error) {
+	return c.conn.Connect3(ctx, namespace)
 }
 
 func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
