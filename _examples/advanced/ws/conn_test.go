@@ -40,43 +40,39 @@ func TestEmitWithCallback(t *testing.T) {
 	}
 	defer c.Close()
 
-	for i := 0; i < 5; i++ {
-		go c.EmitWithCallback(pingEvent, nil, func(msg Message) error {
-			if msg.wait == 0 {
-				t.Fatalf("msg.wait should be greater than zero but got %v", msg.wait)
-			}
-
-			if msg.Namespace != namespace {
-				t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
-			}
-
-			if msg.Event != pingEvent {
-				t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
-			}
-
-			if !bytes.Equal(msg.Body, pongMessage) {
-				t.Fatalf("from callback: expected %s but got %s", string(pongMessage), string(msg.Body))
-			}
-			return nil
-		})
-	}
-
-	c.EmitWithCallback(pingEvent, nil, func(msg Message) error {
-		if msg.wait != 1 {
-			t.Fatalf("msg.wait should is always be one after all received but got %v", msg.wait)
+	for i := 1; i <= 5; i++ {
+		msg := c.Ask(pingEvent, nil)
+		if msg.wait != uint64(i) {
+			t.Fatalf("[%d] msg.wait should be %d but got %d", i, i, msg.wait)
 		}
 
 		if msg.Namespace != namespace {
-			t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
+			t.Fatalf("[%d] expected namespace to be %s but got %s instead", i, namespace, msg.Namespace)
 		}
 
 		if msg.Event != pingEvent {
-			t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
+			t.Fatalf("[%d] expected event to be %s but got %s instead", i, pingEvent, msg.Event)
 		}
 
 		if !bytes.Equal(msg.Body, pongMessage) {
-			t.Fatalf("from callback: expected %s but got %s", string(pongMessage), string(msg.Body))
+			t.Fatalf("[%d] from callback: expected %s but got %s", i, string(pongMessage), string(msg.Body))
 		}
-		return nil
-	})
+	}
+
+	msg := c.Ask(pingEvent, nil)
+	if msg.wait != 1 {
+		t.Fatalf("msg.wait should is always be one after all received but got %d", msg.wait)
+	}
+
+	if msg.Namespace != namespace {
+		t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
+	}
+
+	if msg.Event != pingEvent {
+		t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
+	}
+
+	if !bytes.Equal(msg.Body, pongMessage) {
+		t.Fatalf("from callback: expected %s but got %s", string(pongMessage), string(msg.Body))
+	}
 }

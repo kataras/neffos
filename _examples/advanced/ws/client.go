@@ -18,6 +18,10 @@ func (c *Client) Connect(namespace string) (NSConn, error) {
 	return c.conn.Connect(namespace)
 }
 
+func (c *Client) Connect2(namespace string) (NSConn, error) {
+	return c.conn.getNSConn(namespace)
+}
+
 func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
 	underline, err := fastws.Dial(ctx, url)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/kataras/fastws"
 )
@@ -13,7 +14,7 @@ type Conn interface {
 	UnderlyingConn() *fastws.Conn
 	ID() string
 	Write(namespace string, event string, body []byte) bool
-	WriteWithCallback(namespace, event string, body []byte, callback func(msg Message) error) error
+	WriteAndWait(namespace, event string, body []byte) Message
 	Close()
 	String() string
 	Connect(namespace string) (NSConn, error)
@@ -27,7 +28,7 @@ type Conn interface {
 type NSConn interface {
 	Conn
 	Emit(event string, body []byte) bool
-	EmitWithCallback(event string, body []byte, callback func(msg Message) error) error
+	Ask(event string, body []byte) Message
 	Disconnect() error
 }
 
@@ -40,11 +41,10 @@ type conn struct {
 
 	closeCh chan struct{}
 	out     chan []byte
-	once    uint32
+	once    *uint32
 
 	waitingMessages map[uint64]chan Message
-
-	server *Server
+	server          *Server
 }
 
 func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
@@ -54,6 +54,7 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		connectedNamespaces: make(map[string]*nsConn),
 		closeCh:             make(chan struct{}),
 		out:                 make(chan []byte, 256),
+		once:                new(uint32),
 		waitingMessages:     make(map[uint64]chan Message),
 	}
 
@@ -192,6 +193,7 @@ func isCloseError(err error) bool {
 func (c *conn) startReader() {
 	defer c.Close()
 
+readLoop:
 	for {
 		b, err := c.underline.ReadBinary()
 		if err != nil {
@@ -204,95 +206,28 @@ func (c *conn) startReader() {
 
 		if msg.wait > 0 {
 			if ch, ok := c.waitingMessages[msg.wait]; ok {
+				// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
 				ch <- msg
 				continue
 			}
 		}
 
-		if msg.isError {
-			if msg.Event == "" { // global error, possible server-side.
-				c.underline.HandleError(msg.Err)
-				continue
-			}
-
-			c.mu.RLock()
-			ns, ok := c.connectedNamespaces[msg.Namespace]
-			c.mu.RUnlock()
-			if !ok {
-				continue
-			}
-
-			err := ns.events.fireEvent(ns, msg)
+		for _, h := range messageHandlers {
+			handled, err := h(c, msg)
 			if err != nil {
-				msg.Err = err
-				c.write(msg)
-				if isCloseError(err) {
-					return // close the connection.
-				}
-				continue
-			}
-
-			continue
-		}
-
-		if msg.isConnect {
-			// came from server to the client.
-
-			c.mu.RLock()
-			_, alreadyConnected := c.connectedNamespaces[msg.Namespace]
-			c.mu.RUnlock()
-
-			if alreadyConnected {
-				c.write(msg) // send the message back and continue, the client or server expects an answer.
-				continue
-			}
-
-			events, ok := c.namespaces[msg.Namespace]
-			if !ok {
-				continue
-			}
-
-			ns := newNSConn(c, msg.Namespace, events)
-			err = events.fireEvent(ns, msg)
-			if err != nil {
-				msg.Err = err
 				msg.Body = nil
+				msg.Err = err
 				c.write(msg)
 				if isCloseError(err) {
 					return // close the connection.
 				}
-				continue
+				continue readLoop
 			}
 
-			c.addNSConn(ns)
-			c.write(msg)
-			continue
-		}
-
-		c.mu.RLock()
-		nsConn, ok := c.connectedNamespaces[msg.Namespace]
-		c.mu.RUnlock()
-		if !ok {
-			// see client.go#Connect for the client-side.
-			continue
-		}
-
-		err = nsConn.events.fireEvent(nsConn, msg)
-		if err != nil {
-			msg.Err = err
-			msg.Body = nil
-			c.write(msg)
-			if isCloseError(err) {
-				return // close the connection.
+			if handled {
+				break
 			}
-		} else if msg.isDisconnect {
-			if !c.IsClient() {
-				// send back the disconnect message without error.
-				c.write(msg)
-			}
-			c.deleteNSConn(msg.Namespace, true)
 		}
-
 	}
 }
 
@@ -326,8 +261,13 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 }
 
 func (c *conn) ask(msg Message) (Message, bool) {
-	msg.wait = incrementCounter()
-	// msg.wait = uint64(time.Now().Unix())
+	var d uint64 = 1
+	if c.IsClient() {
+		d = 2
+	}
+	waitID := d * uint64(time.Now().Unix())
+	fmt.Printf("create a token with wait: %d\n", waitID)
+	msg.wait = waitID
 	if !c.write(msg) {
 		return Message{}, false
 	}
@@ -336,18 +276,18 @@ func (c *conn) ask(msg Message) (Message, bool) {
 	c.waitingMessages[msg.wait] = ch
 	msg, ok := <-ch
 	delete(c.waitingMessages, msg.wait)
-	// msg.wait = decrementCounter()
-	decrementCounter()
+	fmt.Printf("got waiting message: %d\n", msg.wait)
+
 	return msg, ok
 }
 
 // DisconnectFrom gracefully disconnects from a namespace.
 func (c *conn) DisconnectFrom(namespace string) error {
 	c.mu.RLock()
-	ns := c.connectedNamespaces[namespace]
+	ns, ok := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
 
-	if ns == nil {
+	if !ok {
 		return ErrBadNamespace
 	}
 
@@ -362,13 +302,16 @@ func (c *conn) DisconnectFrom(namespace string) error {
 
 func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 	if c.IsClient() {
+		// println("client: before ask")
 		msg, ok := c.ask(disconnectMsg)
+		// println("client: after ask")
 		if !ok {
 			return ErrWrite
 		}
 
 		if !msg.isError {
 			// if all ok, remove it.
+			// println("client: remove-disconnect namespace: " + disconnectMsg.Namespace)
 			c.deleteNSConn(disconnectMsg.Namespace, lock)
 		}
 
@@ -379,7 +322,7 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 
 	c.write(disconnectMsg) // we don't care about client to respond, server can force disconnect action of a connection from a namespace.
 	return nil
-}
+} // TODO: "exit" does not work.
 
 var ErrWrite = fmt.Errorf("write closed")
 
@@ -388,6 +331,71 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
 	if alreadyConnected {
+		// println(namespace + " already connected")
+		return ns, nil
+	}
+
+	events, ok := c.namespaces[namespace]
+	if !ok {
+		return nil, ErrBadNamespace
+	}
+
+	// println("sending connect...")
+	msg, ok := c.ask(Message{
+		Namespace: namespace,
+		Event:     OnNamespaceConnect,
+		isConnect: true,
+	})
+
+	// println("connect response received...")
+	if !ok {
+		return nil, ErrWrite
+	}
+
+	if msg.isError {
+		if msg.Err.Error() == ErrBadNamespace.Error() {
+			return nil, ErrBadNamespace
+		}
+		return nil, msg.Err
+	}
+
+	c.mu.RLock()
+	ns, alreadyConnected = c.connectedNamespaces[namespace]
+	c.mu.RUnlock()
+	if alreadyConnected {
+		// println(namespace + " already connected [2]")
+		return ns, nil
+	}
+
+	ns = newNSConn(c, namespace, events)
+
+	connectMessage := Message{
+		Namespace: namespace,
+		Event:     OnNamespaceConnect,
+		isConnect: true,
+	}
+
+	err := events.fireEvent(ns, connectMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	c.addNSConn(ns)
+
+	connectMessage.Event = OnNamespaceConnected
+	events.fireEvent(ns, connectMessage)
+	// if !c.IsClient() && !msg.isNoOp {
+	// 	c.write(connectMessage)
+	// }
+
+	return ns, err
+}
+
+func (c *conn) getNSConn(namespace string) (NSConn, error) {
+	c.mu.RLock()
+	ns, ok := c.connectedNamespaces[namespace]
+	c.mu.RUnlock()
+	if ok {
 		return ns, nil
 	}
 
@@ -402,25 +410,21 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 			Event:     OnNamespaceConnect,
 			isConnect: true,
 		})
-
 		if !ok {
 			return nil, ErrWrite
 		}
 
 		if msg.isError {
-			return nil, msg.Err
+			if msg.Err.Error() == ErrBadNamespace.Error() {
+				return nil, ErrBadNamespace
+			}
 		}
+
+		ns = newNSConn(c, namespace, events)
+		c.addNSConn(ns)
 	}
 
-	ns = newNSConn(c, namespace, events)
-	c.addNSConn(ns)
-
-	err := events.fireEvent(ns, Message{
-		Namespace: namespace,
-		Event:     OnNamespaceConnect,
-		isConnect: true,
-	})
-	return ns, err
+	return ns, nil
 }
 
 // DisconnectFromAll gracefully disconnects from all namespaces.
@@ -435,11 +439,11 @@ func (c *conn) DisconnectFromAll() {
 }
 
 func (c *conn) isClosed() bool {
-	return atomic.LoadUint32(&c.once) > 0
+	return atomic.LoadUint32(c.once) > 0
 }
 
 func (c *conn) Close() {
-	if atomic.CompareAndSwapUint32(&c.once, 0, 1) {
+	if atomic.CompareAndSwapUint32(c.once, 0, 1) {
 		// fire the namespaces' disconnect event for both server and client.
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
 		for _, ns := range c.connectedNamespaces {
@@ -470,14 +474,7 @@ func (c *conn) Write(namespace, event string, body []byte) bool {
 	})
 }
 
-func (c *conn) WriteWithCallback(namespace, event string, body []byte, callback func(msg Message) error) error {
-	if callback == nil {
-		ok := c.Write(namespace, event, body)
-		if !ok {
-			return ErrWrite
-		}
-	}
-
+func (c *conn) WriteAndWait(namespace, event string, body []byte) Message {
 	response, ok := c.ask(Message{
 		Namespace: namespace,
 		Event:     event,
@@ -485,13 +482,26 @@ func (c *conn) WriteWithCallback(namespace, event string, body []byte, callback 
 	})
 
 	if !ok {
-		return ErrWrite
+		return Message{Err: ErrWrite, isError: true}
 	}
 
-	return callback(response)
+	return response
 }
 
+// func (c *conn) WriteWithCallback(namespace, event string, body []byte, callback func(msg Message) error) error {
+// 	response := c.WriteAndWait(namespace, event, body)
+// 	if callback == nil {
+// 		// callback can be nil when caller does not care about the reply
+// 		// and wants to know if the "remote command" was successfully ran.
+// 		return response.Err
+// 	}
+
+// 	return callback(response)
+// }
+
 func (c *conn) write(msg Message) bool {
+	msg.from = c.ID()
+
 	if !msg.isConnect && !msg.isDisconnect {
 		c.mu.RLock()
 		_, ok := c.connectedNamespaces[msg.Namespace]

@@ -27,11 +27,18 @@ var handler = ws.Namespaces{
 			no allow to for this socket to be connected to the "default" namespace
 			and an error will be logged to the client. */
 			err = nil
-			if err == nil {
-				log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
-			}
 
 			return err
+		},
+		ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
+			if !c.IsClient() {
+				println("from server: ")
+				c.Emit("chat", []byte("welcome to server's namespace"))
+			}
+
+			log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
+
+			return nil
 		},
 		ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
 			if msg.Err != nil {
@@ -100,6 +107,9 @@ func server() {
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		c.Connect(namespace) // auto-connect to a specific namespace.
+		c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
+
+		// println("client connected")
 		return nil
 	}
 	srv.OnDisconnect = func(c ws.Conn) {
@@ -148,13 +158,17 @@ func client() {
 	if err != nil {
 		panic(err)
 	}
-	// defer client.Close()
 
-	time.Sleep(300 * time.Millisecond)
+	defer client.Close()
+	_ = time.Now()
+	//	time.Sleep(6 * time.Second)
+
+	// time.Sleep(1 * time.Second)
 	c, err := client.Connect(namespace)
 	if err != nil {
 		panic(err)
 	}
+	// println("connected.")
 
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)

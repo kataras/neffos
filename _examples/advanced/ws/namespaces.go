@@ -10,8 +10,11 @@ var (
 )
 
 var (
-	OnNamespaceConnect    = "_OnNamespaceConnect"
-	OnNamespaceDisconnect = "_OnNamespaceDisconnect"
+	OnNamespaceConnect      = "_OnNamespaceConnect"
+	OnNamespaceConnected    = "_OnNamespaceConnected"
+	OnNamespaceDisconnect   = "_OnNamespaceDisconnect"
+	OnNamespaceDisconnected = "_OnNamespaceDisconnected"
+	NoOpEvent               = "_NoOp"
 )
 
 type Events map[string]MessageHandlerFunc

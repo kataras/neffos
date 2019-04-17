@@ -10,8 +10,8 @@ func (c *nsConn) Emit(event string, body []byte) bool {
 	return c.conn.Write(c.namespace, event, body)
 }
 
-func (c *nsConn) EmitWithCallback(event string, body []byte, callback func(msg Message) error) error {
-	return c.conn.WriteWithCallback(c.namespace, event, body, callback)
+func (c *nsConn) Ask(event string, body []byte) Message {
+	return c.conn.WriteAndWait(c.namespace, event, body)
 }
 
 func (c *nsConn) Disconnect() error {
