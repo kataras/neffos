@@ -2,6 +2,7 @@ package fastws
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -107,6 +108,10 @@ func IsDisconnected(err error) bool {
 func IsClosed(err error) bool {
 	if err == nil {
 		return false
+	}
+
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		return true
 	}
 
 	if netErr, ok := err.(*net.OpError); ok {

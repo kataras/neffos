@@ -22,9 +22,17 @@ var (
 )
 
 const (
-	totalClients = 100000 // max depends on the OS.
-	verbose      = true
+	broadcast = true
+	verbose   = false
 )
+
+var totalClients = 100000 // max depends on the OS.
+
+func init() {
+	if broadcast {
+		totalClients = 7000
+	}
+}
 
 var connectionFailures uint64
 
@@ -65,17 +73,21 @@ func main() {
 	wg.Add(totalClients)
 
 	relaxCPU := 15 * time.Second // this may not be useful if host contains high-end hardware.
+	if broadcast {
+		relaxCPU = 5 * time.Second
+	}
+
 	lastRelaxCPU := time.Now()
 	var alive time.Duration
 	for i := 0; i < totalClients; i++ {
 		if i%2 == 0 {
-			time.Sleep(time.Duration(rand.Int63n(4)) * time.Millisecond)
+			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
 			alive = 2*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else if i%3 == 0 {
 			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
-			alive = 3*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			alive = 5*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else {
-			alive = 4*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			alive = 3*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		}
 
 		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
@@ -159,6 +171,7 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 			if verbose {
 				log.Println(string(msg.Body))
 			}
+
 			return nil
 		},
 	})
@@ -171,9 +184,14 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		// return err
 	}
 
+	// defer client.Close()
+
 	c, err := client.Connect("")
 	if err != nil {
-		panic(err)
+		if verbose {
+			log.Println(err)
+		}
+		return
 	}
 	// c.HandleFunc("chat", func(c ws.Conn, message []byte) error {
 	// 	if verbose {
@@ -190,8 +208,17 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		}
 	}
 
-	// time.Sleep(2 * time.Second)
+	// if !broadcast {
+	// 	time.Sleep(alive)
+	// }
+
 	time.Sleep(alive)
-	c.Close()
+	client.Close()
+
+	// c.Close()
+
+	// time.Sleep(2 * time.Second)
+	// time.Sleep(alive)
+	// c.Close()
 	// time.Sleep(alive)
 }

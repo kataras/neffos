@@ -107,6 +107,11 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	c.Flush = true
 }
 
+// IsClient reports wether this Conn is client side.
+func (c *Conn) IsClient() bool {
+	return c.State == ws.StateClientSide
+}
+
 func (c *Conn) HandleError(err error) bool {
 	if err == nil {
 		return true

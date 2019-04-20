@@ -14,30 +14,43 @@ import (
 )
 
 const (
-	endpoint     = "localhost:8080"
-	totalClients = 100000 // max depends on the OS, read more below.
-	// For example for windows:
-	//
-	// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
-	// $ netsh int ipv4 set dynamicport udp start=10000 num=36000
-	// $ netsh int ipv6 set dynamicport tcp start=10000 num=36000
-	// $ netsh int ipv6 set dynamicport udp start=10000 num=36000
-	//
-	// Optionally but good practice if you want to re-test over and over,
-	// close all apps and execute:
-	//
-	// $ net session /delete
-	//
-	// Note that this test is hardly depends on the host machine,
-	// maybe there is a case where those settings does not apply to your system.
-	verbose = false
-	maxC    = 0
+	endpoint  = "localhost:8080"
+	broadcast = true
+	verbose   = false
+	maxC      = 0
 )
+
+var totalClients uint64 = 20000 // max depends on the OS, read more below.
+// For example for windows:
+//
+// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
+// $ netsh int ipv4 set dynamicport udp start=10000 num=36000
+// $ netsh int ipv6 set dynamicport tcp start=10000 num=36000
+// $ netsh int ipv6 set dynamicport udp start=10000 num=36000
+//
+// Optionally but good practice if you want to re-test over and over,
+// close all apps and execute:
+//
+// $ net session /delete
+//
+// Note that this test is hardly depends on the host machine,
+// maybe there is a case where those settings does not apply to your system.
+
+func init() {
+	if broadcast {
+		totalClients = 7000
+	}
+}
 
 func main() {
 	srv := ws.New(ws.Events{
 		"chat": func(c ws.NSConn, msg ws.Message) error {
-			c.Emit("chat", msg.Body)
+			if broadcast {
+				c.Server().Broadcast(c, msg)
+			} else {
+				c.Emit("chat", msg.Body)
+			}
+
 			return nil
 		},
 	})
@@ -69,7 +82,7 @@ func main() {
 			disconnectedN := atomic.LoadUint64(&totalDisconnected)
 
 			// if verbose {
-			log.Printf("INFO: Current connections[%d] vs WS counter[%d] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
+			log.Printf("INFO: Current connections[%d] vs WS counter[%v] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
 			//	}
 
 			// if n > 0 {
@@ -112,6 +125,11 @@ func main() {
 		started = true
 		atomic.AddUint64(&totalConnected, 1)
 		return nil
+	}
+
+	srv.OnError = func(c ws.Conn, err error) bool {
+		log.Printf("ERROR: [%s] %v\n", c.ID(), err)
+		return true
 	}
 
 	// if c.Err() != nil {

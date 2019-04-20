@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/kataras/fastws"
 )
@@ -35,19 +36,18 @@ func main() {
 
 func server() {
 	ws := fastws.New()
-	// true for continue, false for disconnect if the error came before connected.
-	ws.OnError = func(c *fastws.Conn) bool {
-		err := c.Err()
-		if fastws.IsDisconnected(err) {
-			log.Printf("[%s] remote connection has been manually closed", c.String())
-			return false
+	ws.OnConnected = func(c *fastws.Conn) error {
+		// true for continue, false for disconnect if the error came before connected.
+		c.OnError = func(err error) bool {
+			if fastws.IsDisconnected(err) {
+				log.Printf("[%s] remote connection has been manually closed", c.String())
+				return false
+			}
+
+			log.Printf("[%s] Errorred: %#+v", c.String(), err)
+			return true
 		}
 
-		log.Printf("[%s] Errorred: %#+v", c.String(), err)
-		return true
-	}
-
-	ws.OnConnected = func(c *fastws.Conn) error {
 		go startTermWriter(c)
 		return startReader(c)
 	}
@@ -72,6 +72,8 @@ func client() {
 	}
 }
 
+const idleTimeout = 4 * time.Second
+
 func startReader(c *fastws.Conn) error {
 	// ------------
 	// Reader part.
@@ -79,25 +81,44 @@ func startReader(c *fastws.Conn) error {
 	//
 	// Conn completes both io.Reader and io.Writer.
 
+	// ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// defer cancel()
+
+	in := make(chan []byte, 256)
+
+	go func() {
+		idle := time.NewTimer(idleTimeout)
+		defer idle.Stop()
+		for {
+			select {
+			case <-idle.C:
+				if !c.IsClient() {
+					fmt.Printf("<%s> idle client\n", c.ID)
+					c.NetConn.Close()
+				}
+				return
+			case data := <-in:
+				idle.Reset(idleTimeout)
+				message := string(data)
+
+				if c.ID == "" {
+					c.ID = "server"
+				}
+
+				fmt.Printf("<%s>\t%s\n", c.ID, message)
+			}
+		}
+	}()
+
 	for {
-		message, err := c.ReadText()
+		data, err := c.ReadBinary()
 		if err != nil {
 			return err
 		}
 
-		// // silly example code for "command simulation", seperation of id and text.
-		// received := strings.Split(scanner.Text(), "@")
-		// if len(received) != 2 {
-		// 	return errUnexpectedFormat
-		// }
-		// username, message := received[0], received[1]
-
-		if c.ID == "" {
-			c.ID = "server"
-		}
-
-		fmt.Printf("<%s>\t%s\n", c.ID, message)
+		in <- data
 	}
+
 }
 
 func startTermWriter(c *fastws.Conn) error {

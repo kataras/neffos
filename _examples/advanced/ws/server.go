@@ -22,7 +22,14 @@ type Server struct {
 	connect     chan *conn
 	disconnect  chan *conn
 	actions     chan func(Conn)
-	broadcast   chan Message
+
+	//
+	// broadcastMessage Message
+	// broadcastMu      sync.Mutex
+	// broadcastCond    *sync.Cond
+	broadcast chan Message
+	// no... currentReceivers map[string]map[*nsConn]struct{}
+	//
 
 	closed uint32
 
@@ -40,11 +47,13 @@ func New(connHandler connHandler) *Server {
 		connect:     make(chan *conn, 1),
 		disconnect:  make(chan *conn),
 		actions:     make(chan func(Conn)),
-		broadcast:   make(chan Message),
+		broadcast:   make(chan Message, 1),
 		// connections: make(chan *conn, 1),
 		ws:         ws,
 		NSAcceptor: DefaultNSAcceptor,
 	}
+
+	// s.broadcastCond = sync.NewCond(&s.broadcastMu)
 
 	ws.OnConnected = s.onConnected
 	go s.start()
@@ -132,7 +141,13 @@ func (s *Server) Broadcast(from Conn, msg Message) {
 		msg.from = from.ID()
 	}
 
-	s.broadcast <- msg
+	// s.broadcast <- msg
+
+	// s.broadcastMu.Lock()
+	// s.broadcastMessage = msg
+	// s.broadcastMu.Unlock()
+
+	// s.broadcastCond.Broadcast()
 }
 
 // not thread safe.
@@ -166,8 +181,8 @@ func (s *Server) GetConnections() map[string]Conn {
 var ErrBadNamespace = errors.New("bad namespace")
 var ErrForbiddenNamespace = errors.New("forbidden namespace")
 
-func (s *Server) onConnected(conn *fastws.Conn) error {
-	// namespace := conn.Request.URL.Query().Get("ns")
+func (s *Server) onConnected(underline *fastws.Conn) error {
+	// namespace := underline.Request.URL.Query().Get("ns")
 	// if !s.NSAcceptor(conn.Request, namespace) {
 	// 	return ErrForbiddenNamespace
 	// }
@@ -177,10 +192,11 @@ func (s *Server) onConnected(conn *fastws.Conn) error {
 	// 	return ErrBadNamespace
 	// }
 
-	c := newConn(conn, s.namespaces)
+	c := newConn(underline, s.namespaces)
 	c.server = s
+
 	if s.OnError != nil {
-		conn.OnError = func(err error) bool {
+		underline.OnError = func(err error) bool {
 			if fastws.IsDisconnected(err) {
 				return false
 			}
@@ -189,14 +205,31 @@ func (s *Server) onConnected(conn *fastws.Conn) error {
 		}
 	}
 
-	if err := c.ack(); err != nil {
-		return err
-	}
-	//	nsConn := c.getNSConnection(namespace)
+	// if err := c.ack(); err != nil {
+	// 	return err
+	// }
 
+	//	nsConn := c.getNSConnection(namespace)
 	s.connect <- c
-	go c.startWriter()
 	go c.startReader()
+	go c.startWriter()
+
+	// go func(c *conn) {
+	// 	for {
+	// 		s.broadcastMu.Lock()
+	// 		s.broadcastCond.Wait()
+	// 		if c == nil || c.isClosed() {
+	// 			s.broadcastMu.Unlock()
+	// 			return
+	// 		}
+
+	// 		if s.broadcastMessage.from != c.ID() {
+	// 			c.write(s.broadcastMessage)
+	// 		}
+
+	// 		s.broadcastMu.Unlock()
+	// 	}
+	// }(c)
 
 	if s.OnConnect != nil {
 		if err := s.OnConnect(c); err != nil {

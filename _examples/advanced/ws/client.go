@@ -11,6 +11,10 @@ type Client struct {
 }
 
 func (c *Client) Close() {
+	if c == nil || c.conn == nil {
+		return
+	}
+
 	c.conn.Close()
 }
 
@@ -21,8 +25,12 @@ func (c *Client) Close() {
 // 	return c.conn.Connect(namespace)
 // }
 
-func (c *Client) Connect(ctx context.Context, namespace string) (NSConn, error) {
-	return c.conn.Connect3(ctx, namespace)
+func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (NSConn, error) {
+	return c.conn.WaitConnect(ctx, namespace)
+}
+
+func (c *Client) Connect(namespace string) (NSConn, error) {
+	return c.conn.Connect(namespace)
 }
 
 func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
@@ -32,13 +40,9 @@ func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, er
 	}
 
 	c := newConn(underline, connHandler.getNamespaces())
-	err = c.ack()
-	if err != nil {
-		return nil, err
-	}
 
-	go c.startWriter()
 	go c.startReader()
+	go c.startWriter()
 
 	client := &Client{
 		conn: c,

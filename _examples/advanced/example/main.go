@@ -33,7 +33,6 @@ var handler = ws.Namespaces{
 		},
 		ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 			if !c.IsClient() {
-				println("from server: ")
 				c.Emit("chat", []byte("welcome to server's namespace"))
 			}
 
@@ -109,7 +108,7 @@ func server() {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
 		c.Connect(namespace) // auto-connect to a specific namespace.
-		c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
+		// c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
 		// println("client connected")
 		return nil
 	}
@@ -165,11 +164,12 @@ func client() {
 	//	time.Sleep(6 * time.Second)
 
 	// time.Sleep(1 * time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	// not empty context if we want to wait from server-side to force-connect this connection to that namespace,
 	// otherwise just pass nil as its first argument.
-	c, err := client.Connect(ctx, namespace)
+	c, err := client.WaitServerConnect(ctx, namespace)
 	if err != nil {
 		panic(err)
 	}
@@ -187,7 +187,7 @@ func client() {
 
 		if bytes.Equal(text, []byte("exit")) {
 			if err := c.Disconnect(); err != nil {
-				log.Printf("from server: %v", err)
+				// log.Printf("from server: %v", err)
 			}
 			continue
 		}

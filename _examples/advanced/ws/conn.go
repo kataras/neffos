@@ -19,6 +19,7 @@ type Conn interface {
 	Close()
 	String() string
 	Connect(namespace string) (NSConn, error)
+	WaitConnect(ctx context.Context, namespace string) (NSConn, error)
 	DisconnectFrom(namespace string) error
 	DisconnectFromAll()
 
@@ -42,7 +43,9 @@ type conn struct {
 
 	closeCh chan struct{}
 	out     chan []byte
-	once    *uint32
+	// broadcastChannel chan Message // server-side only.
+	in   chan []byte
+	once *uint32
 
 	waitingMessages map[uint64]chan Message
 	server          *Server
@@ -55,8 +58,10 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		connectedNamespaces: make(map[string]*nsConn),
 		closeCh:             make(chan struct{}),
 		out:                 make(chan []byte, 256),
+		in:                  make(chan []byte, 1),
 		once:                new(uint32),
 		waitingMessages:     make(map[uint64]chan Message),
+		//	broadcastChannel:    make(chan Message), // not used in client-side.
 	}
 
 	return c
@@ -74,81 +79,15 @@ func (c *conn) Server() *Server {
 	return c.server
 }
 
-var ackBinary = []byte("ACK")
-
-// this should run before startWriter and startReader.
-func (c *conn) ack() error {
-	if !c.IsClient() {
-		// server-side, first action is to send the id and then wait for confirmation.
-		_, err := c.underline.Write([]byte(c.underline.ID))
-		if err != nil {
-			return err
-		}
-		// println("server: wrote")
-
-		b, err := c.underline.ReadBinary()
-		// println("server: read")
-		if err != nil {
-			return err
-		}
-
-		if bytes.Equal(b, ackBinary) {
-			// println("server: ack got")
-			return nil
-		}
-		return CloseError{Code: -1}
-	}
-
-	// client-side, first action is to wait for the id and then send the confirmation.
-	id, err := c.underline.ReadBinary()
-	if err != nil {
-		return err
-	}
-	// println("client: read")
-
-	c.underline.ID = string(id)
-	_, err = c.underline.Write(ackBinary)
-	// println("client: write")
-	return err
-
-	// opposite:
-	// if c.IsClient() {
-	// 	// server-side, first action is to send the id and then wait for confirmation.
-	// 	_, err := c.underline.Write(ackBinary)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	// println("server: wrote")
-
-	// 	id, err := c.underline.ReadBinary()
-	// 	// println("server: read")
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	c.underline.ID = string(id)
-	// 	return nil
-	// }
-
-	// // client-side, first action is to wait for the id and then send the confirmation.
-	// b, err := c.underline.ReadBinary()
-	// if err != nil {
-	// 	return err
-	// }
-
-	// if bytes.Equal(b, ackBinary) {
-	// 	_, err = c.underline.Write([]byte(c.ID()))
-	// 	return err
-	// }
-
-	// return CloseError{Code: -1}
-}
-
 var (
 	newline = []byte{'\n'}
 )
 
 func (c *conn) startWriter() {
+	if c.isClosed() {
+		return
+	}
+
 	defer c.Close()
 
 	for {
@@ -169,6 +108,15 @@ func (c *conn) startWriter() {
 				c.underline.Write(newline)
 				c.underline.Write(<-c.out)
 			}
+			// case msg, ok := <-c.broadcastChannel:
+			// 	if !ok {
+			// 		return
+			// 	}
+
+			// 	if msg.from == c.underline.ID {
+			// 		continue
+			// 	}
+			// 	c.write(msg)
 		}
 	}
 }
@@ -191,42 +139,104 @@ func isCloseError(err error) bool {
 	return ok
 }
 
+var ackBinary = []byte("ACK")
+
 func (c *conn) startReader() {
+	if c.isClosed() {
+		return
+	}
+
 	defer c.Close()
+
+	go func() {
+		defer c.Close()
+
+		for {
+			select {
+			case <-c.closeCh:
+				return
+			default:
+				b, err := c.underline.ReadBinary()
+				if err != nil {
+					return
+				}
+
+				c.in <- b
+			}
+		}
+	}()
+
+	if c.IsClient() {
+		c.out <- ackBinary
+	}
 
 readLoop:
 	for {
-		b, err := c.underline.ReadBinary()
-		if err != nil {
-			// println("DEBUG - ERROR conn.go: " + err.Error())
+		if c.isClosed() {
 			return
 		}
 
-		msg := deserializeMessage(nil, b)
-		//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
-
-		if msg.wait > 0 {
-			if ch, ok := c.waitingMessages[msg.wait]; ok {
-				// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
-				ch <- msg
-				continue
+		select {
+		case <-c.closeCh:
+			// println("closed channel received.")
+			return
+		case b, ok := <-c.in:
+			if !ok {
+				return
 			}
-		}
 
-		for _, h := range messageHandlers {
-			handled, err := h(c, msg)
-			if err != nil {
-				msg.Body = nil
-				msg.Err = err
-				c.write(msg)
-				if isCloseError(err) {
-					return // close the connection.
+			if bytes.HasPrefix(b, ackBinary) {
+				if c.IsClient() {
+					id := string(b[len(ackBinary):])
+					c.underline.ID = id
+					// println("got ID " + id)
+				} else {
+					c.out <- append(ackBinary, []byte(c.underline.ID)...)
+					// println("sent ID: " + c.underline.ID)
 				}
+
 				continue readLoop
+			} else {
+				// TODO FIX SOMETIMES CONNECT MESSAGE IS BEFORE ID.
+				// if c.IsClient() {
+				// 	if c.underline.ID == "" {
+				// 		println("empty ID")
+				// 		b, err := c.underline.ReadBinary()
+				// 		if err != nil {
+				// 			return
+				// 		}
+				// 		c.in <- b
+				// 		continue readLoop
+				// 	}
+				// }
 			}
 
-			if handled {
-				break
+			msg := deserializeMessage(nil, b)
+			//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
+
+			if msg.wait > 0 {
+				if ch, ok := c.waitingMessages[msg.wait]; ok {
+					// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
+					ch <- msg
+					continue readLoop
+				}
+			}
+
+			for _, h := range messageHandlers {
+				handled, err := h(c, msg)
+				if err != nil {
+					msg.Body = nil
+					msg.Err = err
+					c.write(msg)
+					if isCloseError(err) {
+						return // close the connection.
+					}
+					continue readLoop
+				}
+
+				if handled {
+					break
+				}
 			}
 		}
 	}
@@ -261,6 +271,8 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 	delete(c.connectedNamespaces, namespace)
 }
 
+var askTimeout = 5 * time.Second
+
 func (c *conn) ask(msg Message) (Message, bool) {
 	if c.isClosed() {
 		return msg, false
@@ -271,19 +283,45 @@ func (c *conn) ask(msg Message) (Message, bool) {
 		d = 2
 	}
 	waitID := d * uint64(time.Now().Unix())
-	fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
+	// fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
 	msg.wait = waitID
 	if !c.write(msg) {
 		return Message{}, false
 	}
 
 	ch := make(chan Message)
+	c.mu.Lock()
 	c.waitingMessages[msg.wait] = ch
-	msg, ok := <-ch
-	delete(c.waitingMessages, msg.wait)
-	fmt.Printf("got waiting message: %d\n", msg.wait)
+	c.mu.Unlock()
+	timer := time.NewTimer(askTimeout)
+	defer timer.Stop()
 
-	return msg, ok
+	select {
+	case <-timer.C:
+		//	fmt.Printf("[%s] isClosed=%v | timeout for message: %#+v\n", c.ID(), c.isClosed(), msg)
+		c.Close()
+		return Message{}, false
+		// if msg.isConnect || msg.isDisconnect || c.isClosed() {
+		// 	close(ch)
+		// 	c.Close()
+		// 	return Message{}, true
+		// }
+
+		// return Message{}, false
+	case msg, ok := <-ch:
+		c.mu.Lock()
+		delete(c.waitingMessages, msg.wait)
+		c.mu.Unlock()
+		return msg, ok
+	}
+
+	// msg, ok := <-ch
+	// c.mu.Lock()
+	// delete(c.waitingMessages, msg.wait)
+	// c.mu.Unlock()
+	//fmt.Printf("got waiting message: %d\n", msg.wait)
+
+	// return msg, ok
 }
 
 // DisconnectFrom gracefully disconnects from a namespace.
@@ -331,46 +369,44 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 
 var ErrWrite = fmt.Errorf("write closed")
 
-func (c *conn) Connect3(ctx context.Context, namespace string) (NSConn, error) {
+const defaultWaitServerOrClientConnectTimeout = 3 * time.Second
 
-	if ctx != nil {
-		if _, hasDeadline := ctx.Deadline(); hasDeadline {
-			timer := time.NewTicker(100 * time.Millisecond)
-			defer timer.Stop()
+func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-			for {
-				select {
-				case <-timer.C:
-					println("sleep")
-				case <-ctx.Done():
-					println("done")
-					return nil, context.DeadlineExceeded
-				default:
-					//	println("searching")
-					c.mu.RLock()
-					ns, ok := c.connectedNamespaces[namespace]
-					c.mu.RUnlock()
-					if ok {
-						return ns, nil
-					}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultWaitServerOrClientConnectTimeout)
+		defer cancel()
+	}
+
+	timer := time.NewTicker(100 * time.Millisecond)
+	defer timer.Stop()
+
+	var (
+		ns    NSConn
+		found bool
+	)
+
+	for {
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, context.DeadlineExceeded
+		default:
+			//	println("searching")
+			if !found {
+				c.mu.RLock()
+				ns, found = c.connectedNamespaces[namespace]
+				c.mu.RUnlock()
+			} else {
+				if c.underline.ID != "" {
+					return ns, nil
 				}
 			}
 		}
-	}
-
-	println("ask connect")
-	return c.Connect(namespace)
-}
-
-func (c *conn) WaitConnect(namespace string) NSConn {
-	for {
-		c.mu.RLock()
-		ns, ok := c.connectedNamespaces[namespace]
-		c.mu.RUnlock()
-		if ok {
-			return ns
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -379,7 +415,6 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
 	if alreadyConnected {
-		// println(namespace + " already connected")
 		return ns, nil
 	}
 
@@ -388,14 +423,12 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 		return nil, ErrBadNamespace
 	}
 
-	// println("sending connect...")
 	msg, ok := c.ask(Message{
 		Namespace: namespace,
 		Event:     OnNamespaceConnect,
 		isConnect: true,
 	})
 
-	// println("connect response received...")
 	if !ok {
 		return nil, ErrWrite
 	}
@@ -407,11 +440,11 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 		return nil, msg.Err
 	}
 
+	// re-check, maybe local connected.
 	c.mu.RLock()
 	ns, alreadyConnected = c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
 	if alreadyConnected {
-		// println(namespace + " already connected [2]")
 		return ns, nil
 	}
 
@@ -432,47 +465,8 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 
 	connectMessage.Event = OnNamespaceConnected
 	events.fireEvent(ns, connectMessage)
-	// if !c.IsClient() && !msg.isNoOp {
-	// 	c.write(connectMessage)
-	// }
 
 	return ns, err
-}
-
-func (c *conn) getNSConn(namespace string) (NSConn, error) {
-	c.mu.RLock()
-	ns, ok := c.connectedNamespaces[namespace]
-	c.mu.RUnlock()
-	if ok {
-		return ns, nil
-	}
-
-	events, ok := c.namespaces[namespace]
-	if !ok {
-		return nil, ErrBadNamespace
-	}
-
-	if c.IsClient() {
-		msg, ok := c.ask(Message{
-			Namespace: namespace,
-			Event:     OnNamespaceConnect,
-			isConnect: true,
-		})
-		if !ok {
-			return nil, ErrWrite
-		}
-
-		if msg.isError {
-			if msg.Err.Error() == ErrBadNamespace.Error() {
-				return nil, ErrBadNamespace
-			}
-		}
-
-		ns = newNSConn(c, namespace, events)
-		c.addNSConn(ns)
-	}
-
-	return ns, nil
 }
 
 // DisconnectFromAll gracefully disconnects from all namespaces.
@@ -499,9 +493,11 @@ func (c *conn) Close() {
 			ns.events.fireOnNamespaceDisconnect(ns, disconnectMsg)
 		}
 
+		c.mu.Lock()
 		for wait := range c.waitingMessages {
 			delete(c.waitingMessages, wait)
 		}
+		c.mu.Unlock()
 
 		go func() {
 			if c.server != nil {
@@ -554,14 +550,14 @@ func (c *conn) WriteAndWait(namespace, event string, body []byte) Message {
 func (c *conn) write(msg Message) bool {
 	msg.from = c.ID()
 
-	if !msg.isConnect && !msg.isDisconnect {
-		c.mu.RLock()
-		_, ok := c.connectedNamespaces[msg.Namespace]
-		c.mu.RUnlock()
-		if !ok {
-			return false
-		}
-	}
+	// if !msg.isConnect && !msg.isDisconnect {
+	// 	c.mu.RLock()
+	// 	_, ok := c.connectedNamespaces[msg.Namespace]
+	// 	c.mu.RUnlock()
+	// 	if !ok {
+	// 		return false
+	// 	}
+	// }
 
 	select {
 	case <-c.closeCh:
