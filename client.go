@@ -14,7 +14,7 @@ var ErrBadHandshake = ws.ErrHandshakeBadConnection
 
 // Dial creates a new client connection.
 //
-// The context will be used in the request and in the Dialer.
+// The context will be used for the handshake deadline.
 //
 // If the WebSocket handshake fails, `ErrHandshakeBadConnection` is returned.
 //
@@ -36,18 +36,13 @@ func dial(ctx context.Context, url string) (*Conn, error) {
 		url = "ws://" + url
 	}
 
-	deadline, hasDeadline := ctx.Deadline()
-
 	conn, _, hs, err := ws.DefaultDialer.Dial(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
-	if hasDeadline {
-		conn.SetDeadline(deadline)
-	}
-
-	return WrapConn(conn, hs, ws.StateClientSide), nil
+	c := WrapConn(conn, hs, ws.StateClientSide)
+	return c, nil
 }
 
 // WrapConn can be used to wrap the result of a custom ws.Dialer#Dial operation.

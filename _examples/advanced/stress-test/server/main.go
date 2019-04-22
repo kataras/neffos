@@ -14,13 +14,14 @@ import (
 )
 
 const (
-	endpoint  = "localhost:8080"
-	broadcast = true
-	verbose   = false
-	maxC      = 0
+	endpoint    = "localhost:8080"
+	broadcast   = true
+	verbose     = false
+	maxC        = 0
+	idleTimeout = 10 * time.Second // TODO: deadline exceed is read OR write now, make it to check both read and write operations on Conn -- "IDLE".
 )
 
-var totalClients uint64 = 20000 // max depends on the OS, read more below.
+var totalClients uint64 = 100000 // max depends on the OS, read more below.
 // For example for windows:
 //
 // $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -36,22 +37,26 @@ var totalClients uint64 = 20000 // max depends on the OS, read more below.
 // Note that this test is hardly depends on the host machine,
 // maybe there is a case where those settings does not apply to your system.
 
-func init() {
-	if broadcast {
-		totalClients = 7000
-	}
-}
+// func init() {
+// 	if broadcast {
+// 		totalClients = 14000
+// 	}
+// }
 
 func main() {
-	srv := ws.New(ws.Events{
-		"chat": func(c ws.NSConn, msg ws.Message) error {
-			if broadcast {
-				c.Server().Broadcast(c, msg)
-			} else {
-				c.Emit("chat", msg.Body)
-			}
+	srv := ws.New(ws.WithTimeout{
+		ReadTimeout:  idleTimeout,
+		WriteTimeout: idleTimeout,
+		Events: ws.Events{
+			"chat": func(c ws.NSConn, msg ws.Message) error {
+				if broadcast {
+					c.Server().Broadcast(c, msg)
+				} else {
+					c.Emit("chat", msg.Body)
+				}
 
-			return nil
+				return nil
+			},
 		},
 	})
 
@@ -111,7 +116,7 @@ func main() {
 						allowNZero++
 						continue
 					}
-					log.Printf("%d/%d CLIENTS WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
+					log.Printf("%v/%d CLIENTS WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
 						totalClients-totalConnected, totalClients)
 
 					return

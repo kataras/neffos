@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/kataras/fastws"
 )
@@ -13,6 +14,10 @@ type Server struct {
 	mu         sync.RWMutex
 	NSAcceptor NSAcceptor
 	namespaces Namespaces
+
+	// connection read/write timeouts.
+	readTimeout  time.Duration
+	writeTimeout time.Duration
 
 	// connections chan *conn
 	ws    *fastws.FastWS
@@ -40,14 +45,18 @@ type Server struct {
 
 func New(connHandler connHandler) *Server {
 	ws := fastws.New()
-	s := &Server{
-		namespaces: connHandler.getNamespaces(),
 
-		connections: make(map[*conn]struct{}),
-		connect:     make(chan *conn, 1),
-		disconnect:  make(chan *conn),
-		actions:     make(chan func(Conn)),
-		broadcast:   make(chan Message, 1),
+	readTimeout, writeTimeout := getTimeouts(connHandler)
+
+	s := &Server{
+		namespaces:   connHandler.getNamespaces(),
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
+		connections:  make(map[*conn]struct{}),
+		connect:      make(chan *conn, 1),
+		disconnect:   make(chan *conn),
+		actions:      make(chan func(Conn)),
+		broadcast:    make(chan Message, 1),
 		// connections: make(chan *conn, 1),
 		ws:         ws,
 		NSAcceptor: DefaultNSAcceptor,
@@ -93,20 +102,35 @@ func (s *Server) start() {
 				fn(c)
 			}
 		case msg := <-s.broadcast:
+			msgBinary := serializeMessage(nil, msg)
 			for c := range s.connections {
+				if !c.isAcknowledged() {
+					continue
+				}
+
 				if c.ID() == msg.from {
 					continue
 				}
 
-				// if msg.Namespace == "" {
-				// 	for _, ns := range c.connectedNamespaces {
-				// 		msg.Namespace = ns.namespace
-				// 		ns.write(msg)
-				// 	}
-				// 	continue
-				// }
+				if !msg.isConnect && !msg.isDisconnect {
+					c.mu.RLock()
+					_, ok := c.connectedNamespaces[msg.Namespace]
+					c.mu.RUnlock()
+					if !ok {
+						continue
+					}
+				}
 
-				c.write(msg)
+				select {
+				case c.out <- msgBinary:
+				default:
+					close(c.out)
+					delete(s.connections, c)
+					atomic.AddUint64(&s.count, ^uint64(0))
+					if s.OnDisconnect != nil {
+						s.OnDisconnect(c)
+					}
+				}
 			}
 		}
 	}
@@ -141,7 +165,7 @@ func (s *Server) Broadcast(from Conn, msg Message) {
 		msg.from = from.ID()
 	}
 
-	// s.broadcast <- msg
+	s.broadcast <- msg
 
 	// s.broadcastMu.Lock()
 	// s.broadcastMessage = msg
@@ -191,6 +215,9 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 	// if !ok {
 	// 	return ErrBadNamespace
 	// }
+
+	underline.WriteTimeout = s.writeTimeout
+	underline.ReadTimeout = s.readTimeout
 
 	c := newConn(underline, s.namespaces)
 	c.server = s

@@ -33,11 +33,17 @@ func (c *Client) Connect(namespace string) (NSConn, error) {
 	return c.conn.Connect(namespace)
 }
 
+// Dial establish a new websocket client.
+// Context "ctx" is used for handshake timeout.
 func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
 	underline, err := fastws.Dial(ctx, url)
 	if err != nil {
 		return nil, err
 	}
+
+	readTimeout, writeTimeout := getTimeouts(connHandler)
+	underline.ReadTimeout = readTimeout
+	underline.WriteTimeout = writeTimeout
 
 	c := newConn(underline, connHandler.getNamespaces())
 

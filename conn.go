@@ -171,14 +171,17 @@ func (c *Conn) Decode(vPtr interface{}) error {
 	return c.decoder.Decode(vPtr)
 }
 
-// Returns io.EOF on remote close.
-func (c *Conn) Read(b []byte) (n int, err error) {
+func (c *Conn) applyReadTimeout() {
 	if c.ReadTimeout > 0 {
 		c.NetConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 	}
+}
 
+// Returns io.EOF on remote close.
+func (c *Conn) Read(b []byte) (n int, err error) {
 	if c.Reader == nil {
 		for {
+			c.applyReadTimeout()
 			data, opCode, err := wsutil.ReadData(c.NetConn, c.State)
 			if err != nil {
 				return 0, err
@@ -194,6 +197,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	}
 
 	for {
+		c.applyReadTimeout()
 		hdr, err := c.Reader.NextFrame()
 		if err != nil {
 			if err == io.EOF {

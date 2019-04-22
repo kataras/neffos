@@ -49,6 +49,8 @@ type conn struct {
 
 	waitingMessages map[uint64]chan Message
 	server          *Server
+
+	acknowledged *uint32
 }
 
 func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
@@ -58,8 +60,9 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		connectedNamespaces: make(map[string]*nsConn),
 		closeCh:             make(chan struct{}),
 		out:                 make(chan []byte, 256),
-		in:                  make(chan []byte, 1),
+		in:                  make(chan []byte, 1024),
 		once:                new(uint32),
+		acknowledged:        new(uint32),
 		waitingMessages:     make(map[uint64]chan Message),
 		//	broadcastChannel:    make(chan Message), // not used in client-side.
 	}
@@ -108,15 +111,6 @@ func (c *conn) startWriter() {
 				c.underline.Write(newline)
 				c.underline.Write(<-c.out)
 			}
-			// case msg, ok := <-c.broadcastChannel:
-			// 	if !ok {
-			// 		return
-			// 	}
-
-			// 	if msg.from == c.underline.ID {
-			// 		continue
-			// 	}
-			// 	c.write(msg)
 		}
 	}
 }
@@ -140,6 +134,11 @@ func isCloseError(err error) bool {
 }
 
 var ackBinary = []byte("ACK")
+var ackOKBinary = []byte("ACK_OK")
+
+func (c *conn) isAcknowledged() bool {
+	return atomic.LoadUint32(c.acknowledged) > 0
+}
 
 func (c *conn) startReader() {
 	if c.isClosed() {
@@ -184,15 +183,25 @@ readLoop:
 			if !ok {
 				return
 			}
+			//	timer.Reset(5 * time.Second)
 
 			if bytes.HasPrefix(b, ackBinary) {
 				if c.IsClient() {
 					id := string(b[len(ackBinary):])
 					c.underline.ID = id
+					atomic.StoreUint32(c.acknowledged, 1)
+					c.out <- ackOKBinary
+
 					// println("got ID " + id)
 				} else {
-					c.out <- append(ackBinary, []byte(c.underline.ID)...)
-					// println("sent ID: " + c.underline.ID)
+					if len(b) == len(ackBinary) {
+						c.out <- append(ackBinary, []byte(c.underline.ID)...)
+						// println("sent ID: " + c.underline.ID)
+					} else {
+						// its ackOK, answer from client when ID received and it's ready for write/read.
+						atomic.StoreUint32(c.acknowledged, 1)
+						// println("ACK-ed")
+					}
 				}
 
 				continue readLoop
@@ -277,6 +286,11 @@ func (c *conn) ask(msg Message) (Message, bool) {
 	if c.isClosed() {
 		return msg, false
 	}
+
+	// // block until ACK-ed.
+	// for !c.isAcknowledged() {
+	// 	// println("no ACK but ask")
+	// }
 
 	var d uint64 = 1
 	if c.IsClient() {
@@ -486,6 +500,7 @@ func (c *conn) isClosed() bool {
 
 func (c *conn) Close() {
 	if atomic.CompareAndSwapUint32(c.once, 0, 1) {
+		atomic.StoreUint32(c.acknowledged, 0)
 		// fire the namespaces' disconnect event for both server and client.
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
 		for _, ns := range c.connectedNamespaces {
@@ -548,16 +563,20 @@ func (c *conn) WriteAndWait(namespace, event string, body []byte) Message {
 // }
 
 func (c *conn) write(msg Message) bool {
+	if c.isClosed() {
+		return false
+	}
+
 	msg.from = c.ID()
 
-	// if !msg.isConnect && !msg.isDisconnect {
-	// 	c.mu.RLock()
-	// 	_, ok := c.connectedNamespaces[msg.Namespace]
-	// 	c.mu.RUnlock()
-	// 	if !ok {
-	// 		return false
-	// 	}
-	// }
+	if !msg.isConnect && !msg.isDisconnect {
+		c.mu.RLock()
+		_, ok := c.connectedNamespaces[msg.Namespace]
+		c.mu.RUnlock()
+		if !ok {
+			return false
+		}
+	}
 
 	select {
 	case <-c.closeCh:

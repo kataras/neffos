@@ -28,11 +28,11 @@ const (
 
 var totalClients = 100000 // max depends on the OS.
 
-func init() {
-	if broadcast {
-		totalClients = 7000
-	}
-}
+// func init() {
+// 	if broadcast {
+// 		totalClients = 14000
+// 	}
+// }
 
 var connectionFailures uint64
 
@@ -73,21 +73,21 @@ func main() {
 	wg.Add(totalClients)
 
 	relaxCPU := 15 * time.Second // this may not be useful if host contains high-end hardware.
-	if broadcast {
-		relaxCPU = 5 * time.Second
-	}
+	// if broadcast {
+	// 	relaxCPU = 15 * time.Second
+	// }
 
 	lastRelaxCPU := time.Now()
 	var alive time.Duration
 	for i := 0; i < totalClients; i++ {
 		if i%2 == 0 {
 			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
-			alive = 2*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			alive = 4*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else if i%3 == 0 {
 			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
-			alive = 5*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			alive = 6*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else {
-			alive = 3*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			alive = 8*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		}
 
 		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
@@ -166,13 +166,17 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
 	// defer cancel()
 	ctx := context.Background()
-	client, err := ws.Dial(ctx, url, ws.Events{
-		"chat": func(c ws.NSConn, msg ws.Message) error {
-			if verbose {
-				log.Println(string(msg.Body))
-			}
+	client, err := ws.Dial(ctx, url, ws.WithTimeout{
+		ReadTimeout:  alive,
+		WriteTimeout: alive,
+		Events: ws.Events{
+			"chat": func(c ws.NSConn, msg ws.Message) error {
+				if verbose {
+					log.Println(string(msg.Body))
+				}
 
-			return nil
+				return nil
+			},
 		},
 	})
 
@@ -193,12 +197,6 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		}
 		return
 	}
-	// c.HandleFunc("chat", func(c ws.Conn, message []byte) error {
-	// 	if verbose {
-	// 		log.Println(string(message))
-	// 	}
-	// 	return nil
-	// })
 
 	r := ioutil.NopCloser(bytes.NewBuffer(testdata))
 	scanner := bufio.NewScanner(r)
@@ -208,17 +206,7 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		}
 	}
 
-	// if !broadcast {
-	// 	time.Sleep(alive)
-	// }
-
-	time.Sleep(alive)
-	client.Close()
-
-	// c.Close()
-
-	// time.Sleep(2 * time.Second)
+	// no need with timeouts:
 	// time.Sleep(alive)
-	// c.Close()
-	// time.Sleep(alive)
+	// client.Close()
 }
