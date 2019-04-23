@@ -16,7 +16,6 @@ type Conn interface {
 	ID() string
 	Write(namespace string, event string, body []byte) bool
 	WriteAndWait(namespace, event string, body []byte) Message
-	Close()
 	String() string
 	Connect(namespace string) (NSConn, error)
 	WaitConnect(ctx context.Context, namespace string) (NSConn, error)
@@ -25,6 +24,9 @@ type Conn interface {
 
 	IsClient() bool
 	Server() *Server
+
+	Close()
+	IsClosed() bool
 }
 
 type NSConn interface {
@@ -47,8 +49,9 @@ type conn struct {
 	in   chan []byte
 	once *uint32
 
-	waitingMessages map[uint64]chan Message
-	server          *Server
+	waitingMessages map[uint64]chan Message // messages that this connection waits for a reply.
+
+	server *Server
 
 	acknowledged *uint32
 }
@@ -59,8 +62,8 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		namespaces:          namespaces,
 		connectedNamespaces: make(map[string]*nsConn),
 		closeCh:             make(chan struct{}),
-		out:                 make(chan []byte, 256),
-		in:                  make(chan []byte, 1024),
+		out:                 make(chan []byte, 0),
+		in:                  make(chan []byte, 0),
 		once:                new(uint32),
 		acknowledged:        new(uint32),
 		waitingMessages:     make(map[uint64]chan Message),
@@ -87,7 +90,7 @@ var (
 )
 
 func (c *conn) startWriter() {
-	if c.isClosed() {
+	if c.IsClosed() {
 		return
 	}
 
@@ -107,10 +110,10 @@ func (c *conn) startWriter() {
 				return
 			}
 
-			for i, n := 0, len(c.out); i < n; i++ {
-				c.underline.Write(newline)
-				c.underline.Write(<-c.out)
-			}
+			// for i, n := 0, len(c.out); i < n; i++ {
+			// 	c.underline.Write(newline)
+			// 	c.underline.Write(<-c.out)
+			// }
 		}
 	}
 }
@@ -141,7 +144,7 @@ func (c *conn) isAcknowledged() bool {
 }
 
 func (c *conn) startReader() {
-	if c.isClosed() {
+	if c.IsClosed() {
 		return
 	}
 
@@ -169,9 +172,18 @@ func (c *conn) startReader() {
 		c.out <- ackBinary
 	}
 
+	queue := make(map[*Message]struct{})
+	handleQueue := func() {
+		for msg := range queue {
+			// fmt.Printf("queue: handle %s/%s\n", msg.Namespace, msg.Event)
+			c.handleMessage(*msg)
+			delete(queue, msg)
+		}
+	}
+
 readLoop:
 	for {
-		if c.isClosed() {
+		if c.IsClosed() {
 			return
 		}
 
@@ -191,6 +203,7 @@ readLoop:
 					c.underline.ID = id
 					atomic.StoreUint32(c.acknowledged, 1)
 					c.out <- ackOKBinary
+					handleQueue()
 
 					// println("got ID " + id)
 				} else {
@@ -201,6 +214,7 @@ readLoop:
 						// its ackOK, answer from client when ID received and it's ready for write/read.
 						atomic.StoreUint32(c.acknowledged, 1)
 						// println("ACK-ed")
+						handleQueue()
 					}
 				}
 
@@ -221,34 +235,76 @@ readLoop:
 			}
 
 			msg := deserializeMessage(nil, b)
+			if msg.isInvalid {
+				// fmt.Printf("%s([%d]) is invalid payload\n", b, len(b))
+				continue // or return (close)?
+			}
+
+			if !c.isAcknowledged() {
+				// fmt.Printf("queue: add %s/%s\n%#+v\n", msg.Namespace, msg.Event, msg)
+				queue[&msg] = struct{}{}
+				continue
+			}
+
 			//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
-
-			if msg.wait > 0 {
-				if ch, ok := c.waitingMessages[msg.wait]; ok {
-					// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
-					ch <- msg
-					continue readLoop
-				}
+			if !c.handleMessage(msg) {
+				return
 			}
+			// if msg.wait > 0 {
+			// 	if ch, ok := c.waitingMessages[msg.wait]; ok {
+			// 		// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
+			// 		ch <- msg
+			// 		continue readLoop
+			// 	}
+			// }
 
-			for _, h := range messageHandlers {
-				handled, err := h(c, msg)
-				if err != nil {
-					msg.Body = nil
-					msg.Err = err
-					c.write(msg)
-					if isCloseError(err) {
-						return // close the connection.
-					}
-					continue readLoop
-				}
+			// for _, h := range messageHandlers {
+			// 	handled, err := h(c, msg)
+			// 	if err != nil {
+			// 		msg.Body = nil
+			// 		msg.Err = err
+			// 		c.write(msg)
+			// 		if isCloseError(err) {
+			// 			return // close the connection.
+			// 		}
+			// 		continue readLoop
+			// 	}
 
-				if handled {
-					break
-				}
-			}
+			// 	if handled {
+			// 		break
+			// 	}
+			// }
 		}
 	}
+}
+
+func (c *conn) handleMessage(msg Message) bool {
+	if msg.wait > 0 {
+		if ch, ok := c.waitingMessages[msg.wait]; ok {
+			// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
+			ch <- msg
+			return true
+		}
+	}
+
+	for _, h := range messageHandlers {
+		handled, err := h(c, msg)
+		if err != nil {
+			msg.Body = nil
+			msg.Err = err
+			c.write(msg)
+			if isCloseError(err) {
+				return false // close the connection.
+			}
+			return true
+		}
+
+		if handled {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c *conn) ID() string {
@@ -283,7 +339,7 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 var askTimeout = 5 * time.Second
 
 func (c *conn) ask(msg Message) (Message, bool) {
-	if c.isClosed() {
+	if c.IsClosed() {
 		return msg, false
 	}
 
@@ -384,6 +440,7 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 var ErrWrite = fmt.Errorf("write closed")
 
 const defaultWaitServerOrClientConnectTimeout = 3 * time.Second
+const waitConnectDuruation = 100 * time.Millisecond
 
 func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error) {
 	if ctx == nil {
@@ -396,7 +453,7 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 		defer cancel()
 	}
 
-	timer := time.NewTicker(100 * time.Millisecond)
+	timer := time.NewTimer(waitConnectDuruation)
 	defer timer.Stop()
 
 	var (
@@ -407,19 +464,18 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 	for {
 		select {
 		case <-timer.C:
-		case <-ctx.Done():
-			return nil, context.DeadlineExceeded
-		default:
-			//	println("searching")
 			if !found {
 				c.mu.RLock()
 				ns, found = c.connectedNamespaces[namespace]
 				c.mu.RUnlock()
 			} else {
-				if c.underline.ID != "" {
+				if c.isAcknowledged() {
 					return ns, nil
 				}
 			}
+			timer.Reset(waitConnectDuruation)
+		case <-ctx.Done():
+			return nil, context.DeadlineExceeded
 		}
 	}
 }
@@ -494,7 +550,7 @@ func (c *conn) DisconnectFromAll() {
 	c.mu.Unlock()
 }
 
-func (c *conn) isClosed() bool {
+func (c *conn) IsClosed() bool {
 	return atomic.LoadUint32(c.once) > 0
 }
 
@@ -563,7 +619,7 @@ func (c *conn) WriteAndWait(namespace, event string, body []byte) Message {
 // }
 
 func (c *conn) write(msg Message) bool {
-	if c.isClosed() {
+	if c.IsClosed() {
 		return false
 	}
 

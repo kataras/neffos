@@ -14,11 +14,14 @@ import (
 )
 
 const (
-	endpoint    = "localhost:8080"
-	broadcast   = true
-	verbose     = false
-	maxC        = 0
-	idleTimeout = 10 * time.Second // TODO: deadline exceed is read OR write now, make it to check both read and write operations on Conn -- "IDLE".
+	endpoint  = "localhost:8080"
+	broadcast = false
+	verbose   = false
+	maxC      = 0
+	// TODO: deadline exceed is read OR write now, make it to check both read and write operations on Conn -- "IDLE".
+	idleTimeout = 10 * time.Second
+	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
+	serverHandleNamespaceConnect = false
 )
 
 var totalClients uint64 = 100000 // max depends on the OS, read more below.
@@ -129,6 +132,11 @@ func main() {
 	srv.OnConnect = func(c ws.Conn) error {
 		started = true
 		atomic.AddUint64(&totalConnected, 1)
+		if serverHandleNamespaceConnect {
+			_, err := c.Connect("")
+			return err
+		}
+
 		return nil
 	}
 
@@ -149,13 +157,10 @@ func main() {
 	log.Fatal(http.ListenAndServe(endpoint, srv))
 }
 
-var totalConnected uint64
-
-func handleConnection(c ws.Conn) {
-
-}
-
-var totalDisconnected uint64
+var (
+	totalConnected    uint64
+	totalDisconnected uint64
+)
 
 func handleDisconnect(c ws.Conn) {
 	newC := atomic.AddUint64(&totalDisconnected, 1)

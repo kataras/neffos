@@ -108,6 +108,8 @@ func (s *Server) start() {
 					continue
 				}
 
+				//	println("send")
+
 				if c.ID() == msg.from {
 					continue
 				}
@@ -124,7 +126,7 @@ func (s *Server) start() {
 				select {
 				case c.out <- msgBinary:
 				default:
-					close(c.out)
+					// close(c.out)
 					delete(s.connections, c)
 					atomic.AddUint64(&s.count, ^uint64(0))
 					if s.OnDisconnect != nil {

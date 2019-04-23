@@ -44,7 +44,7 @@ type FastWS struct {
 	// CheckOrigin a function that is called right before the handshake,
 	// if returns false then client is not allowed to connect and 403 forbidden is replied.
 	CheckOrigin func(r *http.Request) bool
-	// Timeout specifies the duration for the handshake to complete.
+	// HandshakeTimeout specifies the duration for the handshake to complete.
 	// Defaults to no timeout.
 	HandshakeTimeout time.Duration
 

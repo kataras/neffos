@@ -22,17 +22,13 @@ var (
 )
 
 const (
-	broadcast = true
+	broadcast = false
 	verbose   = false
+	// max depends on the OS.
+	totalClients = 100000
+	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
+	clientHandleNamespaceConnect = true
 )
-
-var totalClients = 100000 // max depends on the OS.
-
-// func init() {
-// 	if broadcast {
-// 		totalClients = 14000
-// 	}
-// }
 
 var connectionFailures uint64
 
@@ -190,7 +186,17 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 
 	// defer client.Close()
 
-	c, err := client.Connect("")
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
+	defer cancel()
+
+	var c ws.NSConn
+
+	if clientHandleNamespaceConnect {
+		c, err = client.Connect("")
+	} else {
+		c, err = client.WaitServerConnect(ctx, "")
+	}
+
 	if err != nil {
 		if verbose {
 			log.Println(err)
@@ -198,11 +204,21 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		return
 	}
 
+	if c.ID() == "" {
+		panic("CLIENT'S CONNECTION ID IS EMPTY.\nCONNECT SHOULD BLOCK UNTIL ID IS FILLED(ACK) AND UNTIL SERVER'S CONFIRMATION TO NAMESPACE CONNECTION")
+	}
+
 	r := ioutil.NopCloser(bytes.NewBuffer(testdata))
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		if text := scanner.Bytes(); len(text) > 1 {
-			c.Emit("chat", text)
+			ok := c.Emit("chat", text)
+			if !ok {
+				if verbose {
+					log.Printf("Client event cannot emit. Connection probably closed before starting to write actual data to the server.")
+				}
+				return
+			}
 		}
 	}
 

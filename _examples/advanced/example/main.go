@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	endpoint  = "localhost:8080"
+	endpoint  = "localhost:9090"
 	namespace = "default"
 	timeout   = 8 * time.Second
 )
@@ -62,6 +62,10 @@ var handler = ws.WithTimeout{
 
 				if err == nil {
 					log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
+				}
+
+				if c.IsClient() {
+					os.Exit(0)
 				}
 
 				return err
