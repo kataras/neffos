@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<body||error_message>
+type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<isNoOp(0-1)>;<body||error_message>
 	Namespace string
 	Event     string
 	Body      []byte

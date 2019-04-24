@@ -117,7 +117,7 @@ func server() {
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
-		c.Connect(namespace) // auto-connect to a specific namespace.
+		c.Connect(nil, namespace) // auto-connect to a specific namespace.
 		// c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
 		// println("client connected")
 		return nil
@@ -152,7 +152,7 @@ func server() {
 			// })
 			srv.Do(func(c ws.Conn) {
 				// c.Close()
-				c.DisconnectFrom(namespace)
+				c.DisconnectFrom(nil, namespace)
 			})
 		} else {
 			srv.Do(func(c ws.Conn) {
@@ -177,12 +177,10 @@ func client() {
 	//	time.Sleep(6 * time.Second)
 
 	// time.Sleep(1 * time.Second)
-	connectNamespaceTimeout, cancel2 := context.WithTimeout(context.Background(), timeout/2)
-	defer cancel2()
+	// connectNamespaceTimeout, cancel2 := context.WithTimeout(context.Background(), timeout/2)
+	// defer cancel2()
 
-	// not empty context if we want to wait from server-side to force-connect this connection to that namespace,
-	// otherwise just pass nil as its first argument.
-	c, err := client.WaitServerConnect(connectNamespaceTimeout, namespace)
+	c, err := client.WaitServerConnect(nil, namespace)
 	if err != nil {
 		panic(err)
 	}
@@ -199,7 +197,7 @@ func client() {
 		text := scanner.Bytes()
 
 		if bytes.Equal(text, []byte("exit")) {
-			if err := c.Disconnect(); err != nil {
+			if err := c.Disconnect(nil); err != nil {
 				// log.Printf("from server: %v", err)
 			}
 			continue

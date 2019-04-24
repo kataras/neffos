@@ -1,5 +1,9 @@
 package ws
 
+import (
+	"context"
+)
+
 type nsConn struct {
 	*conn
 	namespace string
@@ -10,12 +14,12 @@ func (c *nsConn) Emit(event string, body []byte) bool {
 	return c.conn.Write(c.namespace, event, body)
 }
 
-func (c *nsConn) Ask(event string, body []byte) Message {
-	return c.conn.WriteAndWait(c.namespace, event, body)
+func (c *nsConn) Ask(ctx context.Context, event string, body []byte) Message {
+	return c.conn.WriteAndWait(ctx, c.namespace, event, body)
 }
 
-func (c *nsConn) Disconnect() error {
-	return c.conn.DisconnectFrom(c.namespace)
+func (c *nsConn) Disconnect(ctx context.Context) error {
+	return c.conn.DisconnectFrom(ctx, c.namespace)
 }
 
 func newNSConn(c *conn, namespace string, events Events) *nsConn {
@@ -42,6 +46,6 @@ func (c *nsConns) Emit(event string, body []byte) bool {
 
 func (c *nsConns) Disconnect() {
 	for _, s := range c.conns {
-		s.Disconnect()
+		s.Disconnect(nil)
 	}
 }

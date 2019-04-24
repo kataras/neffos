@@ -236,6 +236,7 @@ func (c *Conn) Write(b []byte) (int, error) {
 	}
 
 	if c.Writer != nil {
+		// Note if available buffer is smaller than len(b) then it will write through all.
 		n, err := c.Writer.Write(b)
 		if err != nil {
 			return 0, err

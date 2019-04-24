@@ -34,18 +34,14 @@ func TestEmitWithCallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := client.Connect(namespace)
+	c, err := client.Connect(nil, namespace)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 
 	for i := 1; i <= 5; i++ {
-		msg := c.Ask(pingEvent, nil)
-		if msg.wait != uint64(i) {
-			t.Fatalf("[%d] msg.wait should be %d but got %d", i, i, msg.wait)
-		}
-
+		msg := c.Ask(nil, pingEvent, nil)
 		if msg.Namespace != namespace {
 			t.Fatalf("[%d] expected namespace to be %s but got %s instead", i, namespace, msg.Namespace)
 		}
@@ -59,9 +55,10 @@ func TestEmitWithCallback(t *testing.T) {
 		}
 	}
 
-	msg := c.Ask(pingEvent, nil)
-	if msg.wait != 1 {
-		t.Fatalf("msg.wait should is always be one after all received but got %d", msg.wait)
+	before := time.Now().Unix()
+	msg := c.Ask(nil, pingEvent, nil)
+	if msg.wait <= uint64(before) {
+		t.Fatalf("msg.wait should is always be the current time in unix (and *2 on client) after all received but got %d", msg.wait)
 	}
 
 	if msg.Namespace != namespace {

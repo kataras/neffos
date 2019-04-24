@@ -220,6 +220,7 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 
 	underline.WriteTimeout = s.writeTimeout
 	underline.ReadTimeout = s.readTimeout
+	underline.Flush = false
 
 	c := newConn(underline, s.namespaces)
 	c.server = s

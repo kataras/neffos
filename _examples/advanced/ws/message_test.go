@@ -8,8 +8,6 @@ import (
 )
 
 func TestMessageSerialization(t *testing.T) {
-	resetCounter()
-
 	var tests = []struct {
 		msg        Message // in
 		serialized []byte  // out
@@ -19,7 +17,7 @@ func TestMessageSerialization(t *testing.T) {
 				Namespace: "default",
 				isConnect: true,
 			},
-			serialized: []byte("0;default;;0;1;0;"),
+			serialized: []byte("0;default;;0;1;0;0;"),
 		},
 		{ // 1
 			msg: Message{
@@ -27,14 +25,14 @@ func TestMessageSerialization(t *testing.T) {
 				Body:      []byte("some id"),
 				isConnect: true,
 			},
-			serialized: []byte("0;default;;0;1;0;some id"),
+			serialized: []byte("0;default;;0;1;0;0;some id"),
 		},
 		{ // 2
 			msg: Message{
 				Namespace:    "default",
 				isDisconnect: true,
 			},
-			serialized: []byte("0;default;;0;0;1;"),
+			serialized: []byte("0;default;;0;0;1;0;"),
 		},
 		{ // 3
 			msg: Message{
@@ -42,7 +40,7 @@ func TestMessageSerialization(t *testing.T) {
 				Event:     "chat",
 				Body:      []byte("text"),
 			},
-			serialized: []byte("0;default;chat;0;0;0;text"),
+			serialized: []byte("0;default;chat;0;0;0;0;text"),
 		},
 		{ // 4
 			msg: Message{
@@ -51,7 +49,7 @@ func TestMessageSerialization(t *testing.T) {
 				Err:       fmt.Errorf("error message"),
 				isError:   true,
 			},
-			serialized: []byte("0;default;chat;1;0;0;error message"),
+			serialized: []byte("0;default;chat;1;0;0;0;error message"),
 		},
 		{ // 5
 			msg: Message{
@@ -59,7 +57,7 @@ func TestMessageSerialization(t *testing.T) {
 				Event:     "chat",
 				Body:      []byte("a body with many ; delimeters; like that;"),
 			},
-			serialized: []byte("0;default;chat;0;0;0;a body with many ; delimeters; like that;"),
+			serialized: []byte("0;default;chat;0;0;0;0;a body with many ; delimeters; like that;"),
 		},
 		{ // 6
 			msg: Message{
@@ -68,16 +66,17 @@ func TestMessageSerialization(t *testing.T) {
 				Err:       fmt.Errorf("an error message with many ; delimeters; like that;"),
 				isError:   true,
 			},
-			serialized: []byte("0;;chat;1;0;0;an error message with many ; delimeters; like that;"),
+			serialized: []byte("0;;chat;1;0;0;0;an error message with many ; delimeters; like that;"),
 		},
 		{ // 7
 			msg: Message{
 				Namespace: "default",
 				Event:     "chat",
 				Body:      []byte("body"),
-				wait:      incrementCounter(),
+				wait:      1,
+				isNoOp:    true,
 			},
-			serialized: []byte("1;default;chat;0;0;0;body"),
+			serialized: []byte("1;default;chat;0;0;0;1;body"),
 		},
 	}
 

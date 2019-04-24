@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -87,6 +88,7 @@ func main() {
 		}
 
 		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
+			runtime.GC()
 			time.Sleep(relaxCPU)
 			lastRelaxCPU = time.Now()
 		}
@@ -186,21 +188,21 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 
 	// defer client.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
-	defer cancel()
+	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
+	// defer cancel()
 
 	var c ws.NSConn
 
 	if clientHandleNamespaceConnect {
-		c, err = client.Connect("")
+		c, err = client.Connect(nil, "")
 	} else {
-		c, err = client.WaitServerConnect(ctx, "")
+		c, err = client.WaitServerConnect(nil, "")
 	}
 
 	if err != nil {
-		if verbose {
-			log.Println(err)
-		}
+		// if verbose {
+		log.Println(err)
+		//	}
 		return
 	}
 

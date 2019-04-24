@@ -133,7 +133,7 @@ func main() {
 		started = true
 		atomic.AddUint64(&totalConnected, 1)
 		if serverHandleNamespaceConnect {
-			_, err := c.Connect("")
+			_, err := c.Connect(nil, "")
 			return err
 		}
 

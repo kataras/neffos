@@ -91,7 +91,7 @@ func handleMessageEvent(c *conn, msg Message) (bool, error) {
 			c.write(msg)
 		}
 
-		println("delete " + msg.Namespace)
+		// println("delete " + msg.Namespace)
 		c.deleteNSConn(msg.Namespace, true)
 	}
 	return true, err

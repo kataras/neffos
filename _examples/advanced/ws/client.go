@@ -29,8 +29,8 @@ func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (NSCon
 	return c.conn.WaitConnect(ctx, namespace)
 }
 
-func (c *Client) Connect(namespace string) (NSConn, error) {
-	return c.conn.Connect(namespace)
+func (c *Client) Connect(ctx context.Context, namespace string) (NSConn, error) {
+	return c.conn.Connect(ctx, namespace)
 }
 
 // Dial establish a new websocket client.

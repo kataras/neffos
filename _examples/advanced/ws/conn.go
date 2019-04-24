@@ -15,12 +15,12 @@ type Conn interface {
 	UnderlyingConn() *fastws.Conn
 	ID() string
 	Write(namespace string, event string, body []byte) bool
-	WriteAndWait(namespace, event string, body []byte) Message
+	WriteAndWait(ctx context.Context, namespace, event string, body []byte) Message
 	String() string
-	Connect(namespace string) (NSConn, error)
+	Connect(ctx context.Context, namespace string) (NSConn, error)
 	WaitConnect(ctx context.Context, namespace string) (NSConn, error)
-	DisconnectFrom(namespace string) error
-	DisconnectFromAll()
+	DisconnectFrom(ctx context.Context, namespace string) error
+	DisconnectFromAll(ctx context.Context)
 
 	IsClient() bool
 	Server() *Server
@@ -32,8 +32,8 @@ type Conn interface {
 type NSConn interface {
 	Conn
 	Emit(event string, body []byte) bool
-	Ask(event string, body []byte) Message
-	Disconnect() error
+	Ask(ctx context.Context, event string, body []byte) Message
+	Disconnect(ctx context.Context) error
 }
 
 type conn struct {
@@ -42,6 +42,7 @@ type conn struct {
 
 	connectedNamespaces map[string]*nsConn
 	mu                  sync.RWMutex
+	// connectedNamespacesWaiters map[string]chan struct{}
 
 	closeCh chan struct{}
 	out     chan []byte
@@ -61,12 +62,13 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 		underline:           underline,
 		namespaces:          namespaces,
 		connectedNamespaces: make(map[string]*nsConn),
-		closeCh:             make(chan struct{}),
-		out:                 make(chan []byte, 0),
-		in:                  make(chan []byte, 0),
-		once:                new(uint32),
-		acknowledged:        new(uint32),
-		waitingMessages:     make(map[uint64]chan Message),
+		// connectedNamespacesWaiters: make(map[string]chan struct{}),
+		closeCh:         make(chan struct{}),
+		out:             make(chan []byte, 256),
+		in:              make(chan []byte, 256),
+		once:            new(uint32),
+		acknowledged:    new(uint32),
+		waitingMessages: make(map[uint64]chan Message),
 		//	broadcastChannel:    make(chan Message), // not used in client-side.
 	}
 
@@ -110,10 +112,19 @@ func (c *conn) startWriter() {
 				return
 			}
 
+			// No need: underline writer checks by itself if len(b) > available size buffer
+			// and writes all if needed.
+			// if n < len(b) {
+			// 	rem := b[n:]
+			//  [...]
+			// }
+
 			// for i, n := 0, len(c.out); i < n; i++ {
 			// 	c.underline.Write(newline)
 			// 	c.underline.Write(<-c.out)
 			// }
+
+			c.underline.Writer.Flush()
 		}
 	}
 }
@@ -172,13 +183,14 @@ func (c *conn) startReader() {
 		c.out <- ackBinary
 	}
 
-	queue := make(map[*Message]struct{})
+	queue := make([]*Message, 0)
 	handleQueue := func() {
-		for msg := range queue {
+		for _, msg := range queue {
 			// fmt.Printf("queue: handle %s/%s\n", msg.Namespace, msg.Event)
 			c.handleMessage(*msg)
-			delete(queue, msg)
 		}
+
+		queue = nil
 	}
 
 readLoop:
@@ -195,8 +207,8 @@ readLoop:
 			if !ok {
 				return
 			}
-			//	timer.Reset(5 * time.Second)
 
+			//	fmt.Printf("%s\n\n", string(b))
 			if bytes.HasPrefix(b, ackBinary) {
 				if c.IsClient() {
 					id := string(b[len(ackBinary):])
@@ -242,7 +254,7 @@ readLoop:
 
 			if !c.isAcknowledged() {
 				// fmt.Printf("queue: add %s/%s\n%#+v\n", msg.Namespace, msg.Event, msg)
-				queue[&msg] = struct{}{}
+				queue = append(queue, &msg)
 				continue
 			}
 
@@ -250,6 +262,14 @@ readLoop:
 			if !c.handleMessage(msg) {
 				return
 			}
+
+			// if msg.isConnect {
+			// 	if ch, ok := c.connectedNamespacesWaiters[msg.Namespace]; ok {
+			// 		close(ch)
+			// 		delete(c.connectedNamespacesWaiters, msg.Namespace)
+			// 	}
+			// }
+
 			// if msg.wait > 0 {
 			// 	if ch, ok := c.waitingMessages[msg.wait]; ok {
 			// 		// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
@@ -336,11 +356,9 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 	delete(c.connectedNamespaces, namespace)
 }
 
-var askTimeout = 5 * time.Second
-
-func (c *conn) ask(msg Message) (Message, bool) {
+func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	if c.IsClosed() {
-		return msg, false
+		return msg, CloseError{Code: -1, error: ErrWrite}
 	}
 
 	// // block until ACK-ed.
@@ -356,21 +374,23 @@ func (c *conn) ask(msg Message) (Message, bool) {
 	// fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
 	msg.wait = waitID
 	if !c.write(msg) {
-		return Message{}, false
+		return Message{}, ErrWrite
 	}
 
 	ch := make(chan Message)
 	c.mu.Lock()
 	c.waitingMessages[msg.wait] = ch
 	c.mu.Unlock()
-	timer := time.NewTimer(askTimeout)
-	defer timer.Stop()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	select {
-	case <-timer.C:
-		//	fmt.Printf("[%s] isClosed=%v | timeout for message: %#+v\n", c.ID(), c.isClosed(), msg)
+	case <-ctx.Done():
+		// fmt.Printf("[%s] isClosed=%v | timeout for message: %#+v\n", c.ID(), c.IsClosed(), msg)
 		c.Close()
-		return Message{}, false
+		return Message{}, ctx.Err()
 		// if msg.isConnect || msg.isDisconnect || c.isClosed() {
 		// 	close(ch)
 		// 	c.Close()
@@ -378,11 +398,11 @@ func (c *conn) ask(msg Message) (Message, bool) {
 		// }
 
 		// return Message{}, false
-	case msg, ok := <-ch:
+	case msg := <-ch:
 		c.mu.Lock()
 		delete(c.waitingMessages, msg.wait)
 		c.mu.Unlock()
-		return msg, ok
+		return msg, nil
 	}
 
 	// msg, ok := <-ch
@@ -395,7 +415,7 @@ func (c *conn) ask(msg Message) (Message, bool) {
 }
 
 // DisconnectFrom gracefully disconnects from a namespace.
-func (c *conn) DisconnectFrom(namespace string) error {
+func (c *conn) DisconnectFrom(ctx context.Context, namespace string) error {
 	c.mu.RLock()
 	ns, ok := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
@@ -405,7 +425,7 @@ func (c *conn) DisconnectFrom(namespace string) error {
 	}
 
 	disconnectMsg := Message{Namespace: namespace, Event: OnNamespaceDisconnect, isDisconnect: true}
-	err := c.writeDisconnect(disconnectMsg, true)
+	err := c.writeDisconnect(ctx, disconnectMsg, true)
 	if err != nil {
 		return err
 	}
@@ -413,13 +433,13 @@ func (c *conn) DisconnectFrom(namespace string) error {
 	return ns.events.fireEvent(ns, disconnectMsg)
 }
 
-func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
+func (c *conn) writeDisconnect(ctx context.Context, disconnectMsg Message, lock bool) error {
 	if c.IsClient() {
 		// println("client: before ask")
-		msg, ok := c.ask(disconnectMsg)
+		msg, err := c.ask(ctx, disconnectMsg)
 		// println("client: after ask")
-		if !ok {
-			return ErrWrite
+		if err != nil {
+			return err
 		}
 
 		if !msg.isError {
@@ -439,48 +459,68 @@ func (c *conn) writeDisconnect(disconnectMsg Message, lock bool) error {
 
 var ErrWrite = fmt.Errorf("write closed")
 
-const defaultWaitServerOrClientConnectTimeout = 3 * time.Second
-const waitConnectDuruation = 100 * time.Millisecond
+// const defaultWaitServerOrClientConnectTimeout = 8 * time.Second
 
+// const waitConnectDuruation = 100 * time.Millisecond
+
+// Nil context means try without timeout, wait until it connects to the specific namespace.
 func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, defaultWaitServerOrClientConnectTimeout)
-		defer cancel()
-	}
-
-	timer := time.NewTimer(waitConnectDuruation)
-	defer timer.Stop()
-
 	var (
 		ns    NSConn
 		found bool
 	)
+	// c.mu.RLock()
+	// ns, found := c.connectedNamespaces[namespace]
+	// c.mu.RUnlock()
+	// if found {
+	// 	return ns, nil
+	// }
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+	// 	var cancel context.CancelFunc
+	// 	ctx, cancel = context.WithTimeout(ctx, defaultWaitServerOrClientConnectTimeout)
+	// 	defer cancel()
+	// }
 
 	for {
 		select {
-		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 			if !found {
 				c.mu.RLock()
 				ns, found = c.connectedNamespaces[namespace]
 				c.mu.RUnlock()
-			} else {
-				if c.isAcknowledged() {
-					return ns, nil
-				}
 			}
-			timer.Reset(waitConnectDuruation)
-		case <-ctx.Done():
-			return nil, context.DeadlineExceeded
+
+			if found && c.isAcknowledged() {
+				return ns, nil
+			}
 		}
 	}
+
+	// waiter := make(chan struct{})
+	// c.connectedNamespacesWaiters[namespace] = waiter
+	// for {
+	// 	select {
+	// 	case <-ctx.Done():
+	// 		return nil, ctx.Err()
+	// 	case <-waiter:
+	// 		ns, found = c.connectedNamespaces[namespace]
+	// 		if found {
+	// 			return ns, nil
+	// 		}
+	// 	}
+	// }
+
+	return nil, ErrBadNamespace
 }
 
-func (c *conn) Connect(namespace string) (NSConn, error) {
+func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
 	c.mu.RLock()
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	c.mu.RUnlock()
@@ -493,14 +533,14 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 		return nil, ErrBadNamespace
 	}
 
-	msg, ok := c.ask(Message{
+	msg, err := c.ask(ctx, Message{
 		Namespace: namespace,
 		Event:     OnNamespaceConnect,
 		isConnect: true,
 	})
 
-	if !ok {
-		return nil, ErrWrite
+	if err != nil {
+		return nil, err
 	}
 
 	if msg.isError {
@@ -526,7 +566,7 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 		isConnect: true,
 	}
 
-	err := events.fireEvent(ns, connectMessage)
+	err = events.fireEvent(ns, connectMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -540,12 +580,12 @@ func (c *conn) Connect(namespace string) (NSConn, error) {
 }
 
 // DisconnectFromAll gracefully disconnects from all namespaces.
-func (c *conn) DisconnectFromAll() {
+func (c *conn) DisconnectFromAll(ctx context.Context) {
 	c.mu.Lock()
 	disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
 	for namespace := range c.connectedNamespaces {
 		disconnectMsg.Namespace = namespace
-		c.writeDisconnect(disconnectMsg, false)
+		c.writeDisconnect(ctx, disconnectMsg, false)
 	}
 	c.mu.Unlock()
 }
@@ -593,15 +633,15 @@ func (c *conn) Write(namespace, event string, body []byte) bool {
 	})
 }
 
-func (c *conn) WriteAndWait(namespace, event string, body []byte) Message {
-	response, ok := c.ask(Message{
+func (c *conn) WriteAndWait(ctx context.Context, namespace, event string, body []byte) Message {
+	response, err := c.ask(ctx, Message{
 		Namespace: namespace,
 		Event:     event,
 		Body:      body,
 	})
 
-	if !ok {
-		return Message{Err: ErrWrite, isError: true}
+	if err != nil {
+		return Message{Err: err, isError: true}
 	}
 
 	return response
