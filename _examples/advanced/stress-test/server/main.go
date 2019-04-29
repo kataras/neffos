@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
+	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
 
 	"github.com/kataras/fastws"
 )
@@ -50,7 +52,15 @@ var (
 )
 
 func main() {
-	srv := ws.New(ws.WithTimeout{
+	upgrader := gobwas.DefaultUpgrader
+	if len(os.Args) > 1 {
+		if os.Args[1] == "gorilla" { // go run main.go gorilla
+			upgrader = gorilla.DefaultUpgrader
+			log.Printf("Using Gorilla Upgrader.")
+		}
+	}
+
+	srv := ws.New(upgrader, ws.WithTimeout{
 		ReadTimeout:  40 * time.Second,
 		WriteTimeout: 40 * time.Second,
 		Events: ws.Events{

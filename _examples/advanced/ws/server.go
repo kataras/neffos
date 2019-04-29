@@ -13,7 +13,8 @@ import (
 )
 
 type Server struct {
-	upgrader Upgrader
+	upgrader    Upgrader
+	IDGenerator IDGenerator
 
 	mu         sync.RWMutex
 	NSAcceptor NSAcceptor
@@ -63,8 +64,9 @@ func New(upgrader Upgrader, connHandler connHandler) *Server {
 		actions:      make(chan func(Conn)),
 		broadcast:    make(chan Message, 1),
 		// connections: make(chan *conn, 1),
-		ws:         ws,
-		NSAcceptor: DefaultNSAcceptor,
+		ws:          ws,
+		NSAcceptor:  DefaultNSAcceptor,
+		IDGenerator: DefaultIDGenerator,
 	}
 
 	// s.broadcastCond = sync.NewCond(&s.broadcastMu)
@@ -73,16 +75,6 @@ func New(upgrader Upgrader, connHandler connHandler) *Server {
 	go s.start()
 
 	return s
-}
-
-func (s *Server) SetIDGenerator(gen func(*http.Request) string) {
-	if gen == nil {
-		s.ws.IDGenerator = fastws.DefaultIDGenerator
-	}
-
-	s.ws.IDGenerator = func(c *fastws.Conn) string {
-		return gen(c.Request)
-	}
 }
 
 func (s *Server) start() {
@@ -184,6 +176,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := newConn(socket, s.namespaces)
+	c.id = s.IDGenerator(w, r)
 	c.server = s
 	c.ReadTimeout = s.readTimeout
 	c.WriteTimeout = s.writeTimeout

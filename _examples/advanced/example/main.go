@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
+	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
 )
 
 const (
@@ -100,7 +102,15 @@ func main() {
 
 	switch side {
 	case "server":
-		server()
+		upgrader := gobwas.DefaultUpgrader
+		if len(args) > 1 {
+			method := args[1]
+			if method == "gorilla" {
+				upgrader = gorilla.DefaultUpgrader
+				log.Printf("Using with Gorilla Upgrader.")
+			}
+		}
+		server(upgrader)
 	case "client":
 		client()
 	default:
@@ -108,11 +118,8 @@ func main() {
 	}
 }
 
-func server() {
-	srv := ws.New(handler)
-	// srv.SetIDGenerator(func(r *http.Request) string {
-	// 	return "my-user"
-	// })
+func server(upgrader ws.Upgrader) {
+	srv := ws.New(upgrader, handler)
 
 	srv.OnConnect = func(c ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())

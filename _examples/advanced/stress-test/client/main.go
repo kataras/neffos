@@ -28,7 +28,7 @@ const (
 	verbose   = false
 	// max depends on the OS.
 	totalClients         = 10000
-	maxConcurrentClients = 500
+	maxConcurrentClients = 1500
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
 	clientHandleNamespaceConnect = false
 )

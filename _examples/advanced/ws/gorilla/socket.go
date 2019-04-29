@@ -27,17 +27,23 @@ func (s *Socket) NetConn() net.Conn {
 }
 
 func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
-	if timeout > 0 {
-		s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
-	}
+	for {
+		if timeout > 0 {
+			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
+		}
 
-	opCode, data, err := s.UnderlyingConn.ReadMessage()
-	if err != nil || opCode != gorilla.TextMessage {
-		// if gorilla.IsUnexpectedCloseError(err, gorilla.CloseGoingAway) ...
-		return nil, err
-	}
+		opCode, data, err := s.UnderlyingConn.ReadMessage()
+		if err != nil {
+			return nil, err
+		}
 
-	return data, nil
+		if opCode != gorilla.TextMessage {
+			// if gorilla.IsUnexpectedCloseError(err, gorilla.CloseGoingAway) ...
+			continue
+		}
+
+		return data, err
+	}
 }
 
 func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
