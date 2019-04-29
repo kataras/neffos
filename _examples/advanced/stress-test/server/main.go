@@ -14,17 +14,15 @@ import (
 )
 
 const (
-	endpoint  = "localhost:8080"
+	endpoint  = "localhost:9595"
 	broadcast = false
 	verbose   = false
 	maxC      = 0
-	// TODO: deadline exceed is read OR write now, make it to check both read and write operations on Conn -- "IDLE".
-	idleTimeout = 10 * time.Second
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = false
+	serverHandleNamespaceConnect = true
 )
 
-var totalClients uint64 = 100000 // max depends on the OS, read more below.
+var totalClients uint64 = 10000 // max depends on the OS, read more below.
 // For example for windows:
 //
 // $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -46,11 +44,25 @@ var totalClients uint64 = 100000 // max depends on the OS, read more below.
 // 	}
 // }
 
+var (
+	started                 bool
+	totalNamespaceConnected = new(uint64)
+)
+
 func main() {
 	srv := ws.New(ws.WithTimeout{
-		ReadTimeout:  idleTimeout,
-		WriteTimeout: idleTimeout,
+		ReadTimeout:  40 * time.Second,
+		WriteTimeout: 40 * time.Second,
 		Events: ws.Events{
+			ws.OnNamespaceConnect: func(c ws.NSConn, msg ws.Message) error {
+				if msg.Err != nil {
+					//	if verbose {
+					log.Println(msg.Err)
+					//	}
+				}
+				atomic.AddUint64(totalNamespaceConnected, 1)
+				return nil
+			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
 				if broadcast {
 					c.Server().Broadcast(c, msg)
@@ -63,16 +75,14 @@ func main() {
 		},
 	})
 
-	started := false
-
 	go func() {
 		allowNZero := 0
 
-		dur := 1500 * time.Millisecond
+		dur := 10 * time.Second
 		if totalClients >= 64000 {
 			// if more than 64000 then let's perform those checks every x seconds instead,
 			// either way works.
-			dur = 4 * time.Second
+			dur = 15 * time.Second
 		}
 		t := time.NewTicker(dur)
 		defer func() {
@@ -91,6 +101,7 @@ func main() {
 
 			// if verbose {
 			log.Printf("INFO: Current connections[%d] vs WS counter[%v] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
+			log.Printf("INFO: Current connected to namespace[%d]", atomic.LoadUint64(totalNamespaceConnected))
 			//	}
 
 			// if n > 0 {
@@ -102,14 +113,14 @@ func main() {
 			// }
 
 			if started {
-				if disconnectedN == totalClients && connectedN == totalClients {
+				if disconnectedN == totalClients && connectedN == totalClients && *totalNamespaceConnected == totalClients {
 					if n != 0 {
 						log.Printf("ALL CLIENTS DISCONNECTED BUT %d LEFTOVERS ON CONNECTIONS LIST.", n)
 					} else {
 						log.Println("ALL CLIENTS DISCONNECTED SUCCESSFULLY.")
 					}
 					return
-				} else if n == 0 {
+				} else if n == 0 && *totalNamespaceConnected == totalClients {
 					if allowNZero < 15 {
 						// Allow 0 active connections just ten times.
 						// It is actually a dynamic timeout of 15*the expected total connections variable.
@@ -130,8 +141,11 @@ func main() {
 	}()
 
 	srv.OnConnect = func(c ws.Conn) error {
-		started = true
-		atomic.AddUint64(&totalConnected, 1)
+		n := atomic.AddUint64(&totalConnected, 1)
+		if n == 1 {
+			started = true
+		}
+
 		if serverHandleNamespaceConnect {
 			_, err := c.Connect(nil, "")
 			return err
@@ -161,6 +175,10 @@ var (
 	totalConnected    uint64
 	totalDisconnected uint64
 )
+
+func incrConnect() {
+
+}
 
 func handleDisconnect(c ws.Conn) {
 	newC := atomic.AddUint64(&totalDisconnected, 1)

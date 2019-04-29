@@ -1,10 +1,14 @@
-package ws
+package ws_test
 
 import (
 	"bytes"
 	"net/http"
 	"testing"
 	"time"
+
+	gorillaWs "github.com/gorilla/websocket"
+	"github.com/kataras/fastws/_examples/advanced/ws"
+	gorilla "github.com/kataras/fastws/_examples/advanced/ws/gorilla"
 )
 
 func TestEmitWithCallback(t *testing.T) {
@@ -14,10 +18,15 @@ func TestEmitWithCallback(t *testing.T) {
 		pongMessage = []byte("PONG MESSAGE")
 	)
 
-	server := New(Namespaces{namespace: Events{
-		pingEvent: func(c NSConn, msg Message) error {
+	// server := ws.New(gobwas.Upgrader(gobwasWs.HTTPUpgrader{}), ws.Namespaces{namespace: ws.Events{
+	// 	pingEvent: func(c ws.NSConn, msg ws.Message) error {
+	// 		// c.Emit("event", pongMessage)
+	// 		return ws.Reply(pongMessage) // changes only body; ns,event remains.
+	// 	}}})
+	server := ws.New(gorilla.Upgrader(gorillaWs.Upgrader{}), ws.Namespaces{namespace: ws.Events{
+		pingEvent: func(c ws.NSConn, msg ws.Message) error {
 			// c.Emit("event", pongMessage)
-			return Reply(pongMessage) // changes only body; ns,event remains.
+			return ws.Reply(pongMessage) // changes only body; ns,event remains.
 		}}})
 	defer server.Close()
 
@@ -29,7 +38,7 @@ func TestEmitWithCallback(t *testing.T) {
 	go httpServer.ListenAndServe()
 	time.Sleep(200 * time.Millisecond)
 
-	client, err := Dial(nil, "ws://localhost:8080", Namespaces{namespace: Events{}})
+	client, err := ws.Dial(nil, "ws://localhost:8080", ws.Namespaces{namespace: ws.Events{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,11 +64,7 @@ func TestEmitWithCallback(t *testing.T) {
 		}
 	}
 
-	before := time.Now().Unix()
 	msg := c.Ask(nil, pingEvent, nil)
-	if msg.wait <= uint64(before) {
-		t.Fatalf("msg.wait should is always be the current time in unix (and *2 on client) after all received but got %d", msg.wait)
-	}
 
 	if msg.Namespace != namespace {
 		t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)

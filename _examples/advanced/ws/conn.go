@@ -4,15 +4,43 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/kataras/fastws"
+	"github.com/gobwas/ws/wsutil"
+	"github.com/iris-contrib/go.uuid"
 )
 
+type Socket interface {
+	NetConn() net.Conn
+	ReadText(timeout time.Duration) (body []byte, err error)
+	WriteText(body []byte, timeout time.Duration) error
+}
+
+type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
+
+// IDGenerator is the type of function that it is used
+// to generate unique identifiers for new connections.
+//
+// See `FastWS.IDGenerator`.
+type IDGenerator func(w http.ResponseWriter, r *http.Request) string
+
+// DefaultIDGenerator returns a random unique for a new connection.
+var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
+	id, err := uuid.NewV4()
+	if err != nil {
+		return strconv.FormatInt(time.Now().Unix(), 10)
+	}
+	return id.String()
+}
+
 type Conn interface {
-	UnderlyingConn() *fastws.Conn
+	NetConn() net.Conn
+	Socket() Socket
 	ID() string
 	Write(namespace string, event string, body []byte) bool
 	WriteAndWait(ctx context.Context, namespace, event string, body []byte) Message
@@ -37,35 +65,47 @@ type NSConn interface {
 }
 
 type conn struct {
-	underline  *fastws.Conn
+	id      string
+	netConn net.Conn
+
+	underline  Socket
 	namespaces Namespaces
 
 	connectedNamespaces map[string]*nsConn
 	mu                  sync.RWMutex
 	// connectedNamespacesWaiters map[string]chan struct{}
 
-	closeCh chan struct{}
-	out     chan []byte
+	// closeCh chan struct{}
+	// out     chan []byte
 	// broadcastChannel chan Message // server-side only.
-	in   chan []byte
+	// in   chan []byte
 	once *uint32
 
 	waitingMessages map[uint64]chan Message // messages that this connection waits for a reply.
+	writeMu         sync.Mutex
 
 	server *Server
 
 	acknowledged *uint32
+
+	// ReadTimeout time allowed to read a message from the connection, can be altered before `Read` and `Decode`.
+	// It is available for both server and client sides at `Server#OnConnected` and after `Dial`.
+	// Defaults to no timeout.
+	ReadTimeout time.Duration
+	// WriteTimeout time allowed to write a message to the connection, can be altered before `Write`, `WriteWithCode` and `Encoder`.
+	// Defaults to no timeout.
+	WriteTimeout time.Duration
 }
 
-func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
+func newConn(underline Socket, namespaces Namespaces) *conn {
 	c := &conn{
 		underline:           underline,
 		namespaces:          namespaces,
 		connectedNamespaces: make(map[string]*nsConn),
 		// connectedNamespacesWaiters: make(map[string]chan struct{}),
-		closeCh:         make(chan struct{}),
-		out:             make(chan []byte, 256),
-		in:              make(chan []byte, 256),
+		// closeCh:         make(chan struct{}),
+		// out:             make(chan []byte, 256),
+		// in:              make(chan []byte, 256),
 		once:            new(uint32),
 		acknowledged:    new(uint32),
 		waitingMessages: make(map[uint64]chan Message),
@@ -73,6 +113,10 @@ func newConn(underline *fastws.Conn, namespaces Namespaces) *conn {
 	}
 
 	return c
+}
+
+func (c *conn) NetConn() net.Conn {
+	return c.netConn
 }
 
 func (c *conn) IsClient() bool {
@@ -92,41 +136,62 @@ var (
 )
 
 func (c *conn) startWriter() {
-	if c.IsClosed() {
-		return
-	}
+	// if c.IsClosed() {
+	// 	return
+	// }
 
-	defer c.Close()
+	// defer c.Close()
 
-	for {
-		select {
-		case <-c.closeCh:
-			return
-		case b, ok := <-c.out:
-			if !ok {
-				return
-			}
-			_, err := c.underline.Write(b)
-			if err != nil {
-				c.underline.HandleError(err)
-				return
-			}
+	// for b := range c.out {
+	// 	_, err := c.underline.Write(b)
+	// 	if err != nil {
+	// 		c.underline.HandleError(err)
+	// 		return
+	// 	}
 
-			// No need: underline writer checks by itself if len(b) > available size buffer
-			// and writes all if needed.
-			// if n < len(b) {
-			// 	rem := b[n:]
-			//  [...]
-			// }
+	// 	// No need: underline writer checks by itself if len(b) > available size buffer
+	// 	// and writes all if needed.
+	// 	// if n < len(b) {
+	// 	// 	rem := b[n:]
+	// 	//  [...]
+	// 	// }
 
-			// for i, n := 0, len(c.out); i < n; i++ {
-			// 	c.underline.Write(newline)
-			// 	c.underline.Write(<-c.out)
-			// }
+	// 	// for i, n := 0, len(c.out); i < n; i++ {
+	// 	// 	c.underline.Write(newline)
+	// 	// 	c.underline.Write(<-c.out)
+	// 	// }
 
-			c.underline.Writer.Flush()
-		}
-	}
+	// 	c.underline.Writer.Flush()
+	// }
+	// for {
+	// 	select {
+	// 	case <-c.closeCh:
+	// 		return
+	// 	case b, ok := <-c.out:
+	// 		if !ok {
+	// 			return
+	// 		}
+	// 		_, err := c.underline.Write(b)
+	// 		if err != nil {
+	// 			c.underline.HandleError(err)
+	// 			return
+	// 		}
+
+	// 		// No need: underline writer checks by itself if len(b) > available size buffer
+	// 		// and writes all if needed.
+	// 		// if n < len(b) {
+	// 		// 	rem := b[n:]
+	// 		//  [...]
+	// 		// }
+
+	// 		// for i, n := 0, len(c.out); i < n; i++ {
+	// 		// 	c.underline.Write(newline)
+	// 		// 	c.underline.Write(<-c.out)
+	// 		// }
+
+	// 		c.underline.Writer.Flush()
+	// 	}
+	// }
 }
 
 type CloseError struct {
@@ -147,8 +212,8 @@ func isCloseError(err error) bool {
 	return ok
 }
 
-var ackBinary = []byte("ACK")
-var ackOKBinary = []byte("ACK_OK")
+var ackBinary = []byte("ack")
+var ackOKBinary = []byte("ack_ok")
 
 func (c *conn) isAcknowledged() bool {
 	return atomic.LoadUint32(c.acknowledged) > 0
@@ -161,28 +226,6 @@ func (c *conn) startReader() {
 
 	defer c.Close()
 
-	go func() {
-		defer c.Close()
-
-		for {
-			select {
-			case <-c.closeCh:
-				return
-			default:
-				b, err := c.underline.ReadBinary()
-				if err != nil {
-					return
-				}
-
-				c.in <- b
-			}
-		}
-	}()
-
-	if c.IsClient() {
-		c.out <- ackBinary
-	}
-
 	queue := make([]*Message, 0)
 	handleQueue := func() {
 		for _, msg := range queue {
@@ -193,109 +236,182 @@ func (c *conn) startReader() {
 		queue = nil
 	}
 
+	// if c.IsClient() {
+	// 	// c.out <- ackBinary
+	// 	c.underline.Write(ackBinary)
+	// }
+
 readLoop:
 	for {
-		if c.IsClosed() {
-			return
-		}
+		// if c.ReadTimeout > 0 {
+		// 	c.underline.NetConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
+		// }
 
-		select {
-		case <-c.closeCh:
-			// println("closed channel received.")
-			return
-		case b, ok := <-c.in:
-			if !ok {
-				return
+		// header, err := ws.ReadHeader(c.underline.NetConn)
+		// if err != nil {
+		// 	return
+		// }
+
+		// if header.Length > 300 {
+		// 	println("TOO BIG HEADER for our app")
+		// 	if header.Length >= ws.MaxHeaderSize {
+		// 		println("ALSO TOO BIG for the websocket entirely")
+		// 	}
+
+		// 	print("masked=")
+		// 	println(header.Masked)
+		// 	print("length=")
+		// 	println(header.Length)
+		// 	var b []byte
+		// 	if header.Length > 10000 {
+		// 		b = make([]byte, 300)
+		// 	} else {
+		// 		b = make([]byte, header.Length)
+		// 	}
+		// 	print("start reading the first ")
+		// 	println(cap(b))
+
+		// 	_, err = io.ReadFull(c.underline.NetConn, b)
+		// 	if header.Masked {
+		// 		ws.Cipher(b, header.Mask, 0)
+		// 	}
+
+		// 	fmt.Printf("after mask: %s\n", string(b))
+
+		// 	return
+		// }
+
+		// // 	println(header.Length)
+
+		// b := make([]byte, header.Length)
+		// n, err := io.ReadFull(c.underline.NetConn, b)
+		// if err != nil && int64(n) != header.Length {
+		// 	fmt.Printf("[%d/%d] read from conn: %v\n", n, header.Length, err)
+		// 	return
+		// }
+
+		// if header.Masked {
+		// 	ws.Cipher(b, header.Mask, 0)
+		// }
+
+		// fmt.Printf("Header size[%d]\nData: %s\n", header.Length, string(b))
+
+		// b := make([]byte, 300)
+
+		// _, err := io.ReadFull(c.underline, b)
+		// if err != nil {
+		// 	if err != io.EOF && err != io.ErrUnexpectedEOF {
+		// 		println(err.Error())
+		// 		return
+		// 	}
+		// 	if !c.IsClient() {
+		// 		ws.Cipher(b, nil, 0)
+		// 	}
+
+		// 	ws.Header
+
+		// }
+
+		b, err := c.underline.ReadText(c.ReadTimeout)
+		if err != nil {
+			if err == wsutil.ErrInvalidUTF8 {
+				println("err on read: " + err.Error())
 			}
 
-			//	fmt.Printf("%s\n\n", string(b))
-			if bytes.HasPrefix(b, ackBinary) {
-				if c.IsClient() {
-					id := string(b[len(ackBinary):])
-					c.underline.ID = id
-					atomic.StoreUint32(c.acknowledged, 1)
-					c.out <- ackOKBinary
-					handleQueue()
+			return
+		}
+		// fmt.Printf("%s\n\n", string(b))
 
-					// println("got ID " + id)
-				} else {
-					if len(b) == len(ackBinary) {
-						c.out <- append(ackBinary, []byte(c.underline.ID)...)
-						// println("sent ID: " + c.underline.ID)
-					} else {
-						// its ackOK, answer from client when ID received and it's ready for write/read.
-						atomic.StoreUint32(c.acknowledged, 1)
-						// println("ACK-ed")
-						handleQueue()
-					}
-				}
+		if bytes.HasPrefix(b, ackBinary) {
+			if c.IsClient() {
+				id := string(b[len(ackBinary):])
+				c.id = id
+				atomic.StoreUint32(c.acknowledged, 1)
+				// c.out <- ackOKBinary
+				c.underline.WriteText(ackOKBinary, c.WriteTimeout)
+				handleQueue()
 
-				continue readLoop
+				// println("got ID " + id)
 			} else {
-				// TODO FIX SOMETIMES CONNECT MESSAGE IS BEFORE ID.
-				// if c.IsClient() {
-				// 	if c.underline.ID == "" {
-				// 		println("empty ID")
-				// 		b, err := c.underline.ReadBinary()
-				// 		if err != nil {
-				// 			return
-				// 		}
-				// 		c.in <- b
-				// 		continue readLoop
-				// 	}
-				// }
+				if len(b) == len(ackBinary) {
+					// c.out <- append(ackBinary, []byte(c.id)...)
+					c.underline.WriteText(append(ackBinary, []byte(c.id)...), c.WriteTimeout)
+					// println("sent ID: " + c.id)
+				} else {
+					// its ackOK, answer from client when ID received and it's ready for write/read.
+					atomic.StoreUint32(c.acknowledged, 1)
+					// println("ACK-ed")
+					handleQueue()
+				}
 			}
 
-			msg := deserializeMessage(nil, b)
-			if msg.isInvalid {
-				// fmt.Printf("%s([%d]) is invalid payload\n", b, len(b))
-				continue // or return (close)?
-			}
-
-			if !c.isAcknowledged() {
-				// fmt.Printf("queue: add %s/%s\n%#+v\n", msg.Namespace, msg.Event, msg)
-				queue = append(queue, &msg)
-				continue
-			}
-
-			//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
-			if !c.handleMessage(msg) {
-				return
-			}
-
-			// if msg.isConnect {
-			// 	if ch, ok := c.connectedNamespacesWaiters[msg.Namespace]; ok {
-			// 		close(ch)
-			// 		delete(c.connectedNamespacesWaiters, msg.Namespace)
-			// 	}
-			// }
-
-			// if msg.wait > 0 {
-			// 	if ch, ok := c.waitingMessages[msg.wait]; ok {
-			// 		// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
-			// 		ch <- msg
-			// 		continue readLoop
-			// 	}
-			// }
-
-			// for _, h := range messageHandlers {
-			// 	handled, err := h(c, msg)
-			// 	if err != nil {
-			// 		msg.Body = nil
-			// 		msg.Err = err
-			// 		c.write(msg)
-			// 		if isCloseError(err) {
-			// 			return // close the connection.
+			continue readLoop
+		} else {
+			// TODO FIX SOMETIMES CONNECT MESSAGE IS BEFORE ID.
+			// if c.IsClient() {
+			// 	if c.underline.ID == "" {
+			// 		println("empty ID")
+			// 		b, err := c.underline.ReadBinary()
+			// 		if err != nil {
+			// 			return
 			// 		}
+			// 		c.in <- b
 			// 		continue readLoop
-			// 	}
-
-			// 	if handled {
-			// 		break
 			// 	}
 			// }
 		}
+
+		msg := deserializeMessage(nil, b)
+		if msg.isInvalid {
+			fmt.Printf("%s([%d]) is invalid payload\n", b, len(b))
+			continue // or return (close)?
+		}
+
+		if !c.isAcknowledged() {
+			// fmt.Printf("queue: add %s/%s\n%#+v\n", msg.Namespace, msg.Event, msg)
+			queue = append(queue, &msg)
+			continue
+		}
+
+		//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
+		if !c.handleMessage(msg) {
+			println(msg.Event + " not handled")
+			return
+		}
+
+		// if msg.isConnect {
+		// 	if ch, ok := c.connectedNamespacesWaiters[msg.Namespace]; ok {
+		// 		close(ch)
+		// 		delete(c.connectedNamespacesWaiters, msg.Namespace)
+		// 	}
+		// }
+
+		// if msg.wait > 0 {
+		// 	if ch, ok := c.waitingMessages[msg.wait]; ok {
+		// 		// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
+		// 		ch <- msg
+		// 		continue readLoop
+		// 	}
+		// }
+
+		// for _, h := range messageHandlers {
+		// 	handled, err := h(c, msg)
+		// 	if err != nil {
+		// 		msg.Body = nil
+		// 		msg.Err = err
+		// 		c.write(msg)
+		// 		if isCloseError(err) {
+		// 			return // close the connection.
+		// 		}
+		// 		continue readLoop
+		// 	}
+
+		// 	if handled {
+		// 		break
+		// 	}
+		// }
 	}
+
 }
 
 func (c *conn) handleMessage(msg Message) bool {
@@ -328,14 +444,14 @@ func (c *conn) handleMessage(msg Message) bool {
 }
 
 func (c *conn) ID() string {
-	return c.underline.ID
+	return c.id
 }
 
 func (c *conn) String() string {
-	return c.underline.String()
+	return c.ID()
 }
 
-func (c *conn) UnderlyingConn() *fastws.Conn {
+func (c *conn) Socket() Socket {
 	return c.underline
 }
 
@@ -358,6 +474,7 @@ func (c *conn) deleteNSConn(namespace string, lock bool) {
 
 func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	if c.IsClosed() {
+		println("here 1")
 		return msg, CloseError{Code: -1, error: ErrWrite}
 	}
 
@@ -374,6 +491,7 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	// fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
 	msg.wait = waitID
 	if !c.write(msg) {
+		println("here 2")
 		return Message{}, ErrWrite
 	}
 
@@ -521,9 +639,9 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 }
 
 func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
-	c.mu.RLock()
+	// c.mu.RLock()
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
-	c.mu.RUnlock()
+	// c.mu.RUnlock()
 	if alreadyConnected {
 		return ns, nil
 	}
@@ -551,9 +669,9 @@ func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
 	}
 
 	// re-check, maybe local connected.
-	c.mu.RLock()
+	// c.mu.RLock()
 	ns, alreadyConnected = c.connectedNamespaces[namespace]
-	c.mu.RUnlock()
+	// c.mu.RUnlock()
 	if alreadyConnected {
 		return ns, nil
 	}
@@ -574,6 +692,7 @@ func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
 	c.addNSConn(ns)
 
 	connectMessage.Event = OnNamespaceConnected
+	connectMessage.isConnect = false
 	events.fireEvent(ns, connectMessage)
 
 	return ns, err
@@ -614,13 +733,13 @@ func (c *conn) Close() {
 			if c.server != nil {
 				c.server.disconnect <- c
 			} else {
-				// close(c.out)
+				// // close(c.out)
 			}
 
-			close(c.closeCh)
+			//	close(c.closeCh)
 		}()
 
-		c.underline.NetConn.Close()
+		c.underline.NetConn().Close()
 	}
 }
 
@@ -659,7 +778,10 @@ func (c *conn) WriteAndWait(ctx context.Context, namespace, event string, body [
 // }
 
 func (c *conn) write(msg Message) bool {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if c.IsClosed() {
+		println("write but closed.")
 		return false
 	}
 
@@ -670,14 +792,32 @@ func (c *conn) write(msg Message) bool {
 		_, ok := c.connectedNamespaces[msg.Namespace]
 		c.mu.RUnlock()
 		if !ok {
+			println("namespace " + msg.Namespace + " not found")
 			return false
 		}
 	}
 
-	select {
-	case <-c.closeCh:
+	err := c.underline.WriteText(serializeMessage(nil, msg), c.WriteTimeout)
+	// _, err := c.underline.NetConn.Write(serializeMessage(nil, msg))
+	if err != nil {
+		// c.underline.HandleError(err)
+		println("err on write: " + err.Error() + "\n" + msg.Event + ": " + string(msg.Body))
 		return false
-	case c.out <- serializeMessage(nil, msg):
-		return true
 	}
+
+	// No need: underline writer checks by itself if len(b) > available size buffer
+	// and writes all if needed.
+	// if n < len(b) {
+	// 	rem := b[n:]
+	//  [...]
+	// }
+
+	// for i, n := 0, len(c.out); i < n; i++ {
+	// 	c.underline.Write(newline)
+	// 	c.underline.Write(<-c.out)
+	// }
+
+	// err = c.underline.Writer.Flush()
+	// return err == nil
+	return true
 }

@@ -15,10 +15,11 @@ import (
 	"time"
 
 	"github.com/kataras/fastws/_examples/advanced/ws"
+	"golang.org/x/sync/semaphore"
 )
 
 var (
-	url      = "ws://localhost:8080"
+	url      = "ws://localhost:9595"
 	testdata []byte
 )
 
@@ -26,17 +27,65 @@ const (
 	broadcast = false
 	verbose   = false
 	// max depends on the OS.
-	totalClients = 100000
+	totalClients         = 10000
+	maxConcurrentClients = 500
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
-	clientHandleNamespaceConnect = true
+	clientHandleNamespaceConnect = false
 )
+
+var totalConnectedNamespace = new(uint64)
+
+var (
+	sem = semaphore.NewWeighted(maxConcurrentClients)
+
+	handler = ws.WithTimeout{
+		ReadTimeout:  0 * time.Second, // alive,
+		WriteTimeout: 0 * time.Second, // alive,
+		Events: ws.Events{
+			ws.OnNamespaceConnect: func(c ws.NSConn, msg ws.Message) error {
+				atomic.AddUint64(totalConnectedNamespace, 1)
+				return nil
+			},
+			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
+				if maxConcurrentClients > 0 {
+					sem.Release(1)
+				}
+
+				return nil
+			},
+			"chat": func(c ws.NSConn, msg ws.Message) error {
+				if verbose {
+					log.Println(string(msg.Body))
+				}
+
+				return nil
+			},
+		},
+	}
+)
+
+func startMonitor() func() {
+	var monitorEvery = 5 * time.Second
+	if totalClients >= 50000 {
+		monitorEvery = 15 * time.Second
+	}
+	timer := time.NewTicker(monitorEvery)
+	go func() {
+		for {
+			<-timer.C
+			log.Printf("INFO: Current connected to namespace[%d]", *totalConnectedNamespace)
+		}
+	}()
+	return timer.Stop
+}
 
 var connectionFailures uint64
 
 var (
-	disconnectErrors []error
-	connectErrors    []error
-	errMu            sync.Mutex
+	disconnectErrors       []error
+	connectErrors          []error
+	connectNamespaceErrors []error
+	errMu                  sync.Mutex
 )
 
 func collectError(op string, err error) {
@@ -48,6 +97,8 @@ func collectError(op string, err error) {
 		disconnectErrors = append(disconnectErrors, err)
 	case "connect":
 		connectErrors = append(connectErrors, err)
+	case "connect namespace":
+		connectNamespaceErrors = append(connectNamespaceErrors, err)
 	}
 }
 
@@ -69,34 +120,43 @@ func main() {
 	wg := new(sync.WaitGroup)
 	wg.Add(totalClients)
 
-	relaxCPU := 15 * time.Second // this may not be useful if host contains high-end hardware.
-	// if broadcast {
-	// 	relaxCPU = 15 * time.Second
-	// }
-
+	relaxCPU := 5 * time.Second // this may not be useful if host contains high-end hardware.
 	lastRelaxCPU := time.Now()
+	stopMonitor := startMonitor()
+
 	var alive time.Duration
 	for i := 0; i < totalClients; i++ {
+		if maxConcurrentClients > 0 {
+			err := sem.Acquire(context.TODO(), 1)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
+				runtime.GC()
+				time.Sleep(relaxCPU)
+				lastRelaxCPU = time.Now()
+			}
+		}
+
 		if i%2 == 0 {
 			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
+			//	alive = 4*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 			alive = 4*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else if i%3 == 0 {
 			time.Sleep(time.Duration(rand.Int63n(6)) * time.Millisecond)
 			alive = 6*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
+			//	alive = 6*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		} else {
 			alive = 8*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
-		}
-
-		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
-			runtime.GC()
-			time.Sleep(relaxCPU)
-			lastRelaxCPU = time.Now()
+			//	alive = 8*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		}
 
 		go connect(wg, alive)
 	}
 
 	wg.Wait()
+	stopMonitor()
 
 	log.Printf("execution time [%s]", time.Since(start))
 	log.Println()
@@ -137,6 +197,13 @@ func main() {
 		}
 	}
 
+	if n := len(connectNamespaceErrors); n > 0 {
+		log.Printf("Finished with %d connect namespace errors\n", n)
+		for i, err := range connectNamespaceErrors {
+			log.Printf("[%d] - %v\n", i+1, err)
+		}
+	}
+
 	if n := len(disconnectErrors); n > 0 {
 		log.Printf("Finished with %d disconnect errors\n", n)
 		for i, err := range disconnectErrors {
@@ -155,6 +222,8 @@ func main() {
 
 var counter uint32
 
+var smallPayload = []byte("The affection are determine how performed intention discourse but.")
+
 func connect(wg *sync.WaitGroup, alive time.Duration) {
 	defer wg.Done()
 
@@ -163,20 +232,8 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 	// log.Printf("[%d] try to connect\n", t)
 	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
 	// defer cancel()
-	ctx := context.Background()
-	client, err := ws.Dial(ctx, url, ws.WithTimeout{
-		ReadTimeout:  alive,
-		WriteTimeout: alive,
-		Events: ws.Events{
-			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if verbose {
-					log.Println(string(msg.Body))
-				}
-
-				return nil
-			},
-		},
-	})
+	ctx := context.TODO()
+	client, err := ws.Dial(ctx, url, handler)
 
 	if err != nil {
 		//	log.Printf("[%d] %s\n", t, err)
@@ -188,7 +245,7 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 
 	// defer client.Close()
 
-	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
+	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(20*time.Second))
 	// defer cancel()
 
 	var c ws.NSConn
@@ -200,9 +257,12 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 	}
 
 	if err != nil {
-		// if verbose {
-		log.Println(err)
-		//	}
+		atomic.AddUint64(&connectionFailures, 1)
+		collectError("connect namespace", err)
+
+		if verbose {
+			log.Println(err)
+		}
 		return
 	}
 
@@ -224,7 +284,9 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 		}
 	}
 
+	// c.Emit("chat", smallPayload)
+
 	// no need with timeouts:
-	// time.Sleep(alive)
-	// client.Close()
+	time.Sleep(alive)
+	client.Close()
 }

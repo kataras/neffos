@@ -156,6 +156,7 @@ func IsTimeout(err error) bool {
 // `OnConnected` is called and `OnDisconnected` on exit.
 func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		println("method not GET")
 		// RCF rfc2616 https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
 		// The response MUST include an Allow header containing a list of valid methods for the requested resource.
 		//
@@ -166,6 +167,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fws.CheckOrigin != nil && !fws.CheckOrigin(r) {
+		println("check origin err.")
 		writeError(w, http.StatusForbidden)
 		return
 	}
@@ -178,12 +180,13 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if fws.OnUpgrade != nil {
 		err := fws.OnUpgrade(c)
+		println("fws.OnUpgrade: " + err.Error())
 		if !c.HandleError(err) {
 			if abort, ok := err.(ErrUpgrade); ok && abort.Code > 0 {
 				// this is the only error that we fire back.
-				writeError(w, abort.Code)
+				// writeError(w, abort.Code)
 			} else {
-				writeError(w, http.StatusBadRequest)
+				// writeError(w, http.StatusBadRequest)
 			}
 
 			return
@@ -197,9 +200,10 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn, _, hs, err := upgrader.Upgrade(r, w)
 	if err != nil {
+		println("upgrader.Upgrade: " + err.Error())
 		abort := ErrUpgrade{err, http.StatusServiceUnavailable}
 		if !c.HandleError(abort) {
-			writeError(w, abort.Code)
+			writeError(w, abort.Code) // ws.ErrHandshakeBadUpgrade.
 		}
 
 		return
@@ -210,6 +214,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 	if fws.OnConnected != nil {
 		err = fws.OnConnected(c)
 		if err != c.reason { // sometimes the user may want to call the `HandleError` manually, we don't want to push the same error twice.
+			println("fws.OnConnected: " + err.Error())
 			if !c.HandleError(err) {
 				return
 			}
@@ -227,7 +232,7 @@ func (fws *FastWS) UpgradeHTTP(w http.ResponseWriter, r *http.Request) {
 func (fws *FastWS) Upgrade(conn net.Conn) {
 	c := new(Conn)
 	c.ID = fws.IDGenerator(c)
-	c.NetConn = conn
+	c.netConn = conn
 
 	if fws.OnUpgrade != nil {
 		err := fws.OnUpgrade(c)

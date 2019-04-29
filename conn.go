@@ -34,7 +34,7 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	// NetConn is available at the `OnConnected` state for server-side and
 	// after `Dial` for client-side.
 	// It is the underline generic network connection.
-	NetConn net.Conn
+	netConn net.Conn
 	// Handshake is available for reading at the `OnConnected` state for server-side
 	// and after `Dial` for client-side.
 	Handshake ws.Handshake
@@ -89,22 +89,28 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 
 func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 	controlHandler := wsutil.ControlFrameHandler(conn, state)
+
 	rd := &wsutil.Reader{
 		Source:          conn,
 		State:           state,
-		CheckUTF8:       false,
+		CheckUTF8:       true,
 		SkipHeaderCheck: false,
 		OnIntermediate:  controlHandler,
 	}
 
-	c.NetConn = conn
+	c.netConn = conn
 	c.Handshake = hs
 	c.State = state
 	c.ControlHandler = controlHandler
 	c.Reader = rd
-	c.WriteCode = ws.OpBinary
-	c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
+	c.WriteCode = ws.OpText // OpBinary
+	// c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
+	// c.Writer = wsutil.GetWriter(conn, state, c.WriteCode, 0)
 	c.Flush = true
+}
+
+func (c *Conn) NetConn() net.Conn {
+	return c.netConn
 }
 
 // IsClient reports wether this Conn is client side.
@@ -132,7 +138,7 @@ func (c *Conn) Err() error {
 }
 
 func (c *Conn) String() (s string) {
-	if c.NetConn == nil {
+	if c.netConn == nil {
 		return
 	}
 
@@ -140,7 +146,7 @@ func (c *Conn) String() (s string) {
 		s = c.ID + " "
 	}
 
-	s += "<" + c.NetConn.RemoteAddr().String() + ">"
+	s += "<" + c.netConn.RemoteAddr().String() + ">"
 	return
 }
 
@@ -173,77 +179,81 @@ func (c *Conn) Decode(vPtr interface{}) error {
 
 func (c *Conn) applyReadTimeout() {
 	if c.ReadTimeout > 0 {
-		c.NetConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
+		c.netConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 	}
 }
 
 // Returns io.EOF on remote close.
 func (c *Conn) Read(b []byte) (n int, err error) {
-	if c.Reader == nil {
+	if c.Reader != nil {
 		for {
 			c.applyReadTimeout()
-			data, opCode, err := wsutil.ReadData(c.NetConn, c.State)
+
+			hdr, err := c.Reader.NextFrame()
 			if err != nil {
+				if err == io.EOF {
+					return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
+				}
 				return 0, err
 			}
 
-			if opCode&ws.OpText == 0 && opCode&ws.OpBinary == 0 {
+			if hdr.OpCode == ws.OpClose {
+				return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
+			}
+
+			if hdr.OpCode.IsControl() {
+				err = c.ControlHandler(hdr, c.Reader)
+				if err != nil {
+					return 0, err
+				}
 				continue
 			}
 
-			n = copy(b, data[:])
-			return n, io.EOF
+			if hdr.OpCode&c.WriteCode == 0 {
+				err = c.Reader.Discard()
+				if err != nil {
+					return 0, err
+				}
+				continue
+			}
+
+			return c.Reader.Read(b)
 		}
 	}
 
 	for {
 		c.applyReadTimeout()
-		hdr, err := c.Reader.NextFrame()
+
+		data, opCode, err := wsutil.ReadData(c.netConn, c.State)
 		if err != nil {
-			if err == io.EOF {
-				return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
-			}
 			return 0, err
 		}
 
-		if hdr.OpCode == ws.OpClose {
-			return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
-		}
-
-		if hdr.OpCode.IsControl() {
-			err = c.ControlHandler(hdr, c.Reader)
-			if err != nil {
-				return 0, err
-			}
+		if opCode&c.WriteCode == 0 { //&& opCode&ws.OpBinary == 0 {
 			continue
 		}
 
-		if hdr.OpCode&ws.OpText == 0 && hdr.OpCode&ws.OpBinary == 0 {
-			err = c.Reader.Discard()
-			if err != nil {
-				return 0, err
-			}
-			continue
-		}
-
-		return c.Reader.Read(b)
+		n = copy(b, data)
+		return n, io.EOF
 	}
 }
 
 func (c *Conn) Write(b []byte) (int, error) {
 	if c.WriteTimeout > 0 {
-		c.NetConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
+		c.netConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
 	}
 
 	if c.Writer != nil {
 		// Note if available buffer is smaller than len(b) then it will write through all.
 		n, err := c.Writer.Write(b)
+		// n, err := c.Writer.WriteThrough(b)
 		if err != nil {
 			return 0, err
 		}
 
 		if c.Flush {
 			err = c.Writer.Flush()
+			c.Writer.Reset(c.netConn, c.State, c.WriteCode)
 			if err != nil {
 				return 0, err
 			}
@@ -252,12 +262,41 @@ func (c *Conn) Write(b []byte) (int, error) {
 		return n, err
 	}
 
-	err := wsutil.WriteMessage(c.NetConn, c.State, c.WriteCode, b)
+	// if c.Writer != nil {
+	// 	err := ws.WriteHeader(c.netConn, ws.Header{
+	// 		Fin:    false,
+	// 		Length: int64(len(b)),
+	// 		Masked: c.IsClient(),
+	// 		OpCode: c.WriteCode,
+	// 	})
+
+	// 	if err != nil {
+	// 		// fmt.Printf("error while writing the write header: %v\n", err)
+	// 		return 0, err
+	// 	}
+
+	// 	return c.netConn.Write(b)
+	// }
+
+	err := wsutil.WriteMessage(c.netConn, c.State, c.WriteCode, b)
 	if err != nil {
 		return 0, err
 	}
 
 	return len(b), nil
+
+	// c.Writer.Reset(c.netConn, c.State, ws.OpText)
+	//
+	// n, err := c.Writer.Write(b)
+	// if err != nil {
+	// 	return 0, err
+	// }
+	// err = c.Writer.Flush()
+	// if err != nil {
+	// 	return 0, err
+	// }
+	//
+	//	return n, err
 }
 
 // OpCode a type alias for `ws#OpCode`.
@@ -285,10 +324,10 @@ const (
 // WriteWithCode writes to the connection by passing bypasses the `Writer` and `WriterCode`.
 func (c *Conn) WriteWithCode(opCode OpCode, b []byte) (int, error) {
 	if c.WriteTimeout > 0 {
-		c.NetConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
+		c.netConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
 	}
 
-	err := wsutil.WriteMessage(c.NetConn, c.State, opCode, b)
+	err := wsutil.WriteMessage(c.netConn, c.State, opCode, b)
 	if err != nil {
 		return 0, err
 	}
@@ -296,17 +335,17 @@ func (c *Conn) WriteWithCode(opCode OpCode, b []byte) (int, error) {
 	return len(b), nil
 }
 
+func (c *Conn) WriteText(body []byte, timeout time.Duration) error {
+	_, err := c.WriteWithCode(OpText, body)
+	return err
+}
+
 func (c *Conn) ReadBinary() ([]byte, error) {
 	return ioutil.ReadAll(c)
 }
 
-func (c *Conn) ReadText() (string, error) {
-	b, err := c.ReadBinary()
-	if err != nil {
-		return "", err
-	}
-
-	return string(b), nil
+func (c *Conn) ReadText(timeout time.Duration) ([]byte, error) {
+	return c.ReadBinary()
 }
 
 func (c *Conn) ReadJSON(vPtr interface{}) error {
@@ -343,4 +382,9 @@ func (c *Conn) WriteXML(v interface{}) error {
 	}
 	_, err = c.Write(b)
 	return err
+}
+
+func (c *Conn) Close() error {
+	// wsutil.PutWriter(c.Writer)
+	return c.netConn.Close()
 }

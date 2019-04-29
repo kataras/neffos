@@ -46,13 +46,16 @@ func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, er
 	underline.WriteTimeout = writeTimeout
 
 	c := newConn(underline, connHandler.getNamespaces())
+	c.ReadTimeout = readTimeout
 
 	go c.startReader()
-	go c.startWriter()
+	// go c.startWriter()
 
 	client := &Client{
 		conn: c,
 	}
 
+	underline.Write(ackBinary)
+	// time.Sleep(1 * time.Second)
 	return client, nil
 }

@@ -61,7 +61,7 @@ func handleError(c *conn, msg Message) (bool, error) {
 	}
 
 	if msg.Event == "" { // global error, possible server-side.
-		c.underline.HandleError(msg.Err)
+		// c.underline.HandleError(msg.Err)
 		return true, nil
 	}
 

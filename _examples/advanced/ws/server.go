@@ -2,6 +2,8 @@ package ws
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -11,6 +13,8 @@ import (
 )
 
 type Server struct {
+	upgrader Upgrader
+
 	mu         sync.RWMutex
 	NSAcceptor NSAcceptor
 	namespaces Namespaces
@@ -43,12 +47,13 @@ type Server struct {
 	OnDisconnect func(c Conn)
 }
 
-func New(connHandler connHandler) *Server {
+func New(upgrader Upgrader, connHandler connHandler) *Server {
 	ws := fastws.New()
 
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 
 	s := &Server{
+		upgrader:     upgrader,
 		namespaces:   connHandler.getNamespaces(),
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
@@ -90,8 +95,8 @@ func (s *Server) start() {
 			atomic.AddUint64(&s.count, 1)
 		case c := <-s.disconnect:
 			if _, ok := s.connections[c]; ok {
-				delete(s.connections, c)
 				// close(c.out)
+				delete(s.connections, c)
 				atomic.AddUint64(&s.count, ^uint64(0))
 				if s.OnDisconnect != nil {
 					s.OnDisconnect(c)
@@ -102,7 +107,7 @@ func (s *Server) start() {
 				fn(c)
 			}
 		case msg := <-s.broadcast:
-			msgBinary := serializeMessage(nil, msg)
+			// msgBinary := serializeMessage(nil, msg)
 			for c := range s.connections {
 				if !c.isAcknowledged() {
 					continue
@@ -123,16 +128,23 @@ func (s *Server) start() {
 					}
 				}
 
-				select {
-				case c.out <- msgBinary:
-				default:
-					// close(c.out)
+				if !c.write(msg) {
 					delete(s.connections, c)
 					atomic.AddUint64(&s.count, ^uint64(0))
 					if s.OnDisconnect != nil {
 						s.OnDisconnect(c)
 					}
 				}
+				// select {
+				// case c.out <- msgBinary:
+				// default:
+				// 	// close(c.out)
+				// 	delete(s.connections, c)
+				// 	atomic.AddUint64(&s.count, ^uint64(0))
+				// 	if s.OnDisconnect != nil {
+				// 		s.OnDisconnect(c)
+				// 	}
+				// }
 			}
 		}
 	}
@@ -151,7 +163,41 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	s.ws.UpgradeHTTP(w, r)
+
+	if r.Method != http.MethodGet {
+		println("method not GET")
+		// RCF rfc2616 https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+		// The response MUST include an Allow header containing a list of valid methods for the requested resource.
+		//
+		// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Allow#Examples
+		w.Header().Set("Allow", http.MethodGet)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprintln(w, http.StatusText(http.StatusMethodNotAllowed))
+		return
+	}
+
+	socket, err := s.upgrader(w, r)
+	if err != nil {
+		log.Printf("Upgrade: %v", err)
+		return
+	}
+
+	c := newConn(socket, s.namespaces)
+	c.server = s
+	c.ReadTimeout = s.readTimeout
+	c.WriteTimeout = s.writeTimeout
+
+	s.connect <- c
+
+	go c.startReader()
+	go c.startWriter()
+
+	if s.OnConnect != nil {
+		if err = s.OnConnect(c); err != nil {
+			s.disconnect <- c
+		}
+	}
 }
 
 func (s *Server) GetTotalConnections() uint64 {
@@ -220,7 +266,7 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 
 	underline.WriteTimeout = s.writeTimeout
 	underline.ReadTimeout = s.readTimeout
-	underline.Flush = false
+	// underline.Flush = false
 
 	c := newConn(underline, s.namespaces)
 	c.server = s
@@ -240,7 +286,9 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 	// }
 
 	//	nsConn := c.getNSConnection(namespace)
+
 	s.connect <- c
+
 	go c.startReader()
 	go c.startWriter()
 

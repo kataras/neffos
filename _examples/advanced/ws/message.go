@@ -94,7 +94,7 @@ func serializeOutput(wait uint64, namespace string,
 		waitByte = []byte(strconv.FormatUint(wait, 10))
 	}
 
-	return bytes.Join([][]byte{
+	msg := bytes.Join([][]byte{
 		waitByte,
 		[]byte(namespace),
 		[]byte(event),
@@ -104,9 +104,19 @@ func serializeOutput(wait uint64, namespace string,
 		isNoOpByte,
 		body,
 	}, messageSeparator)
+
+	// send := make([]byte, hex.EncodedLen(len(msg)))
+	// hex.Encode(send, msg)
+	return msg
 }
 
 func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
+	// read := make([]byte, hex.DecodedLen(len(b)))
+	// _, err := hex.Decode(read, b)
+	// if err != nil {
+	// 	panic("original: " + string(b) + " error: " + err.Error())
+	// }
+
 	if decrypt != nil {
 		b = decrypt(b)
 	}
