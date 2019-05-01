@@ -280,10 +280,11 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 
 	//	nsConn := c.getNSConnection(namespace)
 
+	go c.startReader()
+
 	s.connect <- c
 
-	go c.startReader()
-	go c.startWriter()
+	// go c.startWriter()
 
 	// go func(c *conn) {
 	// 	for {

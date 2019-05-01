@@ -14,11 +14,10 @@ var (
 )
 
 var (
-	OnNamespaceConnect      = "_OnNamespaceConnect"
-	OnNamespaceConnected    = "_OnNamespaceConnected"
-	OnNamespaceDisconnect   = "_OnNamespaceDisconnect"
-	OnNamespaceDisconnected = "_OnNamespaceDisconnected"
-	NoOpEvent               = "_NoOp"
+	OnNamespaceConnect    = "_OnNamespaceConnect"
+	OnNamespaceConnected  = "_OnNamespaceConnected"
+	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
+	NoOpEvent             = "_NoOp"
 )
 
 type Events map[string]MessageHandlerFunc

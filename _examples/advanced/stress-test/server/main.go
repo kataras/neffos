@@ -21,10 +21,10 @@ const (
 	verbose   = false
 	maxC      = 0
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = true
+	serverHandleNamespaceConnect = false
 )
 
-var totalClients uint64 = 10000 // max depends on the OS, read more below.
+var totalClients uint64 = 7000 // max depends on the OS, read more below.
 // For example for windows:
 //
 // $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -64,13 +64,25 @@ func main() {
 		ReadTimeout:  40 * time.Second,
 		WriteTimeout: 40 * time.Second,
 		Events: ws.Events{
-			ws.OnNamespaceConnect: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 				if msg.Err != nil {
 					//	if verbose {
 					log.Println(msg.Err)
 					//	}
 				}
 				atomic.AddUint64(totalNamespaceConnected, 1)
+				return nil
+			},
+			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
+				if !c.Acknowledged() {
+					log.Printf("[%s] on namespace[%s] disconnecting without even acknowledged first.", c.ID(), msg.Namespace)
+				}
+
+				newC := atomic.AddUint64(&totalDisconnected, 1)
+				if verbose {
+					log.Printf("[%d] client [%s] disconnected!\n", newC, c.ID())
+				}
+
 				return nil
 			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
@@ -88,11 +100,11 @@ func main() {
 	go func() {
 		allowNZero := 0
 
-		dur := 10 * time.Second
+		dur := 5 * time.Second
 		if totalClients >= 64000 {
 			// if more than 64000 then let's perform those checks every x seconds instead,
 			// either way works.
-			dur = 15 * time.Second
+			dur = 10 * time.Second
 		}
 		t := time.NewTicker(dur)
 		defer func() {
@@ -110,8 +122,8 @@ func main() {
 			disconnectedN := atomic.LoadUint64(&totalDisconnected)
 
 			// if verbose {
-			log.Printf("INFO: Current connections[%d] vs WS counter[%v] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
-			log.Printf("INFO: Current connected to namespace[%d]", atomic.LoadUint64(totalNamespaceConnected))
+			log.Printf("INFO: Current connections[%d] vs test counter[%v] of [%d] total connected", n, connectedN-disconnectedN, connectedN)
+			log.Printf("INFO: Total connected to namespace[%d]", atomic.LoadUint64(totalNamespaceConnected))
 			//	}
 
 			// if n > 0 {
@@ -130,19 +142,23 @@ func main() {
 						log.Println("ALL CLIENTS DISCONNECTED SUCCESSFULLY.")
 					}
 					return
-				} else if n == 0 && *totalNamespaceConnected == totalClients {
-					if allowNZero < 15 {
+				} else if n == 0 /* && *totalNamespaceConnected == totalClients */ {
+					if allowNZero < 6 {
 						// Allow 0 active connections just ten times.
-						// It is actually a dynamic timeout of 15*the expected total connections variable.
+						// It is actually a dynamic timeout of 6*the expected total connections variable.
 						// It exists for two reasons:
 						// 1: user delays to start client,
 						// 2: live connections may be disconnected so we are waiting for new one (randomly)
 						allowNZero++
 						continue
 					}
-					log.Printf("%v/%d CLIENTS WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
-						totalClients-totalConnected, totalClients)
 
+					if n != connectedN {
+						log.Printf("%d CLIENT(S) FAILED TO CONNECT TO THE NAMESPACE", (connectedN-disconnectedN)-n)
+					} else if totalClients-totalConnected > 0 {
+						log.Printf("%v/%d CLIENT(S) WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
+							totalClients-totalConnected, totalClients)
+					}
 					return
 				}
 				allowNZero = 0
@@ -175,7 +191,7 @@ func main() {
 	// }
 
 	//	srv.OnError("", func(c ws.Conn, err error) { handleErr(c, err) })
-	srv.OnDisconnect = handleDisconnect
+	//	srv.OnDisconnect = handleDisconnect
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
 	log.Fatal(http.ListenAndServe(endpoint, srv))
@@ -185,10 +201,6 @@ var (
 	totalConnected    uint64
 	totalDisconnected uint64
 )
-
-func incrConnect() {
-
-}
 
 func handleDisconnect(c ws.Conn) {
 	newC := atomic.AddUint64(&totalDisconnected, 1)

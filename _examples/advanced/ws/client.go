@@ -2,8 +2,8 @@ package ws
 
 import (
 	"context"
-
-	"github.com/kataras/fastws"
+	"strings"
+	// "time"
 )
 
 type Client struct {
@@ -33,20 +33,28 @@ func (c *Client) Connect(ctx context.Context, namespace string) (NSConn, error) 
 	return c.conn.Connect(ctx, namespace)
 }
 
+type Dialer func(ctx context.Context, url string) (Socket, error)
+
 // Dial establish a new websocket client.
 // Context "ctx" is used for handshake timeout.
-func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, error) {
-	underline, err := fastws.Dial(ctx, url)
+func Dial(dial Dialer, ctx context.Context, url string, connHandler connHandler) (*Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if !strings.HasPrefix(url, "ws://") && !strings.HasPrefix(url, "wss://") {
+		url = "ws://" + url
+	}
+
+	underline, err := dial(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
-	readTimeout, writeTimeout := getTimeouts(connHandler)
-	underline.ReadTimeout = readTimeout
-	underline.WriteTimeout = writeTimeout
-
 	c := newConn(underline, connHandler.getNamespaces())
+	readTimeout, writeTimeout := getTimeouts(connHandler)
 	c.ReadTimeout = readTimeout
+	c.WriteTimeout = writeTimeout
 
 	go c.startReader()
 	// go c.startWriter()
@@ -55,7 +63,8 @@ func Dial(ctx context.Context, url string, connHandler connHandler) (*Client, er
 		conn: c,
 	}
 
-	underline.Write(ackBinary)
-	// time.Sleep(1 * time.Second)
+	// underline.Write(trashMessage)
+	underline.WriteText(ackBinary, writeTimeout)
+
 	return client, nil
 }

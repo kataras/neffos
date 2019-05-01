@@ -55,6 +55,8 @@ type Conn interface {
 
 	Close()
 	IsClosed() bool
+
+	Acknowledged() bool
 }
 
 type NSConn interface {
@@ -81,7 +83,7 @@ type conn struct {
 	// in   chan []byte
 	once *uint32
 
-	waitingMessages map[uint64]chan Message // messages that this connection waits for a reply.
+	waitingMessages map[string]chan Message // messages that this connection waits for a reply.
 	writeMu         sync.Mutex
 
 	server *Server
@@ -108,7 +110,7 @@ func newConn(underline Socket, namespaces Namespaces) *conn {
 		// in:              make(chan []byte, 256),
 		once:            new(uint32),
 		acknowledged:    new(uint32),
-		waitingMessages: make(map[uint64]chan Message),
+		waitingMessages: make(map[string]chan Message),
 		//	broadcastChannel:    make(chan Message), // not used in client-side.
 	}
 
@@ -129,6 +131,10 @@ func (c *conn) Server() *Server {
 	}
 
 	return c.server
+}
+
+func (c *conn) Acknowledged() bool {
+	return atomic.LoadUint32(c.acknowledged) > 0
 }
 
 var (
@@ -212,14 +218,20 @@ func isCloseError(err error) bool {
 	return ok
 }
 
-var ackBinary = []byte("ack")
-var ackOKBinary = []byte("ack_ok")
+var (
+	trashMessage = []byte("trash message") // []byte(time.Now().String())
+	ackBinary    = []byte("ack")
+	ackOKBinary  = []byte("ack_ok")
+)
 
 func (c *conn) isAcknowledged() bool {
 	return atomic.LoadUint32(c.acknowledged) > 0
 }
 
 func (c *conn) startReader() {
+	// c.underline.ReadText(0) // ignore first message, wait.
+
+	// println("ignoring: " + string(b))
 	if c.IsClosed() {
 		return
 	}
@@ -239,6 +251,10 @@ func (c *conn) startReader() {
 	// if c.IsClient() {
 	// 	// c.out <- ackBinary
 	// 	c.underline.Write(ackBinary)
+	// }
+
+	// if c.IsClient() {
+	// 	c.underline.ReadText(c.ReadTimeout)
 	// }
 
 readLoop:
@@ -314,8 +330,16 @@ readLoop:
 
 		b, err := c.underline.ReadText(c.ReadTimeout)
 		if err != nil {
-			if err == wsutil.ErrInvalidUTF8 {
-				println("err on read: " + err.Error())
+			if err == wsutil.ErrInvalidUTF8 { // TODO: remove this.
+				println("invalid utf8")
+				if c.isAcknowledged() {
+					println("continue with re-send of all the waiting messages on the other ide: " + err.Error())
+
+					c.write(Message{isNoOp: true})
+					continue
+				} else {
+					println("not ack")
+				}
 			}
 
 			return
@@ -335,6 +359,7 @@ readLoop:
 			} else {
 				if len(b) == len(ackBinary) {
 					// c.out <- append(ackBinary, []byte(c.id)...)
+					//	c.underline.WriteText(trashMessage, c.WriteTimeout)
 					c.underline.WriteText(append(ackBinary, []byte(c.id)...), c.WriteTimeout)
 					// println("sent ID: " + c.id)
 				} else {
@@ -363,7 +388,7 @@ readLoop:
 
 		msg := deserializeMessage(nil, b)
 		if msg.isInvalid {
-			fmt.Printf("%s([%d]) is invalid payload\n", b, len(b))
+			fmt.Printf("%s[%d] is invalid payload\n", b, len(b))
 			continue // or return (close)?
 		}
 
@@ -415,8 +440,21 @@ readLoop:
 }
 
 func (c *conn) handleMessage(msg Message) bool {
-	if msg.wait > 0 {
-		if ch, ok := c.waitingMessages[msg.wait]; ok {
+	if msg.isConnect == false && msg.isDisconnect == false && msg.isNoOp {
+		c.mu.RLock()
+		println("sending msg noop to waiting messages")
+		// is connect on bad form.
+		for _, ch := range c.waitingMessages {
+			ch <- msg
+		}
+		c.mu.RUnlock()
+	}
+
+	if msg.wait != "" {
+		c.mu.RLock()
+		ch, ok := c.waitingMessages[msg.wait]
+		c.mu.RUnlock()
+		if ok {
 			// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
 			ch <- msg
 			return true
@@ -483,13 +521,23 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	// 	// println("no ACK but ask")
 	// }
 
-	var d uint64 = 1
+	var d int64 = 1
 	if c.IsClient() {
 		d = 2
 	}
-	waitID := d * uint64(time.Now().Unix())
+
+	// waitID := d * uint64(time.Now().Unix())
 	// fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
-	msg.wait = waitID
+	// msg.wait = waitID
+
+	// if c.IsClient() {
+	// 	msg.wait = 1
+	// } else {
+	// 	msg.wait = 2
+	// }
+
+	msg.wait = strconv.FormatInt(time.Now().Unix()/d, 10)
+
 	if !c.write(msg) {
 		println("here 2")
 		return Message{}, ErrWrite
@@ -516,11 +564,17 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 		// }
 
 		// return Message{}, false
-	case msg := <-ch:
+	case receive := <-ch:
 		c.mu.Lock()
-		delete(c.waitingMessages, msg.wait)
+		delete(c.waitingMessages, receive.wait)
 		c.mu.Unlock()
-		return msg, nil
+		// re-ask.
+
+		if receive.isNoOp && receive.isConnect == false && receive.isDisconnect == false {
+			println("re-asking...")
+			return c.ask(nil, msg)
+		}
+		return receive, nil
 	}
 
 	// msg, ok := <-ch
@@ -638,7 +692,26 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 	return nil, ErrBadNamespace
 }
 
+const syncWaitDur = 15 * time.Millisecond
+
 func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
+	if !c.isAcknowledged() {
+		if c.IsClosed() {
+			return nil, ErrWrite
+		}
+
+		if ctx != nil {
+			if deadline, has := ctx.Deadline(); has {
+				if deadline.Before(time.Now()) {
+					return nil, context.DeadlineExceeded
+				}
+			}
+		}
+
+		time.Sleep(syncWaitDur)
+		return c.Connect(ctx, namespace)
+	}
+
 	// c.mu.RLock()
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	// c.mu.RUnlock()
@@ -715,7 +788,7 @@ func (c *conn) IsClosed() bool {
 
 func (c *conn) Close() {
 	if atomic.CompareAndSwapUint32(c.once, 0, 1) {
-		atomic.StoreUint32(c.acknowledged, 0)
+
 		// fire the namespaces' disconnect event for both server and client.
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
 		for _, ns := range c.connectedNamespaces {
@@ -728,6 +801,8 @@ func (c *conn) Close() {
 			delete(c.waitingMessages, wait)
 		}
 		c.mu.Unlock()
+
+		atomic.StoreUint32(c.acknowledged, 0)
 
 		go func() {
 			if c.server != nil {
@@ -778,8 +853,6 @@ func (c *conn) WriteAndWait(ctx context.Context, namespace, event string, body [
 // }
 
 func (c *conn) write(msg Message) bool {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	if c.IsClosed() {
 		println("write but closed.")
 		return false

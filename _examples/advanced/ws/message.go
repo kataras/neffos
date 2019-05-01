@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"errors"
-	"strconv"
 )
 
 type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<isNoOp(0-1)>;<body||error_message>
@@ -23,7 +22,7 @@ type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<is
 
 	from string // the CONN ID, filled automatically.
 
-	wait uint64
+	wait string
 }
 
 type (
@@ -49,7 +48,7 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 }
 
 // <namespace>;<event>;<body>
-func serializeOutput(wait uint64, namespace string,
+func serializeOutput(wait string, namespace string,
 	event string,
 	body []byte,
 	err error,
@@ -63,7 +62,7 @@ func serializeOutput(wait uint64, namespace string,
 		isConnectByte    = falseByte
 		isDisconnectByte = falseByte
 		isNoOpByte       = falseByte
-		waitByte         = falseByte
+		waitByte         = []byte{}
 	)
 
 	if err != nil {
@@ -87,11 +86,20 @@ func serializeOutput(wait uint64, namespace string,
 		isNoOpByte = trueByte
 	}
 
-	if wait > 0 {
-		// buf := make([]byte, binary.MaxVarintLen64)
-		// n := binary.PutUvarint(buf, wait)
-		// waitByte = buf[:n]
-		waitByte = []byte(strconv.FormatUint(wait, 10))
+	// if wait > 0 {
+	// buf := make([]byte, binary.MaxVarintLen64)
+	// n := binary.PutUvarint(buf, wait)
+	// waitByte = buf[:n]
+	// waitByte = []byte(strconv.FormatUint(wait, 10))
+	//	waitByte = []byte(strconv.FormatUint(wait), 10))
+	// }
+
+	// if len(wait) > 0 {
+	// 	waitByte = wait
+	// }
+
+	if wait != "" {
+		waitByte = []byte(wait)
 	}
 
 	msg := bytes.Join([][]byte{
@@ -108,6 +116,11 @@ func serializeOutput(wait uint64, namespace string,
 	// send := make([]byte, hex.EncodedLen(len(msg)))
 	// hex.Encode(send, msg)
 	return msg
+
+	// buf := make([]byte, base64.StdEncoding.EncodedLen(len(msg)))
+	// base64.StdEncoding.Encode(buf, msg)
+
+	//	return buf
 }
 
 func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
@@ -146,8 +159,13 @@ func deserializeInput(b []byte) (
 	isDisconnect bool,
 	isNoOp bool,
 	isInvalid bool,
-	wait uint64,
+	wait string,
 ) {
+
+	// base64Text := make([]byte, base64.StdEncoding.DecodedLen(len(b)))
+
+	// n, _ := base64.StdEncoding.Decode(base64Text, b)
+	// b = base64Text[:n]
 
 	dts := bytes.SplitN(b, messageSeparator, 8)
 	if len(dts) != 8 {
@@ -166,11 +184,22 @@ func deserializeInput(b []byte) (
 	// wait, _ = binary.Uvarint(dts[0])
 	// wait = binary.LittleEndian.Uint64(dts[0])
 
-	if !bytes.Equal(dts[0], falseByte) {
-		// if not zero then try to convert it.
-		wait, _ = strconv.ParseUint(string(dts[0]), 10, 64)
-	}
+	// 	if !bytes.Equal(dts[0], falseByte) {
+	// if not zero then try to convert it.
+	// wait, _ = strconv.ParseUint(string(dts[0]), 10, 64)
+	// }
 
+	// wait, _ = binary.Uvarint(dts[0])
+
+	//	wait = binary.LittleEndian.Uint64(dts[0])
+
+	// if waitStr := string(dts[0]); waitStr == "server" || waitStr == "client" {
+	// 	wait = waitStr
+	// }
+
+	// n, _ := strconv.ParseInt(string(dts[0]), 10, 32)
+	// wait = uint64(n)
+	wait = string(dts[0])
 	namespace = string(dts[1])
 	event = string(dts[2])
 	isError := bytes.Equal(dts[3], trueByte)

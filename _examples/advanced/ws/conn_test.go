@@ -38,7 +38,7 @@ func TestEmitWithCallback(t *testing.T) {
 	go httpServer.ListenAndServe()
 	time.Sleep(200 * time.Millisecond)
 
-	client, err := ws.Dial(nil, "ws://localhost:8080", ws.Namespaces{namespace: ws.Events{}})
+	client, err := ws.Dial(gorilla.Dialer(gorillaWs.DefaultDialer, make(http.Header)), nil, "ws://localhost:8080", ws.Namespaces{namespace: ws.Events{}})
 	if err != nil {
 		t.Fatal(err)
 	}

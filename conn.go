@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gobwas/ws"
@@ -66,6 +67,7 @@ type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner ca
 	Writer    *wsutil.Writer
 	Flush     bool // if true and Writer is non-nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
 	WriteCode ws.OpCode
+	mu        sync.Mutex
 	// WriteTimeout time allowed to write a message to the connection, can be altered before `Write`, `WriteWithCode` and `Encoder`.
 	// Defaults to no timeout.
 	WriteTimeout time.Duration
@@ -95,7 +97,7 @@ func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
 		State:           state,
 		CheckUTF8:       true,
 		SkipHeaderCheck: false,
-		OnIntermediate:  controlHandler,
+		// OnIntermediate:  controlHandler,
 	}
 
 	c.netConn = conn
@@ -323,6 +325,9 @@ const (
 
 // WriteWithCode writes to the connection by passing bypasses the `Writer` and `WriterCode`.
 func (c *Conn) WriteWithCode(opCode OpCode, b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.WriteTimeout > 0 {
 		c.netConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
 	}

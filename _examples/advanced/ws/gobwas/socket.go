@@ -34,7 +34,11 @@ func newSocket(underline net.Conn, client bool) *Socket {
 		State:           state,
 		CheckUTF8:       true,
 		SkipHeaderCheck: false,
-		OnIntermediate:  controlHandler,
+		// "intermediate" frames, that possibly could
+		// be received between text/binary continuation frames.
+		// Read `gobwas/wsutil/reader#NextReader`.
+		//
+		// OnIntermediate:  controlHandler,
 	}
 
 	return &Socket{
@@ -51,6 +55,9 @@ func (s *Socket) NetConn() net.Conn {
 
 // Returns io.EOF on remote close.
 func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
+	// s.mu.Lock()
+	// defer s.mu.Unlock()
+
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -86,14 +93,31 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 
 		return ioutil.ReadAll(s.reader)
 	}
+
+	// for {
+	// 	if timeout > 0 {
+	// 		s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
+	// 	}
+
+	// 	b, code, err := wsutil.ReadData(s.UnderlyingConn, s.state)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+
+	// 	if code != gobwas.OpText {
+	// 		continue
+	// 	}
+
+	// 	return b, nil
+	// }
 }
 
 func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
+	s.mu.Lock()
 	if timeout > 0 {
 		s.UnderlyingConn.SetWriteDeadline(time.Now().Add(timeout))
 	}
 
-	s.mu.Lock()
 	err := wsutil.WriteMessage(s.UnderlyingConn, s.state, gobwas.OpText, body)
 	s.mu.Unlock()
 

@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
+	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
+
 	"golang.org/x/sync/semaphore"
 )
 
@@ -27,10 +30,10 @@ const (
 	broadcast = false
 	verbose   = false
 	// max depends on the OS.
-	totalClients         = 10000
+	totalClients         = 7000
 	maxConcurrentClients = 1500
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
-	clientHandleNamespaceConnect = false
+	clientHandleNamespaceConnect = true
 )
 
 var totalConnectedNamespace = new(uint64)
@@ -39,10 +42,10 @@ var (
 	sem = semaphore.NewWeighted(maxConcurrentClients)
 
 	handler = ws.WithTimeout{
-		ReadTimeout:  0 * time.Second, // alive,
-		WriteTimeout: 0 * time.Second, // alive,
+		ReadTimeout:  40 * time.Second, // alive,
+		WriteTimeout: 40 * time.Second, // alive,
 		Events: ws.Events{
-			ws.OnNamespaceConnect: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 				atomic.AddUint64(totalConnectedNamespace, 1)
 				return nil
 			},
@@ -104,6 +107,14 @@ func collectError(op string, err error) {
 
 func main() {
 	log.Println("-- Running...")
+	dialer := gobwas.DefaultDialer
+	if len(os.Args) > 1 {
+		if os.Args[1] == "gorilla" { // go run main.go gorilla
+			dialer = gorilla.DefaultDialer
+			log.Printf("Using Gorilla Dialer.")
+		}
+	}
+
 	f, err := os.Open("./test.data")
 	if err != nil {
 		panic(err)
@@ -120,22 +131,27 @@ func main() {
 	wg := new(sync.WaitGroup)
 	wg.Add(totalClients)
 
-	relaxCPU := 5 * time.Second // this may not be useful if host contains high-end hardware.
+	relaxCPU := 15 * time.Millisecond // this may not be useful if host contains high-end hardware.
 	lastRelaxCPU := time.Now()
 	stopMonitor := startMonitor()
 
+	if maxConcurrentClients > 0 {
+		relaxCPU = 2 * relaxCPU
+	}
+
 	var alive time.Duration
 	for i := 0; i < totalClients; i++ {
+
+		if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
+			runtime.GC()
+			time.Sleep(relaxCPU)
+			lastRelaxCPU = time.Now()
+		}
+
 		if maxConcurrentClients > 0 {
 			err := sem.Acquire(context.TODO(), 1)
 			if err != nil {
 				panic(err)
-			}
-		} else {
-			if time.Now().After(lastRelaxCPU.Add(relaxCPU)) {
-				runtime.GC()
-				time.Sleep(relaxCPU)
-				lastRelaxCPU = time.Now()
 			}
 		}
 
@@ -152,7 +168,7 @@ func main() {
 			//	alive = 8*time.Second - time.Duration(rand.Int63n(3))*time.Millisecond
 		}
 
-		go connect(wg, alive)
+		go connect(wg, dialer, alive)
 	}
 
 	wg.Wait()
@@ -211,7 +227,7 @@ func main() {
 		}
 	}
 
-	if connectionFailures == 0 && len(connectErrors) == 0 && len(disconnectErrors) == 0 {
+	if connectionFailures == 0 && len(connectNamespaceErrors) == 0 && len(connectErrors) == 0 && len(disconnectErrors) == 0 {
 		log.Println("ALL OK.")
 	}
 
@@ -222,9 +238,9 @@ func main() {
 
 var counter uint32
 
-var smallPayload = []byte("The affection are determine how performed intention discourse but.")
+var smallPayload = []byte("the affection")
 
-func connect(wg *sync.WaitGroup, alive time.Duration) {
+func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	defer wg.Done()
 
 	// t := atomic.AddUint32(&counter, 1)
@@ -233,7 +249,7 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
 	// defer cancel()
 	ctx := context.TODO()
-	client, err := ws.Dial(ctx, url, handler)
+	client, err := ws.Dial(dialer, ctx, url, handler)
 
 	if err != nil {
 		//	log.Printf("[%d] %s\n", t, err)
@@ -245,24 +261,24 @@ func connect(wg *sync.WaitGroup, alive time.Duration) {
 
 	// defer client.Close()
 
-	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(20*time.Second))
-	// defer cancel()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
+	defer cancel()
 
 	var c ws.NSConn
 
 	if clientHandleNamespaceConnect {
-		c, err = client.Connect(nil, "")
+		c, err = client.Connect(ctx, "")
 	} else {
-		c, err = client.WaitServerConnect(nil, "")
+		c, err = client.WaitServerConnect(ctx, "")
 	}
 
 	if err != nil {
-		atomic.AddUint64(&connectionFailures, 1)
+		// atomic.AddUint64(&connectionFailures, 1)
 		collectError("connect namespace", err)
-
 		if verbose {
 			log.Println(err)
 		}
+
 		return
 	}
 

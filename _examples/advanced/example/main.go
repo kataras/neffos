@@ -100,19 +100,29 @@ func main() {
 	}
 	side := args[0]
 
-	switch side {
-	case "server":
-		upgrader := gobwas.DefaultUpgrader
-		if len(args) > 1 {
-			method := args[1]
-			if method == "gorilla" {
-				upgrader = gorilla.DefaultUpgrader
+	var (
+		upgrader = gobwas.DefaultUpgrader
+		dialer   = gobwas.DefaultDialer
+	)
+
+	if len(args) > 1 {
+		method := args[1]
+		if method == "gorilla" {
+			upgrader = gorilla.DefaultUpgrader
+			dialer = gorilla.DefaultDialer
+			if side == "server" {
 				log.Printf("Using with Gorilla Upgrader.")
+			} else {
+				log.Printf("Using with Gorilla Dialer.")
 			}
 		}
+	}
+
+	switch side {
+	case "server":
 		server(upgrader)
 	case "client":
-		client()
+		client(dialer)
 	default:
 		log.Fatalf("unexpected argument, expected 'server' or 'client' but got '%s'", side)
 	}
@@ -170,11 +180,11 @@ func server(upgrader ws.Upgrader) {
 	}
 }
 
-func client() {
+func client(dialer ws.Dialer) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(timeout))
 	defer cancel()
 
-	client, err := ws.Dial(ctx, endpoint, handler)
+	client, err := ws.Dial(dialer, ctx, endpoint, handler)
 	if err != nil {
 		panic(err)
 	}
