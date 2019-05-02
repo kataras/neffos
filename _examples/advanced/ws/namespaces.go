@@ -4,13 +4,14 @@ import (
 	"time"
 )
 
-type connHandler interface {
+type ConnHandler interface {
 	getNamespaces() Namespaces
 }
 
 var (
-	_ connHandler = (Events)(nil)
-	_ connHandler = (Namespaces)(nil)
+	_ ConnHandler = (Events)(nil)
+	_ ConnHandler = (Namespaces)(nil)
+	_ ConnHandler = WithTimeout{}
 )
 
 var (
@@ -66,7 +67,7 @@ func (t WithTimeout) getNamespaces() Namespaces {
 	return joinConnHandlers(t.Namespaces, t.Events).getNamespaces()
 }
 
-func getTimeouts(h connHandler) (readTimeout time.Duration, writeTimeout time.Duration) {
+func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Duration) {
 	if t, ok := h.(WithTimeout); ok {
 		readTimeout = t.ReadTimeout
 		writeTimeout = t.WriteTimeout
@@ -75,7 +76,7 @@ func getTimeouts(h connHandler) (readTimeout time.Duration, writeTimeout time.Du
 	return
 }
 
-func joinConnHandlers(connHandlers ...connHandler) connHandler {
+func joinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 	namespaces := Namespaces{}
 
 	for _, h := range connHandlers {

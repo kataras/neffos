@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gobwas/ws/wsutil"
 	"github.com/iris-contrib/go.uuid"
 )
 
@@ -23,8 +22,6 @@ type Socket interface {
 	ReadText(timeout time.Duration) (body []byte, err error)
 	WriteText(body []byte, timeout time.Duration) error
 }
-
-type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
 
 // IDGenerator is the type of function that it is used
 // to generate unique identifiers for new connections.
@@ -389,18 +386,6 @@ func (c *conn) startReader() {
 
 		b, err := c.underline.ReadText(c.ReadTimeout)
 		if err != nil {
-			if err == wsutil.ErrInvalidUTF8 { // TODO: remove this.
-				println("invalid utf8")
-				if c.isAcknowledged() {
-					println("continue with re-send of all the waiting messages on the other ide: " + err.Error())
-
-					c.write(Message{isNoOp: true})
-					continue
-				} else {
-					println("not ack")
-				}
-			}
-
 			return
 		}
 
@@ -600,8 +585,10 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	// }
 
 	// msg.wait = time.Now().String() //
-
-	msg.wait = strconv.FormatInt(time.Now().Unix(), 10)
+	now := time.Now().UnixNano()
+	// second := rand.New(rand.NewSource(now)).Int63n(50-25) + 25
+	// msg.wait = strconv.FormatInt(now, 10) + "_" + strconv.FormatInt(second, 10)
+	msg.wait = strconv.FormatInt(now, 10)
 	if c.IsClient() {
 		msg.wait = "client_" + msg.wait
 	}

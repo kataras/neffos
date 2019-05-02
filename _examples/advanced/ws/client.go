@@ -37,7 +37,7 @@ type Dialer func(ctx context.Context, url string) (Socket, error)
 
 // Dial establish a new websocket client.
 // Context "ctx" is used for handshake timeout.
-func Dial(dial Dialer, ctx context.Context, url string, connHandler connHandler) (*Client, error) {
+func Dial(dial Dialer, ctx context.Context, url string, connHandler ConnHandler) (*Client, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -51,19 +51,21 @@ func Dial(dial Dialer, ctx context.Context, url string, connHandler connHandler)
 		return nil, err
 	}
 
+	if connHandler == nil {
+		connHandler = Namespaces{}
+	}
+
 	c := newConn(underline, connHandler.getNamespaces())
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 	c.ReadTimeout = readTimeout
 	c.WriteTimeout = writeTimeout
 
 	go c.startReader()
-	// go c.startWriter()
 
 	client := &Client{
 		conn: c,
 	}
 
-	// underline.Write(trashMessage)
 	underline.WriteText(ackBinary, writeTimeout)
 
 	return client, nil

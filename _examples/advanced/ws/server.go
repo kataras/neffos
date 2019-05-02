@@ -8,9 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/kataras/fastws"
 )
+
+type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
 
 type Server struct {
 	upgrader    Upgrader
@@ -25,7 +25,6 @@ type Server struct {
 	writeTimeout time.Duration
 
 	// connections chan *conn
-	ws    *fastws.FastWS
 	count uint64
 
 	connections map[*conn]struct{}
@@ -37,7 +36,7 @@ type Server struct {
 	broadcastMessage Message
 	broadcastMu      sync.Mutex
 	broadcastCond    *sync.Cond
-	broadcast        chan Message
+	//	broadcast        chan Message
 	// no... currentReceivers map[string]map[*nsConn]struct{}
 	//
 
@@ -48,9 +47,7 @@ type Server struct {
 	OnDisconnect func(c Conn)
 }
 
-func New(upgrader Upgrader, connHandler connHandler) *Server {
-	ws := fastws.New()
-
+func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 
 	s := &Server{
@@ -62,16 +59,13 @@ func New(upgrader Upgrader, connHandler connHandler) *Server {
 		connect:      make(chan *conn, 1),
 		disconnect:   make(chan *conn),
 		actions:      make(chan func(Conn)),
-		broadcast:    make(chan Message, 1),
-		// connections: make(chan *conn, 1),
-		ws:          ws,
+		// broadcast:    make(chan Message, 1),
 		NSAcceptor:  DefaultNSAcceptor,
 		IDGenerator: DefaultIDGenerator,
 	}
 
 	s.broadcastCond = sync.NewCond(&s.broadcastMu)
 
-	ws.OnConnected = s.onConnected
 	go s.start()
 
 	return s
@@ -127,16 +121,6 @@ func (s *Server) start() {
 			// 				s.OnDisconnect(c)
 			// 			}
 			// 		}
-			// 		// select {
-			// 		// case c.out <- msgBinary:
-			// 		// default:
-			// 		// 	// close(c.out)
-			// 		// 	delete(s.connections, c)
-			// 		// 	atomic.AddUint64(&s.count, ^uint64(0))
-			// 		// 	if s.OnDisconnect != nil {
-			// 		// 		s.OnDisconnect(c)
-			// 		// 	}
-			// 		// }
 			// 	}
 		}
 	}
@@ -271,78 +255,3 @@ func (s *Server) GetConnections() map[string]Conn {
 
 var ErrBadNamespace = errors.New("bad namespace")
 var ErrForbiddenNamespace = errors.New("forbidden namespace")
-
-func (s *Server) onConnected(underline *fastws.Conn) error {
-	// namespace := underline.Request.URL.Query().Get("ns")
-	// if !s.NSAcceptor(conn.Request, namespace) {
-	// 	return ErrForbiddenNamespace
-	// }
-
-	// events, ok := s.namespaces[namespace]
-	// if !ok {
-	// 	return ErrBadNamespace
-	// }
-
-	underline.WriteTimeout = s.writeTimeout
-	underline.ReadTimeout = s.readTimeout
-	// underline.Flush = false
-
-	c := newConn(underline, s.namespaces)
-	c.server = s
-
-	if s.OnError != nil {
-		underline.OnError = func(err error) bool {
-			if fastws.IsDisconnected(err) {
-				return false
-			}
-
-			return s.OnError(c, err)
-		}
-	}
-
-	// if err := c.ack(); err != nil {
-	// 	return err
-	// }
-
-	//	nsConn := c.getNSConnection(namespace)
-
-	go c.startReader()
-
-	s.connect <- c
-
-	// go c.startWriter()
-
-	// go func(c *conn) {
-	// 	for {
-	// 		s.broadcastMu.Lock()
-	// 		println("waiting...")
-	// 		s.broadcastCond.Wait()
-	// 		println("msg came")
-	// 		if c == nil || c.IsClosed() {
-	// 			s.broadcastMu.Unlock()
-	// 			return
-	// 		}
-
-	// 		if s.broadcastMessage.from != c.ID() {
-	// 			if !c.write(s.broadcastMessage) {
-	// 				println("wtf")
-	// 				s.broadcastMu.Unlock()
-	// 				return
-	// 			}
-	// 		}
-
-	// 		s.broadcastMu.Unlock()
-	// 	}
-
-	// }(c)
-
-	if s.OnConnect != nil {
-		if err := s.OnConnect(c); err != nil {
-			return err
-		}
-	}
-
-	// events.fireOnNamespaceConnect(c, Message{Namespace: namespace, isConnect: true})
-
-	return nil
-}

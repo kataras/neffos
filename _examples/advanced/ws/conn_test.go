@@ -2,13 +2,9 @@ package ws_test
 
 import (
 	"bytes"
-	"net/http"
 	"testing"
-	"time"
 
-	gorillaWs "github.com/gorilla/websocket"
 	"github.com/kataras/fastws/_examples/advanced/ws"
-	gorilla "github.com/kataras/fastws/_examples/advanced/ws/gorilla"
 )
 
 func TestEmitWithCallback(t *testing.T) {
@@ -18,39 +14,7 @@ func TestEmitWithCallback(t *testing.T) {
 		pongMessage = []byte("PONG MESSAGE")
 	)
 
-	// server := ws.New(gobwas.Upgrader(gobwasWs.HTTPUpgrader{}), ws.Namespaces{namespace: ws.Events{
-	// 	pingEvent: func(c ws.NSConn, msg ws.Message) error {
-	// 		// c.Emit("event", pongMessage)
-	// 		return ws.Reply(pongMessage) // changes only body; ns,event remains.
-	// 	}}})
-	server := ws.New(gorilla.Upgrader(gorillaWs.Upgrader{}), ws.Namespaces{namespace: ws.Events{
-		pingEvent: func(c ws.NSConn, msg ws.Message) error {
-			// c.Emit("event", pongMessage)
-			return ws.Reply(pongMessage) // changes only body; ns,event remains.
-		}}})
-	defer server.Close()
-
-	httpServer := http.Server{
-		Addr:    "localhost:8080",
-		Handler: server,
-	}
-	defer httpServer.Close()
-	go httpServer.ListenAndServe()
-	time.Sleep(200 * time.Millisecond)
-
-	client, err := ws.Dial(gorilla.Dialer(gorillaWs.DefaultDialer, make(http.Header)), nil, "ws://localhost:8080", ws.Namespaces{namespace: ws.Events{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	c, err := client.Connect(nil, namespace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-
-	for i := 1; i <= 5; i++ {
-		msg := c.Ask(nil, pingEvent, nil)
+	testMessage := func(dialer string, i int, msg ws.Message) {
 		if msg.Namespace != namespace {
 			t.Fatalf("[%d] expected namespace to be %s but got %s instead", i, namespace, msg.Namespace)
 		}
@@ -64,17 +28,43 @@ func TestEmitWithCallback(t *testing.T) {
 		}
 	}
 
-	msg := c.Ask(nil, pingEvent, nil)
+	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: ws.Events{
+		pingEvent: func(c ws.NSConn, msg ws.Message) error {
+			// c.Emit("event", pongMessage)
+			return ws.Reply(pongMessage) // changes only body; ns,event remains.
+		}}})
+	defer teardownServer()
 
-	if msg.Namespace != namespace {
-		t.Fatalf("expected namespace to be %s but got %s instead", namespace, msg.Namespace)
-	}
+	err := runTestClient("localhost:8080", ws.Namespaces{namespace: ws.Events{}}, func(dialer string, client *ws.Client) {
+		defer client.Close()
 
-	if msg.Event != pingEvent {
-		t.Fatalf("expected event to be %s but got %s instead", pingEvent, msg.Event)
-	}
+		c, err := client.Connect(nil, namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	if !bytes.Equal(msg.Body, pongMessage) {
-		t.Fatalf("from callback: expected %s but got %s", string(pongMessage), string(msg.Body))
+		// loops := 5
+		// wg := new(sync.WaitGroup)
+		// wg.Add(loops)
+		// for i := 1; i <= loops; i++ {
+		// 	go func(i int) {
+		// 		defer wg.Done()
+		// 		msg := c.Ask(nil, pingEvent, nil)
+		// 		testMessage(dialer, i, msg)
+		// 	}(i)
+		// }
+
+		// wg.Wait()
+
+		for i := 1; i <= 5; i++ {
+			msg := c.Ask(nil, pingEvent, nil)
+			testMessage(dialer, i, msg)
+		}
+
+		msg := c.Ask(nil, pingEvent, nil)
+		testMessage(dialer, -1, msg)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
