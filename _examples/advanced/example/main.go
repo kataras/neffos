@@ -172,9 +172,10 @@ func server(upgrader ws.Upgrader) {
 				c.DisconnectFrom(nil, namespace)
 			})
 		} else {
-			srv.Do(func(c ws.Conn) {
-				c.Write(namespace, "chat", text)
-			})
+			// srv.Do(func(c ws.Conn) {
+			// 	c.Write(namespace, "chat", text)
+			// })
+			srv.Broadcast(nil, ws.Message{Namespace: namespace, Event: "chat", Body: text})
 		}
 		fmt.Fprint(os.Stdout, ">> ")
 	}

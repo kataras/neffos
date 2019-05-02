@@ -27,13 +27,13 @@ var (
 )
 
 const (
-	broadcast = false
-	verbose   = false
+	verbose = false
 	// max depends on the OS.
-	totalClients         = 7000
-	maxConcurrentClients = 1500
+	totalClients         = 100000
+	maxConcurrentClients = 0
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
 	clientHandleNamespaceConnect = true
+	broadcast                    = true
 )
 
 var totalConnectedNamespace = new(uint64)
@@ -42,8 +42,8 @@ var (
 	sem = semaphore.NewWeighted(maxConcurrentClients)
 
 	handler = ws.WithTimeout{
-		ReadTimeout:  40 * time.Second, // alive,
-		WriteTimeout: 40 * time.Second, // alive,
+		ReadTimeout:  60 * time.Second, // alive,
+		WriteTimeout: 60 * time.Second, // alive,
 		Events: ws.Events{
 			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 				atomic.AddUint64(totalConnectedNamespace, 1)
@@ -76,7 +76,7 @@ func startMonitor() func() {
 	go func() {
 		for {
 			<-timer.C
-			log.Printf("INFO: Current connected to namespace[%d]", *totalConnectedNamespace)
+			log.Printf("INFO: Total connected to namespace[%d]", *totalConnectedNamespace)
 		}
 	}()
 	return timer.Stop
@@ -246,9 +246,8 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	// t := atomic.AddUint32(&counter, 1)
 
 	// log.Printf("[%d] try to connect\n", t)
-	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(alive))
-	// defer cancel()
-	ctx := context.TODO()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(3*time.Second))
+	defer cancel()
 	client, err := ws.Dial(dialer, ctx, url, handler)
 
 	if err != nil {
@@ -261,15 +260,15 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 
 	// defer client.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
-	defer cancel()
+	ctxConnect, cancelConnect := context.WithDeadline(context.Background(), time.Now().Add(15*time.Second))
+	defer cancelConnect()
 
 	var c ws.NSConn
 
 	if clientHandleNamespaceConnect {
-		c, err = client.Connect(ctx, "")
+		c, err = client.Connect(ctxConnect, "")
 	} else {
-		c, err = client.WaitServerConnect(ctx, "")
+		c, err = client.WaitServerConnect(ctxConnect, "")
 	}
 
 	if err != nil {

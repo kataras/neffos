@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,6 +69,63 @@ type NSConn interface {
 	Disconnect(ctx context.Context) error
 }
 
+// IsDisconnected reports whether the "err" is a timeout or a closed connection error.
+func IsDisconnected(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return IsClosed(err) || IsTimeout(err)
+}
+
+// IsClosed reports whether the "err" is a "closed by the remote host" network connection error.
+func IsClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if _, ok := err.(CloseError); ok {
+		return true
+	}
+
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		return true
+	}
+
+	if netErr, ok := err.(*net.OpError); ok {
+		if netErr.Err == nil {
+			return false
+		}
+
+		if sysErr, ok := netErr.Err.(*os.SyscallError); ok {
+			if sysErr.Err == nil {
+				return false
+			}
+			// return strings.HasSuffix(sysErr.Err.Error(), "closed by the remote host.")
+			return true
+		}
+
+		return strings.HasSuffix(err.Error(), "use of closed network connection")
+	}
+
+	return false
+}
+
+// IsTimeout reports whether the "err" is caused by a defined timeout,
+// callers can add timeouts via `Dial` or via `Conn.WriteTimeout`, `Conn.ReadTimeout`, `FastWS.HandshakeTimeout`.
+func IsTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if netErr, ok := err.(*net.OpError); ok {
+		// poll.TimeoutError is the /internal/poll of the go language itself, we can't use it directly.
+		return netErr.Timeout()
+	}
+
+	return false
+}
+
 type conn struct {
 	id      string
 	netConn net.Conn
@@ -77,7 +137,7 @@ type conn struct {
 	mu                  sync.RWMutex
 	// connectedNamespacesWaiters map[string]chan struct{}
 
-	// closeCh chan struct{}
+	closeCh chan struct{}
 	// out     chan []byte
 	// broadcastChannel chan Message // server-side only.
 	// in   chan []byte
@@ -105,7 +165,7 @@ func newConn(underline Socket, namespaces Namespaces) *conn {
 		namespaces:          namespaces,
 		connectedNamespaces: make(map[string]*nsConn),
 		// connectedNamespacesWaiters: make(map[string]chan struct{}),
-		// closeCh:         make(chan struct{}),
+		// closeCh: make(chan struct{}),
 		// out:             make(chan []byte, 256),
 		// in:              make(chan []byte, 256),
 		once:            new(uint32),
@@ -219,9 +279,8 @@ func isCloseError(err error) bool {
 }
 
 var (
-	trashMessage = []byte("trash message") // []byte(time.Now().String())
-	ackBinary    = []byte("ack")
-	ackOKBinary  = []byte("ack_ok")
+	ackBinary   = []byte("ack")
+	ackOKBinary = []byte("ack_ok")
 )
 
 func (c *conn) isAcknowledged() bool {
@@ -257,7 +316,7 @@ func (c *conn) startReader() {
 	// 	c.underline.ReadText(c.ReadTimeout)
 	// }
 
-readLoop:
+	// readLoop:
 	for {
 		// if c.ReadTimeout > 0 {
 		// 	c.underline.NetConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
@@ -344,6 +403,8 @@ readLoop:
 
 			return
 		}
+
+		// go func(b []byte) {
 		// fmt.Printf("%s\n\n", string(b))
 
 		if bytes.HasPrefix(b, ackBinary) {
@@ -370,7 +431,8 @@ readLoop:
 				}
 			}
 
-			continue readLoop
+			// continue readLoop
+			continue
 		} else {
 			// TODO FIX SOMETIMES CONNECT MESSAGE IS BEFORE ID.
 			// if c.IsClient() {
@@ -389,19 +451,21 @@ readLoop:
 		msg := deserializeMessage(nil, b)
 		if msg.isInvalid {
 			fmt.Printf("%s[%d] is invalid payload\n", b, len(b))
-			continue // or return (close)?
+			// continue // or return (close)?
+			continue
 		}
 
 		if !c.isAcknowledged() {
 			// fmt.Printf("queue: add %s/%s\n%#+v\n", msg.Namespace, msg.Event, msg)
 			queue = append(queue, &msg)
+			// continue
 			continue
 		}
 
 		//	fmt.Printf("=============\n%s\n%#+v\n=============\n", string(b), msg)
 		if !c.handleMessage(msg) {
 			println(msg.Event + " not handled")
-			return
+			continue
 		}
 
 		// if msg.isConnect {
@@ -435,6 +499,8 @@ readLoop:
 		// 		break
 		// 	}
 		// }
+		// }(b)
+
 	}
 
 }
@@ -458,6 +524,8 @@ func (c *conn) handleMessage(msg Message) bool {
 			// fmt.Printf("msg wait: %d for event: %s | isDisconnect: %v\n", msg.wait, msg.Event, msg.isDisconnect)
 			ch <- msg
 			return true
+		} else {
+			// println(msg.wait + " wait Event: " + msg.Event + " not found")
 		}
 	}
 
@@ -521,11 +589,6 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	// 	// println("no ACK but ask")
 	// }
 
-	var d int64 = 1
-	if c.IsClient() {
-		d = 2
-	}
-
 	// waitID := d * uint64(time.Now().Unix())
 	// fmt.Printf("create a token with wait: %d for msg.Event: %s \n", waitID, msg.Event)
 	// msg.wait = waitID
@@ -536,11 +599,21 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	// 	msg.wait = 2
 	// }
 
-	msg.wait = strconv.FormatInt(time.Now().Unix()/d, 10)
+	// msg.wait = time.Now().String() //
 
-	if !c.write(msg) {
-		println("here 2")
-		return Message{}, ErrWrite
+	msg.wait = strconv.FormatInt(time.Now().Unix(), 10)
+	if c.IsClient() {
+		msg.wait = "client_" + msg.wait
+	}
+
+	if ctx == nil {
+		ctx = context.TODO()
+	} else {
+		if deadline, has := ctx.Deadline(); has {
+			if deadline.Before(time.Now().Add(-1 * time.Second)) {
+				return Message{}, context.DeadlineExceeded
+			}
+		}
 	}
 
 	ch := make(chan Message)
@@ -548,22 +621,30 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	c.waitingMessages[msg.wait] = ch
 	c.mu.Unlock()
 
-	if ctx == nil {
-		ctx = context.Background()
+	if !c.write(msg) {
+		println("here 2")
+		return Message{}, ErrWrite
 	}
+
+	// receive := <-ch
+	// c.mu.Lock()
+	// delete(c.waitingMessages, receive.wait)
+	// c.mu.Unlock()
+	//fmt.Printf("got waiting message: %d\n", msg.wait)
+	// return receive, nil
 
 	select {
 	case <-ctx.Done():
 		// fmt.Printf("[%s] isClosed=%v | timeout for message: %#+v\n", c.ID(), c.IsClosed(), msg)
 		c.Close()
-		return Message{}, ctx.Err()
+		// return Message{}, ctx.Err()
 		// if msg.isConnect || msg.isDisconnect || c.isClosed() {
 		// 	close(ch)
 		// 	c.Close()
 		// 	return Message{}, true
 		// }
 
-		// return Message{}, false
+		return Message{}, ctx.Err()
 	case receive := <-ch:
 		c.mu.Lock()
 		delete(c.waitingMessages, receive.wait)
@@ -576,14 +657,6 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 		}
 		return receive, nil
 	}
-
-	// msg, ok := <-ch
-	// c.mu.Lock()
-	// delete(c.waitingMessages, msg.wait)
-	// c.mu.Unlock()
-	//fmt.Printf("got waiting message: %d\n", msg.wait)
-
-	// return msg, ok
 }
 
 // DisconnectFrom gracefully disconnects from a namespace.
@@ -649,7 +722,7 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 	// }
 
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = context.TODO()
 	}
 
 	// if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -672,6 +745,8 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 			if found && c.isAcknowledged() {
 				return ns, nil
 			}
+
+			time.Sleep(syncWaitDur)
 		}
 	}
 
@@ -695,21 +770,10 @@ func (c *conn) WaitConnect(ctx context.Context, namespace string) (NSConn, error
 const syncWaitDur = 15 * time.Millisecond
 
 func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
-	if !c.isAcknowledged() {
-		if c.IsClosed() {
-			return nil, ErrWrite
+	if !c.IsClient() {
+		for !c.isAcknowledged() {
+			time.Sleep(syncWaitDur)
 		}
-
-		if ctx != nil {
-			if deadline, has := ctx.Deadline(); has {
-				if deadline.Before(time.Now()) {
-					return nil, context.DeadlineExceeded
-				}
-			}
-		}
-
-		time.Sleep(syncWaitDur)
-		return c.Connect(ctx, namespace)
 	}
 
 	// c.mu.RLock()
@@ -811,7 +875,7 @@ func (c *conn) Close() {
 				// // close(c.out)
 			}
 
-			//	close(c.closeCh)
+			// close(c.closeCh)
 		}()
 
 		c.underline.NetConn().Close()
@@ -858,14 +922,14 @@ func (c *conn) write(msg Message) bool {
 		return false
 	}
 
-	msg.from = c.ID()
+	// msg.from = c.ID()
 
 	if !msg.isConnect && !msg.isDisconnect {
 		c.mu.RLock()
 		_, ok := c.connectedNamespaces[msg.Namespace]
 		c.mu.RUnlock()
 		if !ok {
-			println("namespace " + msg.Namespace + " not found")
+			// println("namespace " + msg.Namespace + " not found")
 			return false
 		}
 	}
@@ -873,8 +937,11 @@ func (c *conn) write(msg Message) bool {
 	err := c.underline.WriteText(serializeMessage(nil, msg), c.WriteTimeout)
 	// _, err := c.underline.NetConn.Write(serializeMessage(nil, msg))
 	if err != nil {
+		if IsClosed(err) {
+			c.Close()
+		}
 		// c.underline.HandleError(err)
-		println("err on write: " + err.Error() + "\n" + msg.Event + ": " + string(msg.Body))
+		// println("err on write: " + err.Error() + "\n" + msg.Event + ": " + string(msg.Body))
 		return false
 	}
 

@@ -16,15 +16,14 @@ import (
 )
 
 const (
-	endpoint  = "localhost:9595"
-	broadcast = false
-	verbose   = false
-	maxC      = 0
+	endpoint = "localhost:9595"
+	verbose  = false
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
 	serverHandleNamespaceConnect = false
+	broadcast                    = true
 )
 
-var totalClients uint64 = 7000 // max depends on the OS, read more below.
+var totalClients uint64 = 100000 // max depends on the OS, read more below.
 // For example for windows:
 //
 // $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -61,8 +60,8 @@ func main() {
 	}
 
 	srv := ws.New(upgrader, ws.WithTimeout{
-		ReadTimeout:  40 * time.Second,
-		WriteTimeout: 40 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
 		Events: ws.Events{
 			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 				if msg.Err != nil {

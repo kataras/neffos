@@ -38,7 +38,7 @@ func newSocket(underline net.Conn, client bool) *Socket {
 		// be received between text/binary continuation frames.
 		// Read `gobwas/wsutil/reader#NextReader`.
 		//
-		// OnIntermediate:  controlHandler,
+		OnIntermediate: controlHandler,
 	}
 
 	return &Socket{

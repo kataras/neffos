@@ -34,10 +34,10 @@ type Server struct {
 	actions     chan func(Conn)
 
 	//
-	// broadcastMessage Message
-	// broadcastMu      sync.Mutex
-	// broadcastCond    *sync.Cond
-	broadcast chan Message
+	broadcastMessage Message
+	broadcastMu      sync.Mutex
+	broadcastCond    *sync.Cond
+	broadcast        chan Message
 	// no... currentReceivers map[string]map[*nsConn]struct{}
 	//
 
@@ -69,7 +69,7 @@ func New(upgrader Upgrader, connHandler connHandler) *Server {
 		IDGenerator: DefaultIDGenerator,
 	}
 
-	// s.broadcastCond = sync.NewCond(&s.broadcastMu)
+	s.broadcastCond = sync.NewCond(&s.broadcastMu)
 
 	ws.OnConnected = s.onConnected
 	go s.start()
@@ -98,46 +98,46 @@ func (s *Server) start() {
 			for c := range s.connections {
 				fn(c)
 			}
-		case msg := <-s.broadcast:
-			// msgBinary := serializeMessage(nil, msg)
-			for c := range s.connections {
-				if !c.isAcknowledged() {
-					continue
-				}
+			// case msg := <-s.broadcast:
+			// 	// msgBinary := serializeMessage(nil, msg)
+			// 	for c := range s.connections {
+			// 		if c.ID() == msg.from {
+			// 			continue
+			// 		}
 
-				//	println("send")
+			// 		if !c.isAcknowledged() {
+			// 			continue
+			// 		}
 
-				if c.ID() == msg.from {
-					continue
-				}
+			// 		//	println("send")
 
-				if !msg.isConnect && !msg.isDisconnect {
-					c.mu.RLock()
-					_, ok := c.connectedNamespaces[msg.Namespace]
-					c.mu.RUnlock()
-					if !ok {
-						continue
-					}
-				}
+			// 		if !msg.isConnect && !msg.isDisconnect {
+			// 			c.mu.RLock()
+			// 			_, ok := c.connectedNamespaces[msg.Namespace]
+			// 			c.mu.RUnlock()
+			// 			if !ok {
+			// 				continue
+			// 			}
+			// 		}
 
-				if !c.write(msg) {
-					delete(s.connections, c)
-					atomic.AddUint64(&s.count, ^uint64(0))
-					if s.OnDisconnect != nil {
-						s.OnDisconnect(c)
-					}
-				}
-				// select {
-				// case c.out <- msgBinary:
-				// default:
-				// 	// close(c.out)
-				// 	delete(s.connections, c)
-				// 	atomic.AddUint64(&s.count, ^uint64(0))
-				// 	if s.OnDisconnect != nil {
-				// 		s.OnDisconnect(c)
-				// 	}
-				// }
-			}
+			// 		if !c.write(msg) {
+			// 			delete(s.connections, c)
+			// 			atomic.AddUint64(&s.count, ^uint64(0))
+			// 			if s.OnDisconnect != nil {
+			// 				s.OnDisconnect(c)
+			// 			}
+			// 		}
+			// 		// select {
+			// 		// case c.out <- msgBinary:
+			// 		// default:
+			// 		// 	// close(c.out)
+			// 		// 	delete(s.connections, c)
+			// 		// 	atomic.AddUint64(&s.count, ^uint64(0))
+			// 		// 	if s.OnDisconnect != nil {
+			// 		// 		s.OnDisconnect(c)
+			// 		// 	}
+			// 		// }
+			// 	}
 		}
 	}
 }
@@ -184,7 +184,33 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.connect <- c
 
 	go c.startReader()
-	go c.startWriter()
+	// go c.startWriter()
+
+	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
+	go func(c *conn) {
+		for {
+			// select {
+			// case <-c.closeCh:
+			// 	return
+			// default:
+			s.broadcastMu.Lock()
+			s.broadcastCond.Wait()
+			if c == nil || c.IsClosed() {
+				s.broadcastMu.Unlock()
+				return
+			}
+
+			if s.broadcastMessage.from != c.ID() {
+				if !c.write(s.broadcastMessage) && c.IsClosed() {
+					s.broadcastMu.Unlock()
+					return
+				}
+			}
+
+			s.broadcastMu.Unlock()
+		}
+
+	}(c)
 
 	if s.OnConnect != nil {
 		if err = s.OnConnect(c); err != nil {
@@ -206,13 +232,13 @@ func (s *Server) Broadcast(from Conn, msg Message) {
 		msg.from = from.ID()
 	}
 
-	s.broadcast <- msg
+	// s.broadcast <- msg
 
-	// s.broadcastMu.Lock()
-	// s.broadcastMessage = msg
-	// s.broadcastMu.Unlock()
+	s.broadcastMu.Lock()
+	s.broadcastMessage = msg
+	s.broadcastMu.Unlock()
 
-	// s.broadcastCond.Broadcast()
+	s.broadcastCond.Broadcast()
 }
 
 // not thread safe.
@@ -289,18 +315,25 @@ func (s *Server) onConnected(underline *fastws.Conn) error {
 	// go func(c *conn) {
 	// 	for {
 	// 		s.broadcastMu.Lock()
+	// 		println("waiting...")
 	// 		s.broadcastCond.Wait()
-	// 		if c == nil || c.isClosed() {
+	// 		println("msg came")
+	// 		if c == nil || c.IsClosed() {
 	// 			s.broadcastMu.Unlock()
 	// 			return
 	// 		}
 
 	// 		if s.broadcastMessage.from != c.ID() {
-	// 			c.write(s.broadcastMessage)
+	// 			if !c.write(s.broadcastMessage) {
+	// 				println("wtf")
+	// 				s.broadcastMu.Unlock()
+	// 				return
+	// 			}
 	// 		}
 
 	// 		s.broadcastMu.Unlock()
 	// 	}
+
 	// }(c)
 
 	if s.OnConnect != nil {
