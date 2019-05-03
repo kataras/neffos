@@ -7,7 +7,7 @@ import (
 	"github.com/kataras/fastws/_examples/advanced/ws"
 )
 
-func TestEmitWithCallback(t *testing.T) {
+func TestAsk(t *testing.T) {
 	var (
 		namespace   = "default"
 		pingEvent   = "ping"
@@ -16,15 +16,15 @@ func TestEmitWithCallback(t *testing.T) {
 
 	testMessage := func(dialer string, i int, msg ws.Message) {
 		if msg.Namespace != namespace {
-			t.Fatalf("[%d] expected namespace to be %s but got %s instead", i, namespace, msg.Namespace)
+			t.Fatalf("[%s] [%d] expected namespace to be %s but got %s instead", dialer, i, namespace, msg.Namespace)
 		}
 
 		if msg.Event != pingEvent {
-			t.Fatalf("[%d] expected event to be %s but got %s instead", i, pingEvent, msg.Event)
+			t.Fatalf("[%s] [%d] expected event to be %s but got %s instead", dialer, i, pingEvent, msg.Event)
 		}
 
 		if !bytes.Equal(msg.Body, pongMessage) {
-			t.Fatalf("[%d] from callback: expected %s but got %s", i, string(pongMessage), string(msg.Body))
+			t.Fatalf("[%s] [%d] from callback: expected %s but got %s", dialer, i, string(pongMessage), string(msg.Body))
 		}
 	}
 

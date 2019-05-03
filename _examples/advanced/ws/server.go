@@ -33,11 +33,12 @@ type Server struct {
 	actions     chan func(Conn)
 
 	//
-	broadcastMessage Message
-	broadcastMu      sync.Mutex
-	broadcastCond    *sync.Cond
+	// broadcastMessage Message
+	// broadcastMu      sync.Mutex
+	// broadcastCond    *sync.Cond
 	//	broadcast        chan Message
 	// no... currentReceivers map[string]map[*nsConn]struct{}
+	broadcaster *broadcaster
 	//
 
 	closed uint32
@@ -59,12 +60,12 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		connect:      make(chan *conn, 1),
 		disconnect:   make(chan *conn),
 		actions:      make(chan func(Conn)),
-		// broadcast:    make(chan Message, 1),
-		NSAcceptor:  DefaultNSAcceptor,
-		IDGenerator: DefaultIDGenerator,
+		broadcaster:  newBroadcaster(),
+		NSAcceptor:   DefaultNSAcceptor,
+		IDGenerator:  DefaultIDGenerator,
 	}
 
-	s.broadcastCond = sync.NewCond(&s.broadcastMu)
+	//	s.broadcastCond = sync.NewCond(&s.broadcastMu)
 
 	go s.start()
 
@@ -92,36 +93,6 @@ func (s *Server) start() {
 			for c := range s.connections {
 				fn(c)
 			}
-			// case msg := <-s.broadcast:
-			// 	// msgBinary := serializeMessage(nil, msg)
-			// 	for c := range s.connections {
-			// 		if c.ID() == msg.from {
-			// 			continue
-			// 		}
-
-			// 		if !c.isAcknowledged() {
-			// 			continue
-			// 		}
-
-			// 		//	println("send")
-
-			// 		if !msg.isConnect && !msg.isDisconnect {
-			// 			c.mu.RLock()
-			// 			_, ok := c.connectedNamespaces[msg.Namespace]
-			// 			c.mu.RUnlock()
-			// 			if !ok {
-			// 				continue
-			// 			}
-			// 		}
-
-			// 		if !c.write(msg) {
-			// 			delete(s.connections, c)
-			// 			atomic.AddUint64(&s.count, ^uint64(0))
-			// 			if s.OnDisconnect != nil {
-			// 				s.OnDisconnect(c)
-			// 			}
-			// 		}
-			// 	}
 		}
 	}
 }
@@ -165,42 +136,62 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.ReadTimeout = s.readTimeout
 	c.WriteTimeout = s.writeTimeout
 
-	s.connect <- c
-
 	go c.startReader()
 	// go c.startWriter()
 
 	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
+	// DONE: found, see `waitMessage`.
+	// go func(c *conn) {
+	// 	for {
+	// 		// select {
+	// 		// case <-c.closeCh:
+	// 		// 	return
+	// 		// default:
+	// 		s.broadcastMu.Lock()
+	// 		s.broadcastCond.Wait()
+	//
+	// 		if s.broadcastMessage.from != c.ID() {
+	// 			if !c.write(s.broadcastMessage) && c.IsClosed() {
+	// 				s.broadcastMu.Unlock()
+	// 				return
+	// 			}
+	// 		}
+	//
+	// 		s.broadcastMu.Unlock()
+	// 	}
+
+	// }(c)
+
 	go func(c *conn) {
-		for {
-			// select {
-			// case <-c.closeCh:
-			// 	return
-			// default:
-			s.broadcastMu.Lock()
-			s.broadcastCond.Wait()
-			if c == nil || c.IsClosed() {
-				s.broadcastMu.Unlock()
-				return
-			}
-
-			if s.broadcastMessage.from != c.ID() {
-				if !c.write(s.broadcastMessage) && c.IsClosed() {
-					s.broadcastMu.Unlock()
-					return
-				}
-			}
-
-			s.broadcastMu.Unlock()
+		for s.waitMessage(c) {
 		}
-
 	}(c)
+
+	s.connect <- c
 
 	if s.OnConnect != nil {
 		if err = s.OnConnect(c); err != nil {
 			s.disconnect <- c
 		}
 	}
+}
+
+func (s *Server) waitMessage(c *conn) bool {
+	s.broadcaster.mu.Lock()
+	defer s.broadcaster.mu.Unlock()
+
+	msg, ok := s.broadcaster.waitUntilClosed(c.closeCh)
+	if !ok {
+		return false
+	}
+
+	if msg.from != c.ID() {
+		if !c.write(msg) && c.IsClosed() {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (s *Server) GetTotalConnections() uint64 {
@@ -218,11 +209,13 @@ func (s *Server) Broadcast(from Conn, msg Message) {
 
 	// s.broadcast <- msg
 
-	s.broadcastMu.Lock()
-	s.broadcastMessage = msg
-	s.broadcastMu.Unlock()
+	// s.broadcastMu.Lock()
+	// s.broadcastMessage = msg
+	// s.broadcastMu.Unlock()
 
-	s.broadcastCond.Broadcast()
+	// s.broadcastCond.Broadcast()
+
+	s.broadcaster.broadcast(msg)
 }
 
 // not thread safe.

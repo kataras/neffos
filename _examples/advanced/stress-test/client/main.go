@@ -32,7 +32,7 @@ const (
 	totalClients         = 100000
 	maxConcurrentClients = 0
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
-	clientHandleNamespaceConnect = true
+	clientHandleNamespaceConnect = false
 	broadcast                    = true
 )
 
@@ -106,7 +106,6 @@ func collectError(op string, err error) {
 }
 
 func main() {
-	log.Println("-- Running...")
 	dialer := gobwas.DefaultDialer
 	if len(os.Args) > 1 {
 		if os.Args[1] == "gorilla" { // go run main.go gorilla
@@ -115,6 +114,7 @@ func main() {
 		}
 	}
 
+	log.Println("-- Running...")
 	f, err := os.Open("./test.data")
 	if err != nil {
 		panic(err)
@@ -246,8 +246,9 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	// t := atomic.AddUint32(&counter, 1)
 
 	// log.Printf("[%d] try to connect\n", t)
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(3*time.Second))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
 	defer cancel()
+
 	client, err := ws.Dial(dialer, ctx, url, handler)
 
 	if err != nil {
@@ -260,7 +261,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 
 	// defer client.Close()
 
-	ctxConnect, cancelConnect := context.WithDeadline(context.Background(), time.Now().Add(15*time.Second))
+	ctxConnect, cancelConnect := context.WithDeadline(context.Background(), time.Now().Add(25*time.Second))
 	defer cancelConnect()
 
 	var c ws.NSConn

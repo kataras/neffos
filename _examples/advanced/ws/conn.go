@@ -162,7 +162,7 @@ func newConn(underline Socket, namespaces Namespaces) *conn {
 		namespaces:          namespaces,
 		connectedNamespaces: make(map[string]*nsConn),
 		// connectedNamespacesWaiters: make(map[string]chan struct{}),
-		// closeCh: make(chan struct{}),
+		closeCh: make(chan struct{}),
 		// out:             make(chan []byte, 256),
 		// in:              make(chan []byte, 256),
 		once:            new(uint32),
@@ -763,6 +763,10 @@ func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
 		}
 	}
 
+	// for !c.isAcknowledged() {
+	// 	time.Sleep(syncWaitDur)
+	// }
+
 	// c.mu.RLock()
 	ns, alreadyConnected := c.connectedNamespaces[namespace]
 	// c.mu.RUnlock()
@@ -839,7 +843,7 @@ func (c *conn) IsClosed() bool {
 
 func (c *conn) Close() {
 	if atomic.CompareAndSwapUint32(c.once, 0, 1) {
-
+		close(c.closeCh)
 		// fire the namespaces' disconnect event for both server and client.
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, isDisconnect: true}
 		for _, ns := range c.connectedNamespaces {
@@ -862,7 +866,7 @@ func (c *conn) Close() {
 				// // close(c.out)
 			}
 
-			// close(c.closeCh)
+			//	close(c.closeCh)
 		}()
 
 		c.underline.NetConn().Close()
@@ -905,7 +909,6 @@ func (c *conn) WriteAndWait(ctx context.Context, namespace, event string, body [
 
 func (c *conn) write(msg Message) bool {
 	if c.IsClosed() {
-		println("write but closed.")
 		return false
 	}
 

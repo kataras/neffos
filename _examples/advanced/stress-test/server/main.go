@@ -19,7 +19,7 @@ const (
 	endpoint = "localhost:9595"
 	verbose  = false
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = false
+	serverHandleNamespaceConnect = true
 	broadcast                    = true
 )
 
