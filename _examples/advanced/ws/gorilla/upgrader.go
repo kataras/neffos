@@ -17,6 +17,6 @@ func Upgrader(upgrader gorilla.Upgrader) ws.Upgrader {
 			return nil, err
 		}
 
-		return newSocket(underline, false), nil
+		return newSocket(underline, r, false), nil
 	}
 }

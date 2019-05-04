@@ -19,8 +19,8 @@ const (
 	endpoint = "localhost:9595"
 	verbose  = false
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = true
-	broadcast                    = true
+	serverHandleNamespaceConnect = false
+	broadcast                    = false
 )
 
 var totalClients uint64 = 100000 // max depends on the OS, read more below.

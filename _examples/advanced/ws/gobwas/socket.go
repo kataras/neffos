@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 type Socket struct {
 	UnderlyingConn net.Conn
+	request        *http.Request
 
 	reader         *wsutil.Reader
 	controlHandler wsutil.FrameHandlerFunc
@@ -21,7 +23,7 @@ type Socket struct {
 	mu sync.Mutex
 }
 
-func newSocket(underline net.Conn, client bool) *Socket {
+func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
 	state := gobwas.StateServerSide
 	if client {
 		state = gobwas.StateClientSide
@@ -43,6 +45,7 @@ func newSocket(underline net.Conn, client bool) *Socket {
 
 	return &Socket{
 		UnderlyingConn: underline,
+		request:        request,
 		state:          state,
 		reader:         reader,
 		controlHandler: controlHandler,
@@ -51,6 +54,10 @@ func newSocket(underline net.Conn, client bool) *Socket {
 
 func (s *Socket) NetConn() net.Conn {
 	return s.UnderlyingConn
+}
+
+func (s *Socket) Request() *http.Request {
+	return s.request
 }
 
 // Returns io.EOF on remote close.

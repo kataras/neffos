@@ -28,7 +28,6 @@ func (b *broadcaster) getAwaiter() <-chan struct{} {
 	return *((*chan struct{})(ptr))
 }
 
-// lock required.
 func (b *broadcaster) broadcast(msg Message) {
 	b.mu.Lock()
 	b.message = msg
@@ -48,13 +47,6 @@ func (b *broadcaster) wait() (msg Message) {
 	b.mu.Lock()
 
 	return
-}
-
-func (b *broadcaster) getMessage() Message {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.message
 }
 
 func (b *broadcaster) subscribe(fn func(<-chan struct{})) {

@@ -5,12 +5,30 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/iris-contrib/go.uuid"
 )
 
 type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
+
+// IDGenerator is the type of function that it is used
+// to generate unique identifiers for new connections.
+//
+// See `Server.IDGenerator`.
+type IDGenerator func(w http.ResponseWriter, r *http.Request) string
+
+// DefaultIDGenerator returns a random unique for a new connection.
+var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
+	id, err := uuid.NewV4()
+	if err != nil {
+		return strconv.FormatInt(time.Now().Unix(), 10)
+	}
+	return id.String()
+}
 
 type Server struct {
 	upgrader    Upgrader
@@ -112,7 +130,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodGet {
-		println("method not GET")
 		// RCF rfc2616 https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
 		// The response MUST include an Allow header containing a list of valid methods for the requested resource.
 		//
@@ -132,9 +149,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	c := newConn(socket, s.namespaces)
 	c.id = s.IDGenerator(w, r)
-	c.server = s
 	c.ReadTimeout = s.readTimeout
 	c.WriteTimeout = s.writeTimeout
+	c.server = s
 
 	go c.startReader()
 	// go c.startWriter()

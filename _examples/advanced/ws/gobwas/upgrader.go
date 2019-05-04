@@ -17,6 +17,6 @@ func Upgrader(upgrader gobwas.HTTPUpgrader) ws.Upgrader {
 			return nil, err
 		}
 
-		return newSocket(underline, false), nil
+		return newSocket(underline, r, false), nil
 	}
 }

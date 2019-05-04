@@ -2,6 +2,7 @@ package gorilla
 
 import (
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -10,20 +11,27 @@ import (
 
 type Socket struct {
 	UnderlyingConn *gorilla.Conn
-	client         bool
+	request        *http.Request
+
+	client bool
 
 	mu sync.Mutex
 }
 
-func newSocket(underline *gorilla.Conn, client bool) *Socket {
+func newSocket(underline *gorilla.Conn, request *http.Request, client bool) *Socket {
 	return &Socket{
 		UnderlyingConn: underline,
+		request:        request,
 		client:         client,
 	}
 }
 
 func (s *Socket) NetConn() net.Conn {
 	return s.UnderlyingConn.UnderlyingConn()
+}
+
+func (s *Socket) Request() *http.Request {
+	return s.request
 }
 
 func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {

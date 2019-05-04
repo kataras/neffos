@@ -17,6 +17,6 @@ func Dialer(dialer gobwas.Dialer) ws.Dialer {
 			return nil, err
 		}
 
-		return newSocket(underline, true), nil
+		return newSocket(underline, nil, true), nil
 	}
 }

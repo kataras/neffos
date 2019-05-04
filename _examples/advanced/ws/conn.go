@@ -13,33 +13,33 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/iris-contrib/go.uuid"
 )
 
 type Socket interface {
 	NetConn() net.Conn
+	Request() *http.Request
 	ReadText(timeout time.Duration) (body []byte, err error)
 	WriteText(body []byte, timeout time.Duration) error
 }
 
-// IDGenerator is the type of function that it is used
-// to generate unique identifiers for new connections.
-//
-// See `FastWS.IDGenerator`.
-type IDGenerator func(w http.ResponseWriter, r *http.Request) string
+// type Socket interface {
+// 	UnderlyingSocket
+// 	Request() *http.Request
+// }
 
-// DefaultIDGenerator returns a random unique for a new connection.
-var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
-	id, err := uuid.NewV4()
-	if err != nil {
-		return strconv.FormatInt(time.Now().Unix(), 10)
-	}
-	return id.String()
-}
+// type socket struct {
+// 	UnderlyingSocket
+// 	Request *http.Request
+// }
+
+// func wrapSocket(s UnderlyingSocket, r *http.Request) *socket {
+// 	return &socket{
+// 		UnderlyingSocket: s,
+// 		Request:          r,
+// 	}
+// }
 
 type Conn interface {
-	NetConn() net.Conn
 	Socket() Socket
 	ID() string
 	Write(namespace string, event string, body []byte) bool
@@ -55,8 +55,6 @@ type Conn interface {
 
 	Close()
 	IsClosed() bool
-
-	Acknowledged() bool
 }
 
 type NSConn interface {
@@ -124,8 +122,7 @@ func IsTimeout(err error) bool {
 }
 
 type conn struct {
-	id      string
-	netConn net.Conn
+	id string
 
 	underline  Socket
 	namespaces Namespaces
@@ -174,10 +171,6 @@ func newConn(underline Socket, namespaces Namespaces) *conn {
 	return c
 }
 
-func (c *conn) NetConn() net.Conn {
-	return c.netConn
-}
-
 func (c *conn) IsClient() bool {
 	return c.server == nil
 }
@@ -188,10 +181,6 @@ func (c *conn) Server() *Server {
 	}
 
 	return c.server
-}
-
-func (c *conn) Acknowledged() bool {
-	return atomic.LoadUint32(c.acknowledged) > 0
 }
 
 var (
@@ -762,10 +751,6 @@ func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
 			time.Sleep(syncWaitDur)
 		}
 	}
-
-	// for !c.isAcknowledged() {
-	// 	time.Sleep(syncWaitDur)
-	// }
 
 	// c.mu.RLock()
 	ns, alreadyConnected := c.connectedNamespaces[namespace]

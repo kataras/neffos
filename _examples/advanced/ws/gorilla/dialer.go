@@ -18,6 +18,6 @@ func Dialer(dialer *gorilla.Dialer, requestHeader http.Header) ws.Dialer {
 			return nil, err
 		}
 
-		return newSocket(underline, true), nil
+		return newSocket(underline, nil, true), nil
 	}
 }
