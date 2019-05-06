@@ -13,18 +13,11 @@ type nsConn struct {
 	namespace string
 	// Static from server, client can select which to use or not.
 	events Events
-}
 
-func (c *nsConn) Emit(event string, body []byte) bool {
-	return c.conn.Write(c.namespace, event, body)
-}
-
-func (c *nsConn) Ask(ctx context.Context, event string, body []byte) Message {
-	return c.conn.WriteAndWait(ctx, c.namespace, event, body)
-}
-
-func (c *nsConn) Disconnect(ctx context.Context) error {
-	return c.conn.DisconnectFrom(ctx, c.namespace)
+	// Dynamically channels/rooms for each connected namespace.
+	// Client can ask to join, server can forcely join a connection to a room.
+	// Namespace(room(fire event)).
+	rooms map[string]struct{}
 }
 
 func newNSConn(c *conn, namespace string, events Events) *nsConn {
@@ -35,14 +28,37 @@ func newNSConn(c *conn, namespace string, events Events) *nsConn {
 	}
 }
 
+func (ns *nsConn) Emit(event string, body []byte) bool {
+	return ns.conn.Write(ns.namespace, event, body)
+}
+
+func (ns *nsConn) Ask(ctx context.Context, event string, body []byte) Message {
+	return ns.conn.WriteAndWait(ctx, ns.namespace, event, body)
+}
+
+func (ns *nsConn) Disconnect(ctx context.Context) error {
+	return ns.conn.DisconnectFrom(ctx, ns.namespace)
+}
+
+func (ns *nsConn) askJoinRoom(ctx context.Context, room string) error {
+	joinMessage := Message{
+		Namespace: ns.namespace,
+		Room:      room,
+	}
+
+	reply, err := ns.conn.ask(ctx, joinMessage)
+	if err != nil {
+		return err
+	}
+
+	// TODO: or/and move it to conn.
+	_ = reply
+	return nil
+}
+
 type connectedNamespaces struct {
 	sync.RWMutex
 	namespaces map[string]*nsConn
-
-	// Dynamically channels/rooms for each connected namespace.
-	// Client can ask to join, server can forcely join a connection to a room.
-	// Namespace(room(fire event)).
-	rooms map[string]struct{}
 }
 
 func (n *connectedNamespaces) add(ns *nsConn) {
@@ -89,16 +105,9 @@ func (n *connectedNamespaces) askConnect(ctx context.Context, c *conn, namespace
 		Event:     OnNamespaceConnect,
 	}
 
-	reply, err := c.ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
+	_, err := c.ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
 	if err != nil {
 		return nil, err
-	}
-
-	if reply.isError {
-		if reply.Err.Error() == ErrBadNamespace.Error() {
-			return nil, ErrBadNamespace
-		}
-		return nil, reply.Err
 	}
 
 	// re-check, maybe local connected.
@@ -187,13 +196,6 @@ func (n *connectedNamespaces) askDisconnect(ctx context.Context, c *conn, msg Me
 	reply, err := c.ask(ctx, msg)
 	if err != nil {
 		return err
-	}
-
-	if reply.isError {
-		if reply.Err.Error() == ErrBadNamespace.Error() {
-			return ErrBadNamespace
-		}
-		return reply.Err
 	}
 
 	n.remove(msg.Namespace, lock)

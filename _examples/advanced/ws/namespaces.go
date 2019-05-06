@@ -19,6 +19,8 @@ var (
 	OnNamespaceConnected  = "_OnNamespaceConnected"
 	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
 	NoOpEvent             = "_NoOp"
+	OnRoomJoin            = "_OnRoomJoin"
+	OnRoomLeave           = "_OnRoomLeave"
 )
 
 type Events map[string]MessageHandlerFunc

@@ -407,7 +407,7 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 		delete(c.waitingMessages, receive.wait)
 		c.mu.Unlock()
 
-		return receive, nil
+		return receive, receive.Err
 	}
 }
 
@@ -546,7 +546,7 @@ func (c *conn) WriteAndWait(ctx context.Context, namespace, event string, body [
 		Body:      body,
 	})
 
-	if err != nil {
+	if !response.isError && err != nil {
 		return Message{Err: err, isError: true}
 	}
 

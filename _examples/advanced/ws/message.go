@@ -7,12 +7,16 @@ import (
 
 // <wait(0-uint64)>;
 // <namespace>;
+// <room>;
 // <event>;
 // <isError(0-1)>;
 // <isNoOp(0-1)>;
 // <body||error_message>
 type Message struct {
+	wait string
+
 	Namespace string
+	Room      string
 	Event     string
 	Body      []byte
 	Err       error
@@ -25,8 +29,6 @@ type Message struct {
 	isInvalid bool
 
 	from string // the CONN ID, filled automatically.
-
-	wait string
 }
 
 func (m Message) isConnect() bool {
@@ -50,7 +52,7 @@ var (
 )
 
 func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
-	out = serializeOutput(msg.wait, msg.Namespace, msg.Event, msg.Body, msg.Err, msg.isNoOp)
+	out = serializeOutput(msg.wait, msg.Namespace, msg.Room, msg.Event, msg.Body, msg.Err, msg.isNoOp)
 
 	if encrypt != nil {
 		out = encrypt(out)
@@ -60,8 +62,7 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 }
 
 // <namespace>;<event>;<body>
-func serializeOutput(wait string, namespace string,
-	event string,
+func serializeOutput(wait, namespace, room, event string,
 	body []byte,
 	err error,
 	isNoOp bool,
@@ -105,6 +106,7 @@ func serializeOutput(wait string, namespace string,
 	msg := bytes.Join([][]byte{
 		waitByte,
 		[]byte(namespace),
+		[]byte(room),
 		[]byte(event),
 		isErrorByte,
 		isNoOpByte,
@@ -132,9 +134,11 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		b = decrypt(b)
 	}
 
-	namespace, event, body, err, isNoOp, isInvalid, wait := deserializeInput(b)
+	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b)
 	return Message{
+		wait,
 		namespace,
+		room,
 		event,
 		body,
 		err,
@@ -142,18 +146,18 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		isNoOp,
 		isInvalid,
 		"",
-		wait,
 	}
 }
 
 func deserializeInput(b []byte) (
-	namespace string,
+	wait,
+	namespace,
+	room,
 	event string,
 	body []byte,
 	err error,
 	isNoOp bool,
 	isInvalid bool,
-	wait string,
 ) {
 
 	// base64Text := make([]byte, base64.StdEncoding.DecodedLen(len(b)))
@@ -161,8 +165,8 @@ func deserializeInput(b []byte) (
 	// n, _ := base64.StdEncoding.Decode(base64Text, b)
 	// b = base64Text[:n]
 
-	dts := bytes.SplitN(b, messageSeparator, 6)
-	if len(dts) != 6 {
+	dts := bytes.SplitN(b, messageSeparator, 7)
+	if len(dts) != 7 {
 		isInvalid = true
 		return
 	}
@@ -195,12 +199,22 @@ func deserializeInput(b []byte) (
 	// wait = uint64(n)
 	wait = string(dts[0])
 	namespace = string(dts[1])
-	event = string(dts[2])
-	isError := bytes.Equal(dts[3], trueByte)
-	isNoOp = bytes.Equal(dts[4], trueByte)
-	if b := dts[5]; len(b) > 0 {
+	room = string(dts[2])
+	event = string(dts[3])
+	isError := bytes.Equal(dts[4], trueByte)
+	isNoOp = bytes.Equal(dts[5], trueByte)
+	if b := dts[6]; len(b) > 0 {
 		if isError {
-			err = errors.New(string(b))
+			errorText := string(b)
+			switch errorText {
+			case ErrBadNamespace.Error():
+				err = ErrBadNamespace
+			case ErrForbiddenNamespace.Error():
+				err = ErrForbiddenNamespace
+			default:
+				err = errors.New(errorText)
+			}
+
 		} else {
 			body = b // keep it like that.
 		}
