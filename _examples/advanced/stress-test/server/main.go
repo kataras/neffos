@@ -73,9 +73,9 @@ func main() {
 				return nil
 			},
 			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
-				if !c.Acknowledged() {
-					log.Printf("[%s] on namespace[%s] disconnecting without even acknowledged first.", c.ID(), msg.Namespace)
-				}
+				// if !c.isAcknowledged() {
+				// 	log.Printf("[%s] on namespace[%s] disconnecting without even acknowledged first.", c.ID(), msg.Namespace)
+				// }
 
 				newC := atomic.AddUint64(&totalDisconnected, 1)
 				if verbose {

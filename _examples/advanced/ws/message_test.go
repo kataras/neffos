@@ -15,25 +15,25 @@ func TestMessageSerialization(t *testing.T) {
 		{ // 0
 			msg: Message{
 				Namespace: "default",
-				isConnect: true,
+				Event:     OnNamespaceConnect,
 				wait:      "0",
 			},
-			serialized: []byte("0;default;;0;1;0;0;"),
+			serialized: []byte("0;default;_OnNamespaceConnect;0;0;"),
 		},
 		{ // 1
 			msg: Message{
 				Namespace: "default",
 				Body:      []byte("some id"),
-				isConnect: true,
+				Event:     OnNamespaceConnect,
 			},
-			serialized: []byte(";default;;0;1;0;0;some id"),
+			serialized: []byte(";default;_OnNamespaceConnect;0;0;some id"),
 		},
 		{ // 2
 			msg: Message{
-				Namespace:    "default",
-				isDisconnect: true,
+				Namespace: "default",
+				Event:     OnNamespaceDisconnect,
 			},
-			serialized: []byte(";default;;0;0;1;0;"),
+			serialized: []byte(";default;_OnNamespaceDisconnect;0;0;"),
 		},
 		{ // 3
 			msg: Message{
@@ -41,7 +41,7 @@ func TestMessageSerialization(t *testing.T) {
 				Event:     "chat",
 				Body:      []byte("text"),
 			},
-			serialized: []byte(";default;chat;0;0;0;0;text"),
+			serialized: []byte(";default;chat;0;0;text"),
 		},
 		{ // 4
 			msg: Message{
@@ -50,7 +50,7 @@ func TestMessageSerialization(t *testing.T) {
 				Err:       fmt.Errorf("error message"),
 				isError:   true,
 			},
-			serialized: []byte(";default;chat;1;0;0;0;error message"),
+			serialized: []byte(";default;chat;1;0;error message"),
 		},
 		{ // 5
 			msg: Message{
@@ -58,7 +58,7 @@ func TestMessageSerialization(t *testing.T) {
 				Event:     "chat",
 				Body:      []byte("a body with many ; delimeters; like that;"),
 			},
-			serialized: []byte(";default;chat;0;0;0;0;a body with many ; delimeters; like that;"),
+			serialized: []byte(";default;chat;0;0;a body with many ; delimeters; like that;"),
 		},
 		{ // 6
 			msg: Message{
@@ -67,7 +67,7 @@ func TestMessageSerialization(t *testing.T) {
 				Err:       fmt.Errorf("an error message with many ; delimeters; like that;"),
 				isError:   true,
 			},
-			serialized: []byte(";;chat;1;0;0;0;an error message with many ; delimeters; like that;"),
+			serialized: []byte(";;chat;1;0;an error message with many ; delimeters; like that;"),
 		},
 		{ // 7
 			msg: Message{
@@ -77,7 +77,7 @@ func TestMessageSerialization(t *testing.T) {
 				wait:      "1",
 				isNoOp:    true,
 			},
-			serialized: []byte("1;default;chat;0;0;0;1;body"),
+			serialized: []byte("1;default;chat;0;1;body"),
 		},
 	}
 

@@ -5,7 +5,13 @@ import (
 	"errors"
 )
 
-type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<isConnect(0-1)>;<isDisconnect(0-1)>;<isNoOp(0-1)>;<body||error_message>
+// <wait(0-uint64)>;
+// <namespace>;
+// <event>;
+// <isError(0-1)>;
+// <isNoOp(0-1)>;
+// <body||error_message>
+type Message struct {
 	Namespace string
 	Event     string
 	Body      []byte
@@ -13,16 +19,22 @@ type Message struct { // <wait(0-uint64)>;<namespace>;<event>;<isError(0-1)>;<is
 
 	// if true then `Err` is filled by the error message and
 	// the last segment of incoming/outcoming serialized message is the error message instead of the body.
-	isError      bool
-	isConnect    bool
-	isDisconnect bool
-	isNoOp       bool
+	isError bool
+	isNoOp  bool
 
 	isInvalid bool
 
 	from string // the CONN ID, filled automatically.
 
 	wait string
+}
+
+func (m Message) isConnect() bool {
+	return m.Event == OnNamespaceConnect
+}
+
+func (m Message) isDisconnect() bool {
+	return m.Event == OnNamespaceDisconnect
 }
 
 type (
@@ -38,7 +50,7 @@ var (
 )
 
 func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
-	out = serializeOutput(msg.wait, msg.Namespace, msg.Event, msg.Body, msg.Err, msg.isConnect, msg.isDisconnect, msg.isNoOp)
+	out = serializeOutput(msg.wait, msg.Namespace, msg.Event, msg.Body, msg.Err, msg.isNoOp)
 
 	if encrypt != nil {
 		out = encrypt(out)
@@ -52,17 +64,13 @@ func serializeOutput(wait string, namespace string,
 	event string,
 	body []byte,
 	err error,
-	isConnect,
-	isDisconnect,
 	isNoOp bool,
 ) []byte {
 
 	var (
-		isErrorByte      = falseByte
-		isConnectByte    = falseByte
-		isDisconnectByte = falseByte
-		isNoOpByte       = falseByte
-		waitByte         = []byte{}
+		isErrorByte = falseByte
+		isNoOpByte  = falseByte
+		waitByte    = []byte{}
 	)
 
 	if err != nil {
@@ -72,14 +80,6 @@ func serializeOutput(wait string, namespace string,
 			body = []byte(err.Error())
 			isErrorByte = trueByte
 		}
-	}
-
-	if isConnect {
-		isConnectByte = trueByte
-	}
-
-	if isDisconnect {
-		isDisconnectByte = trueByte
 	}
 
 	if isNoOp {
@@ -107,8 +107,6 @@ func serializeOutput(wait string, namespace string,
 		[]byte(namespace),
 		[]byte(event),
 		isErrorByte,
-		isConnectByte,
-		isDisconnectByte,
 		isNoOpByte,
 		body,
 	}, messageSeparator)
@@ -134,15 +132,13 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		b = decrypt(b)
 	}
 
-	namespace, event, body, err, isConnect, isDisconnect, isNoOp, isInvalid, wait := deserializeInput(b)
+	namespace, event, body, err, isNoOp, isInvalid, wait := deserializeInput(b)
 	return Message{
 		namespace,
 		event,
 		body,
 		err,
 		err != nil,
-		isConnect,
-		isDisconnect,
 		isNoOp,
 		isInvalid,
 		"",
@@ -155,8 +151,6 @@ func deserializeInput(b []byte) (
 	event string,
 	body []byte,
 	err error,
-	isConnect bool,
-	isDisconnect bool,
 	isNoOp bool,
 	isInvalid bool,
 	wait string,
@@ -167,8 +161,8 @@ func deserializeInput(b []byte) (
 	// n, _ := base64.StdEncoding.Decode(base64Text, b)
 	// b = base64Text[:n]
 
-	dts := bytes.SplitN(b, messageSeparator, 8)
-	if len(dts) != 8 {
+	dts := bytes.SplitN(b, messageSeparator, 6)
+	if len(dts) != 6 {
 		isInvalid = true
 		return
 	}
@@ -203,10 +197,8 @@ func deserializeInput(b []byte) (
 	namespace = string(dts[1])
 	event = string(dts[2])
 	isError := bytes.Equal(dts[3], trueByte)
-	isConnect = bytes.Equal(dts[4], trueByte)
-	isDisconnect = bytes.Equal(dts[5], trueByte)
-	isNoOp = bytes.Equal(dts[6], trueByte)
-	if b := dts[7]; len(b) > 0 {
+	isNoOp = bytes.Equal(dts[4], trueByte)
+	if b := dts[5]; len(b) > 0 {
 		if isError {
 			err = errors.New(string(b))
 		} else {

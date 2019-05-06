@@ -241,7 +241,7 @@ func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
 
 	s.mu.RLock()
 	for c := range s.connections {
-		if ns, ok := c.connectedNamespaces[namespace]; ok {
+		if ns := c.connectedNamespaces.get(namespace); ns != nil {
 			conns[ns.ID()] = ns
 		}
 	}
