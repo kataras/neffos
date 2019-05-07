@@ -17,7 +17,8 @@ type nsConn struct {
 	// Dynamically channels/rooms for each connected namespace.
 	// Client can ask to join, server can forcely join a connection to a room.
 	// Namespace(room(fire event)).
-	rooms map[string]struct{}
+	rooms   map[string]struct{}
+	roomsMu sync.RWMutex
 }
 
 func newNSConn(c *conn, namespace string, events Events) *nsConn {
@@ -25,6 +26,7 @@ func newNSConn(c *conn, namespace string, events Events) *nsConn {
 		conn:      c,
 		namespace: namespace,
 		events:    events,
+		rooms:     make(map[string]struct{}),
 	}
 }
 
@@ -40,20 +42,68 @@ func (ns *nsConn) Disconnect(ctx context.Context) error {
 	return ns.conn.DisconnectFrom(ctx, ns.namespace)
 }
 
-func (ns *nsConn) askJoinRoom(ctx context.Context, room string) error {
-	joinMessage := Message{
-		Namespace: ns.namespace,
-		Room:      room,
+func (ns *nsConn) askJoinRoom(ctx context.Context, roomName string) error {
+	ns.roomsMu.RLock()
+	_, ok := ns.rooms[roomName]
+	ns.roomsMu.RUnlock()
+	if ok {
+		return nil
 	}
 
-	reply, err := ns.conn.ask(ctx, joinMessage)
+	joinMessage := Message{
+		Namespace: ns.namespace,
+		Room:      roomName,
+		Event:     OnRoomJoin,
+		IsLocal:   true,
+	}
+
+	_, err := ns.conn.ask(ctx, joinMessage)
 	if err != nil {
 		return err
 	}
 
-	// TODO: or/and move it to conn.
-	_ = reply
+	err = ns.events.fireEvent(ns, joinMessage)
+	if err != nil {
+		return err
+	}
+
+	ns.roomsMu.Lock()
+	ns.rooms[roomName] = struct{}{}
+	ns.roomsMu.Unlock()
+
 	return nil
+}
+
+func (ns *nsConn) replyRoomJoin(msg Message) {
+	if msg.wait == "" || msg.isNoOp {
+		return
+	}
+
+	ns.roomsMu.RLock()
+	_, ok := ns.rooms[msg.Room]
+	ns.roomsMu.RUnlock()
+	if ok {
+		msg.isNoOp = true
+	} else {
+		err := ns.events.fireEvent(ns, msg)
+		if err != nil {
+			msg.Err = err
+		} else {
+			ns.roomsMu.Lock()
+			ns.rooms[msg.Room] = struct{}{}
+			ns.roomsMu.Unlock()
+		}
+	}
+
+	ns.conn.write(msg)
+}
+
+func (ns *nsConn) askRoomLeave(msg Message) {
+
+}
+
+func (ns *nsConn) replyRoomLeave(msg Message) {
+
 }
 
 type connectedNamespaces struct {
@@ -103,6 +153,7 @@ func (n *connectedNamespaces) askConnect(ctx context.Context, c *conn, namespace
 	connectMessage := Message{
 		Namespace: namespace,
 		Event:     OnNamespaceConnect,
+		IsLocal:   true,
 	}
 
 	_, err := c.ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
@@ -121,10 +172,11 @@ func (n *connectedNamespaces) askConnect(ctx context.Context, c *conn, namespace
 	if err != nil {
 		return nil, err
 	}
+
 	n.add(ns)
 
 	connectMessage.Event = OnNamespaceConnected
-	events.fireEvent(ns, connectMessage)
+	events.fireEvent(ns, connectMessage) // omit error, it's connected.
 	return ns, nil
 }
 
@@ -158,10 +210,10 @@ func (n *connectedNamespaces) replyConnect(c *conn, msg Message) {
 
 func (n *connectedNamespaces) forceDisconnectAll() {
 	n.RLock()
-	disconnectMsg := Message{Event: OnNamespaceDisconnect}
+	disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
 	for _, ns := range n.namespaces {
 		disconnectMsg.Namespace = ns.namespace
-		ns.events.fireOnNamespaceDisconnect(ns, disconnectMsg)
+		ns.events.fireEvent(ns, disconnectMsg)
 	}
 	n.RUnlock()
 }
@@ -199,6 +251,8 @@ func (n *connectedNamespaces) askDisconnect(ctx context.Context, c *conn, msg Me
 	}
 
 	n.remove(msg.Namespace, lock)
+
+	reply.IsLocal = true
 	ns.events.fireEvent(ns, reply)
 
 	return nil
@@ -211,8 +265,6 @@ func (n *connectedNamespaces) replyDisconnect(c *conn, msg Message) {
 
 	ns := n.get(msg.Namespace)
 	if ns == nil {
-		msg.isNoOp = true
-		c.write(msg)
 		return
 	}
 

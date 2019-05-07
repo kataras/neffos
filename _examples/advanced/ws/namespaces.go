@@ -18,10 +18,19 @@ var (
 	OnNamespaceConnect    = "_OnNamespaceConnect"
 	OnNamespaceConnected  = "_OnNamespaceConnected"
 	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
-	NoOpEvent             = "_NoOp"
 	OnRoomJoin            = "_OnRoomJoin"
 	OnRoomLeave           = "_OnRoomLeave"
+	OnAnyEvent            = "_OnAnyEvent" // when event no match.
 )
+
+func IsSystemEvent(event string) bool {
+	switch event {
+	case OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect, OnRoomJoin, OnRoomLeave:
+		return true
+	default:
+		return false
+	}
+}
 
 type Events map[string]MessageHandlerFunc
 
@@ -29,24 +38,12 @@ func (e Events) getNamespaces() Namespaces {
 	return Namespaces{"": e}
 }
 
-func (e Events) fireOnNamespaceConnect(c NSConn, msg Message) error {
-	if h, ok := e[OnNamespaceConnect]; ok {
-		return h(c, msg)
-	}
-
-	return nil
-}
-
-func (e Events) fireOnNamespaceDisconnect(c NSConn, msg Message) error {
-	if h, ok := e[OnNamespaceDisconnect]; ok {
-		return h(c, msg)
-	}
-
-	return nil
-}
-
 func (e Events) fireEvent(c NSConn, msg Message) error {
 	if h, ok := e[msg.Event]; ok {
+		return h(c, msg)
+	}
+
+	if h, ok := e[OnAnyEvent]; ok {
 		return h(c, msg)
 	}
 

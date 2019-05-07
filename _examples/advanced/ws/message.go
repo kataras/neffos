@@ -29,6 +29,19 @@ type Message struct {
 	isInvalid bool
 
 	from string // the CONN ID, filled automatically.
+
+	// True when event came from local (i.e client if running client) on force disconnection,
+	// i.e OnNamespaceDisconnect and OnRoomLeave when closing a conn.
+	// This field is not filled on sending/receiving.
+	// Err does not matter and never sent to the other side.
+	IsForced bool
+	// True if even came from local,
+	// when asking the other side and take a respond, i.e
+	// if a client (or server)
+	// connection want to connect to a namespace or to join a room.
+	// Should be used rarely, state can be checked by `Conn#IsClient() bool`.
+	// This field is not filled on sending/receiving.
+	IsLocal bool
 }
 
 func (m Message) isConnect() bool {
@@ -146,6 +159,8 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		isNoOp,
 		isInvalid,
 		"",
+		false,
+		false,
 	}
 }
 

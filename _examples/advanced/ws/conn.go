@@ -303,7 +303,12 @@ func (c *conn) handleMessage(msg Message) bool {
 		c.connectedNamespaces.replyConnect(c, msg)
 	case OnNamespaceDisconnect:
 		c.connectedNamespaces.replyDisconnect(c, msg)
+	case OnRoomJoin:
+		c.connectedNamespaces.get(msg.Namespace).replyRoomJoin(msg)
+	case OnRoomLeave:
+		c.connectedNamespaces.get(msg.Namespace).replyRoomLeave(msg)
 	default:
+		msg.IsLocal = false
 		ns := c.connectedNamespaces.get(msg.Namespace)
 		if ns != nil {
 			err := ns.events.fireEvent(ns, msg)
