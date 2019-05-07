@@ -5,146 +5,6 @@ import (
 	"sync"
 )
 
-type nsConn struct {
-	*conn
-	// Static from server, client can select which to use or not.
-	// Client and server can ask to connect.
-	// Server can forcely disconnect.
-	namespace string
-	// Static from server, client can select which to use or not.
-	events Events
-
-	// Dynamically channels/rooms for each connected namespace.
-	// Client can ask to join, server can forcely join a connection to a room.
-	// Namespace(room(fire event)).
-	rooms   map[string]*Room
-	roomsMu sync.RWMutex
-}
-
-func newNSConn(c *conn, namespace string, events Events) *nsConn {
-	return &nsConn{
-		conn:      c,
-		namespace: namespace,
-		events:    events,
-		rooms:     make(map[string]*Room),
-	}
-}
-
-func (ns *nsConn) Emit(event string, body []byte) bool {
-	return ns.conn.Write(ns.namespace, event, body)
-}
-
-func (ns *nsConn) Ask(ctx context.Context, event string, body []byte) Message {
-	return ns.conn.WriteAndWait(ctx, ns.namespace, event, body)
-}
-
-func (ns *nsConn) Room(ctx context.Context, roomName string) (*Room, error) {
-	return ns.askRoomJoin(ctx, roomName)
-}
-
-func (ns *nsConn) Disconnect(ctx context.Context) error {
-	return ns.conn.DisconnectFrom(ctx, ns.namespace)
-}
-
-func (ns *nsConn) askRoomJoin(ctx context.Context, roomName string) (*Room, error) {
-	ns.roomsMu.RLock()
-	room, ok := ns.rooms[roomName]
-	ns.roomsMu.RUnlock()
-	if ok {
-		return room, nil
-	}
-
-	joinMessage := Message{
-		Namespace: ns.namespace,
-		Room:      roomName,
-		Event:     OnRoomJoin,
-		IsLocal:   true,
-	}
-
-	_, err := ns.conn.ask(ctx, joinMessage)
-	if err != nil {
-		return nil, err
-	}
-
-	err = ns.events.fireEvent(ns, joinMessage)
-	if err != nil {
-		return nil, err
-	}
-
-	ns.roomsMu.Lock()
-	ns.rooms[roomName] = newRoom(ns, roomName)
-	ns.roomsMu.Unlock()
-
-	joinMessage.Event = OnRoomJoined
-	ns.events.fireEvent(ns, joinMessage)
-	return room, nil
-}
-
-func (ns *nsConn) replyRoomJoin(msg Message) {
-	if msg.wait == "" || msg.isNoOp {
-		return
-	}
-
-	ns.roomsMu.RLock()
-	_, ok := ns.rooms[msg.Room]
-	ns.roomsMu.RUnlock()
-	if ok {
-		msg.isNoOp = true
-	} else {
-		err := ns.events.fireEvent(ns, msg)
-		if err != nil {
-			msg.Err = err
-		} else {
-			ns.roomsMu.Lock()
-			ns.rooms[msg.Room] = newRoom(ns, msg.Room)
-			ns.roomsMu.Unlock()
-
-			msg.Event = OnRoomJoined
-			ns.events.fireEvent(ns, msg)
-		}
-	}
-
-	ns.conn.write(msg)
-}
-
-func (ns *nsConn) askRoomLeave(msg Message) error {
-	return nil
-}
-
-func (ns *nsConn) replyRoomLeave(msg Message) {
-
-}
-
-type Room struct {
-	*nsConn
-
-	room string
-}
-
-func newRoom(ns *nsConn, roomName string) *Room {
-	return &Room{
-		nsConn: ns,
-		room:   roomName,
-	}
-}
-
-func (r *Room) Emit(event string, body []byte) bool {
-	return r.nsConn.conn.write(Message{
-		Namespace: r.nsConn.namespace,
-		Room:      r.room,
-		Event:     event,
-		Body:      body,
-	})
-}
-
-func (r *Room) Leave() error {
-	return r.nsConn.askRoomLeave(Message{
-		Namespace: r.nsConn.namespace,
-		Room:      r.room,
-		Event:     OnRoomLeave,
-	})
-}
-
 type connectedNamespaces struct {
 	sync.RWMutex
 	namespaces map[string]*nsConn
@@ -244,7 +104,7 @@ func (n *connectedNamespaces) replyConnect(c *conn, msg Message) {
 		}
 	}
 
-	c.write(msg)
+	c.Write(msg)
 }
 
 func (n *connectedNamespaces) forceDisconnectAll() {
@@ -258,8 +118,8 @@ func (n *connectedNamespaces) forceDisconnectAll() {
 }
 
 func (n *connectedNamespaces) disconnectAll(ctx context.Context, c *conn) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.waitingMessagesMutex.Lock()
+	defer c.waitingMessagesMutex.Unlock()
 
 	disconnectMsg := Message{Event: OnNamespaceDisconnect}
 	for namespace := range c.connectedNamespaces.namespaces {
@@ -309,7 +169,7 @@ func (n *connectedNamespaces) replyDisconnect(c *conn, msg Message) {
 
 	// if client then we need to respond to server and delete the namespace without ask the local event.
 	if c.IsClient() {
-		c.write(msg)
+		c.Write(msg)
 		n.remove(msg.Namespace, true)
 		ns.events.fireEvent(ns, msg)
 		return
@@ -322,5 +182,5 @@ func (n *connectedNamespaces) replyDisconnect(c *conn, msg Message) {
 	} else {
 		n.remove(msg.Namespace, true)
 	}
-	c.write(msg)
+	c.Write(msg)
 }

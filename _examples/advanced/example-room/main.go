@@ -27,33 +27,33 @@ var handler = ws.WithTimeout{
 	Namespaces: ws.Namespaces{
 		"default": ws.Events{
 			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
+				log.Printf("[%s] connected to [%s].", c.Conn().ID(), msg.Namespace)
 
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
 
 				return nil
 			},
 			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
+				log.Printf("[%s] disconnected from [%s].", c.Conn().ID(), msg.Namespace)
 
-				if c.IsClient() {
+				if c.Conn().IsClient() {
 					os.Exit(0)
 				}
 
 				return nil
 			},
 			ws.OnRoomJoined: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] joined to room [%s].", c.ID(), msg.Room)
+				log.Printf("[%s] joined to room [%s].", c.Conn().ID(), msg.Room)
 				return nil
 			},
 			ws.OnRoomLeft: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] left from room [%s].", c.ID(), msg.Room)
+				log.Printf("[%s] left from room [%s].", c.Conn().ID(), msg.Room)
 				return nil
 			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
 
 					if msg.Room == "" {
@@ -62,7 +62,7 @@ var handler = ws.WithTimeout{
 						return ws.Reply(msg.Body)
 					}
 
-					c.Server().Broadcast(c, ws.Message{
+					c.Conn().Server().Broadcast(c.Conn(), ws.Message{
 						Namespace: msg.Namespace,
 						Event:     msg.Event,
 						// Broadcast to all other members inside this room except this connection(the emmiter, client in this case).
@@ -72,7 +72,7 @@ var handler = ws.WithTimeout{
 					})
 				}
 
-				log.Printf("---------------------\n[%s] %s", c.ID(), msg.Body)
+				log.Printf("---------------------\n[%s] %s", c.Conn().ID(), msg.Body)
 				return nil
 			},
 		},
@@ -208,17 +208,16 @@ func client(dialer ws.Dialer) {
 		} else if bytes.HasPrefix(text, joinKeyword) {
 			// join room1
 			joinedRoom = string(text[len(joinKeyword)+1:])
-			_, err := c.Room(nil, joinedRoom)
+			_, err := c.JoinRoom(nil, joinedRoom)
 			if err != nil {
-				joinedRoom = ""
 				log.Printf("from server when trying to join to room[%s]: %v", joinedRoom, err)
+				joinedRoom = ""
 			}
 			continue
 		}
 
 		if joinedRoom != "" {
-			r, _ := c.Room(nil, joinedRoom)
-			r.Emit("chat", text)
+			c.Room(joinedRoom).Emit("chat", text)
 			continue
 		}
 

@@ -81,7 +81,6 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 	return out
 }
 
-// <namespace>;<event>;<body>
 func serializeOutput(wait, namespace, room, event string,
 	body []byte,
 	err error,
@@ -107,18 +106,6 @@ func serializeOutput(wait, namespace, room, event string,
 		isNoOpByte = trueByte
 	}
 
-	// if wait > 0 {
-	// buf := make([]byte, binary.MaxVarintLen64)
-	// n := binary.PutUvarint(buf, wait)
-	// waitByte = buf[:n]
-	// waitByte = []byte(strconv.FormatUint(wait, 10))
-	//	waitByte = []byte(strconv.FormatUint(wait), 10))
-	// }
-
-	// if len(wait) > 0 {
-	// 	waitByte = wait
-	// }
-
 	if wait != "" {
 		waitByte = []byte(wait)
 	}
@@ -133,23 +120,10 @@ func serializeOutput(wait, namespace, room, event string,
 		body,
 	}, messageSeparator)
 
-	// send := make([]byte, hex.EncodedLen(len(msg)))
-	// hex.Encode(send, msg)
 	return msg
-
-	// buf := make([]byte, base64.StdEncoding.EncodedLen(len(msg)))
-	// base64.StdEncoding.Encode(buf, msg)
-
-	//	return buf
 }
 
 func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
-	// read := make([]byte, hex.DecodedLen(len(b)))
-	// _, err := hex.Decode(read, b)
-	// if err != nil {
-	// 	panic("original: " + string(b) + " error: " + err.Error())
-	// }
-
 	if decrypt != nil {
 		b = decrypt(b)
 	}
@@ -182,43 +156,12 @@ func deserializeInput(b []byte) (
 	isInvalid bool,
 ) {
 
-	// base64Text := make([]byte, base64.StdEncoding.DecodedLen(len(b)))
-
-	// n, _ := base64.StdEncoding.Decode(base64Text, b)
-	// b = base64Text[:n]
-
 	dts := bytes.SplitN(b, messageSeparator, 7)
 	if len(dts) != 7 {
 		isInvalid = true
 		return
 	}
 
-	// namespace can be empty.
-	// if namespaceB := dts[0]; len(namespaceB) == 0 {
-	// 	isInvalid = true
-	// 	return
-	// } else {
-	// 	namespace = string(namespaceB)
-	// }
-
-	// wait, _ = binary.Uvarint(dts[0])
-	// wait = binary.LittleEndian.Uint64(dts[0])
-
-	// 	if !bytes.Equal(dts[0], falseByte) {
-	// if not zero then try to convert it.
-	// wait, _ = strconv.ParseUint(string(dts[0]), 10, 64)
-	// }
-
-	// wait, _ = binary.Uvarint(dts[0])
-
-	//	wait = binary.LittleEndian.Uint64(dts[0])
-
-	// if waitStr := string(dts[0]); waitStr == "server" || waitStr == "client" {
-	// 	wait = waitStr
-	// }
-
-	// n, _ := strconv.ParseInt(string(dts[0]), 10, 32)
-	// wait = uint64(n)
 	wait = string(dts[0])
 	namespace = string(dts[1])
 	room = string(dts[2])
@@ -242,6 +185,5 @@ func deserializeInput(b []byte) (
 		}
 	}
 
-	// log.Printf("**message.go:L104 | deserializeInput\nnamespace: %s\nevent: %s\nerr: %v\nisError:%v\nisConnect: %v\nisDisconnect: %v\nbody: %s", namespace, event, err, isError, isConnect, isDisconnect, string(body))
 	return
 }

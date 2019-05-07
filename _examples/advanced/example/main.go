@@ -41,11 +41,11 @@ var handler = ws.WithTimeout{
 				return err
 			},
 			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
 
-				log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
+				log.Printf("[%s] connected to [%s].", c.Conn().ID(), msg.Namespace)
 
 				return nil
 			},
@@ -63,17 +63,17 @@ var handler = ws.WithTimeout{
 				err = nil
 
 				if err == nil {
-					log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
+					log.Printf("[%s] disconnected from [%s].", c.Conn().ID(), msg.Namespace)
 				}
 
-				if c.IsClient() {
+				if c.Conn().IsClient() {
 					os.Exit(0)
 				}
 
 				return err
 			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					// this is possible too:
 					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
 					// 	println("force disconnect")
@@ -83,10 +83,10 @@ var handler = ws.WithTimeout{
 					log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
 					//	c.Emit(msg.Event, msg.Body)
 					//	c.Server().Broadcast(nil, msg) // to all including this connection.
-					c.Server().Broadcast(c, msg) // to all except this connection.
+					c.Conn().Server().Broadcast(c.Conn(), msg) // to all except this connection.
 				}
 
-				log.Printf("---------------------\n[%s] %s", c.ID(), msg.Body)
+				log.Printf("---------------------\n[%s] %s", c.Conn().ID(), msg.Body)
 				return nil
 			},
 		},

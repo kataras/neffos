@@ -57,8 +57,8 @@ func Dial(dial Dialer, ctx context.Context, url string, connHandler ConnHandler)
 
 	c := newConn(underline, connHandler.getNamespaces())
 	readTimeout, writeTimeout := getTimeouts(connHandler)
-	c.ReadTimeout = readTimeout
-	c.WriteTimeout = writeTimeout
+	c.readTimeout = readTimeout
+	c.writeTimeout = writeTimeout
 
 	go c.startReader()
 

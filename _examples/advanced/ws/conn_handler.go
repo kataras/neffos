@@ -14,27 +14,6 @@ var (
 	_ ConnHandler = WithTimeout{}
 )
 
-var (
-	OnNamespaceConnect    = "_OnNamespaceConnect"
-	OnNamespaceConnected  = "_OnNamespaceConnected"
-	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
-	OnRoomJoin            = "_OnRoomJoin"            // able to check if allowed to join.
-	OnRoomJoined          = "_OnRoomJoined"          // able to broadcast messages to room.
-	OnRoomLeave           = "_OnRoomLeave"           // able to broadcast bye-bye messages to room.
-	OnRoomLeft            = "_OnRoomLeft"            // if allowed to join to a room, then its allowed to leave from it.
-	OnAnyEvent            = "_OnAnyEvent"            // when event no match.
-)
-
-func IsSystemEvent(event string) bool {
-	switch event {
-	case OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect,
-		OnRoomJoin, OnRoomJoined, OnRoomLeave, OnRoomLeft:
-		return true
-	default:
-		return false
-	}
-}
-
 type Events map[string]MessageHandlerFunc
 
 func (e Events) getNamespaces() Namespaces {

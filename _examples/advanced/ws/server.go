@@ -35,14 +35,12 @@ type Server struct {
 	IDGenerator IDGenerator
 
 	mu         sync.RWMutex
-	NSAcceptor NSAcceptor
 	namespaces Namespaces
 
 	// connection read/write timeouts.
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 
-	// connections chan *conn
 	count uint64
 
 	connections map[*conn]struct{}
@@ -79,7 +77,6 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		disconnect:   make(chan *conn),
 		actions:      make(chan func(Conn)),
 		broadcaster:  newBroadcaster(),
-		NSAcceptor:   DefaultNSAcceptor,
 		IDGenerator:  DefaultIDGenerator,
 	}
 
@@ -149,8 +146,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	c := newConn(socket, s.namespaces)
 	c.id = s.IDGenerator(w, r)
-	c.ReadTimeout = s.readTimeout
-	c.WriteTimeout = s.writeTimeout
+	c.readTimeout = s.readTimeout
+	c.writeTimeout = s.writeTimeout
 	c.server = s
 
 	go c.startReader()
@@ -203,7 +200,7 @@ func (s *Server) waitMessage(c *conn) bool {
 	}
 
 	if msg.from != c.ID() {
-		if !c.write(msg) && c.IsClosed() {
+		if !c.Write(msg) && c.IsClosed() {
 			return false
 		}
 	}

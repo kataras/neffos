@@ -30,7 +30,7 @@ type Users struct {
 
 // returns true if new conn.
 func (u *Users) conn(c ws.NSConn) (*userConn, bool) {
-	user := c.ID()
+	user := c.Conn().ID()
 	u.mu.RLock()
 	entry, ok := u.entries[user]
 	u.mu.RUnlock()
@@ -51,7 +51,7 @@ func (u *Users) conn(c ws.NSConn) (*userConn, bool) {
 
 func (u *Users) get(c ws.NSConn) *userConn {
 	u.mu.RLock()
-	entry, ok := u.entries[c.ID()]
+	entry, ok := u.entries[c.Conn().ID()]
 	u.mu.RUnlock()
 
 	if !ok {
@@ -124,7 +124,7 @@ func (u *userConn) Close() {
 	defer u.mu.Unlock()
 
 	for c := range u.conns {
-		c.Close()
+		c.Conn().Close()
 		delete(u.conns, c)
 	}
 }
@@ -140,11 +140,11 @@ var handler = ws.WithTimeout{
 		"default": ws.Events{
 			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
 				_, isNew := users.conn(c)
-				if isNew || c.IsClient() {
-					log.Printf("[%s] connected to [%s].", c.ID(), msg.Namespace)
+				if isNew || c.Conn().IsClient() {
+					log.Printf("[%s] connected to [%s].", c.Conn().ID(), msg.Namespace)
 				}
 
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
 
@@ -164,18 +164,18 @@ var handler = ws.WithTimeout{
 				wasLast := conn.deleteConn(c)
 
 				if wasLast {
-					users.remove(c.ID())
-					log.Printf("[%s] disconnected from [%s].", c.ID(), msg.Namespace)
+					users.remove(c.Conn().ID())
+					log.Printf("[%s] disconnected from [%s].", c.Conn().ID(), msg.Namespace)
 				}
 
-				if c.IsClient() {
+				if c.Conn().IsClient() {
 					os.Exit(0)
 				}
 
 				return nil
 			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if !c.IsClient() {
+				if !c.Conn().IsClient() {
 					// this is possible too:
 					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
 					// 	println("force disconnect")
@@ -190,7 +190,7 @@ var handler = ws.WithTimeout{
 					users.get(c).Emit(msg.Event, msg.Body)
 				}
 
-				log.Printf("---------------------\n[%s] %s", c.ID(), msg.Body)
+				log.Printf("---------------------\n[%s] %s", c.Conn().ID(), msg.Body)
 				return nil
 			},
 		},

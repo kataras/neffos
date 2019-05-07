@@ -282,7 +282,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 		return
 	}
 
-	if c.ID() == "" {
+	if c.Conn().ID() == "" {
 		panic("CLIENT'S CONNECTION ID IS EMPTY.\nCONNECT SHOULD BLOCK UNTIL ID IS FILLED(ACK) AND UNTIL SERVER'S CONFIRMATION TO NAMESPACE CONNECTION")
 	}
 

@@ -79,14 +79,14 @@ func main() {
 
 				newC := atomic.AddUint64(&totalDisconnected, 1)
 				if verbose {
-					log.Printf("[%d] client [%s] disconnected!\n", newC, c.ID())
+					log.Printf("[%d] client [%s] disconnected!\n", newC, c.Conn().ID())
 				}
 
 				return nil
 			},
 			"chat": func(c ws.NSConn, msg ws.Message) error {
 				if broadcast {
-					c.Server().Broadcast(c, msg)
+					c.Conn().Server().Broadcast(c.Conn(), msg)
 				} else {
 					c.Emit("chat", msg.Body)
 				}
