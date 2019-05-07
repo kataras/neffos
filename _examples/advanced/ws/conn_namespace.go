@@ -17,7 +17,7 @@ type nsConn struct {
 	// Dynamically channels/rooms for each connected namespace.
 	// Client can ask to join, server can forcely join a connection to a room.
 	// Namespace(room(fire event)).
-	rooms   map[string]struct{}
+	rooms   map[string]*Room
 	roomsMu sync.RWMutex
 }
 
@@ -26,7 +26,7 @@ func newNSConn(c *conn, namespace string, events Events) *nsConn {
 		conn:      c,
 		namespace: namespace,
 		events:    events,
-		rooms:     make(map[string]struct{}),
+		rooms:     make(map[string]*Room),
 	}
 }
 
@@ -38,16 +38,20 @@ func (ns *nsConn) Ask(ctx context.Context, event string, body []byte) Message {
 	return ns.conn.WriteAndWait(ctx, ns.namespace, event, body)
 }
 
+func (ns *nsConn) Room(ctx context.Context, roomName string) (*Room, error) {
+	return ns.askRoomJoin(ctx, roomName)
+}
+
 func (ns *nsConn) Disconnect(ctx context.Context) error {
 	return ns.conn.DisconnectFrom(ctx, ns.namespace)
 }
 
-func (ns *nsConn) askJoinRoom(ctx context.Context, roomName string) error {
+func (ns *nsConn) askRoomJoin(ctx context.Context, roomName string) (*Room, error) {
 	ns.roomsMu.RLock()
-	_, ok := ns.rooms[roomName]
+	room, ok := ns.rooms[roomName]
 	ns.roomsMu.RUnlock()
 	if ok {
-		return nil
+		return room, nil
 	}
 
 	joinMessage := Message{
@@ -59,19 +63,21 @@ func (ns *nsConn) askJoinRoom(ctx context.Context, roomName string) error {
 
 	_, err := ns.conn.ask(ctx, joinMessage)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = ns.events.fireEvent(ns, joinMessage)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ns.roomsMu.Lock()
-	ns.rooms[roomName] = struct{}{}
+	ns.rooms[roomName] = newRoom(ns, roomName)
 	ns.roomsMu.Unlock()
 
-	return nil
+	joinMessage.Event = OnRoomJoined
+	ns.events.fireEvent(ns, joinMessage)
+	return room, nil
 }
 
 func (ns *nsConn) replyRoomJoin(msg Message) {
@@ -90,20 +96,53 @@ func (ns *nsConn) replyRoomJoin(msg Message) {
 			msg.Err = err
 		} else {
 			ns.roomsMu.Lock()
-			ns.rooms[msg.Room] = struct{}{}
+			ns.rooms[msg.Room] = newRoom(ns, msg.Room)
 			ns.roomsMu.Unlock()
+
+			msg.Event = OnRoomJoined
+			ns.events.fireEvent(ns, msg)
 		}
 	}
 
 	ns.conn.write(msg)
 }
 
-func (ns *nsConn) askRoomLeave(msg Message) {
-
+func (ns *nsConn) askRoomLeave(msg Message) error {
+	return nil
 }
 
 func (ns *nsConn) replyRoomLeave(msg Message) {
 
+}
+
+type Room struct {
+	*nsConn
+
+	room string
+}
+
+func newRoom(ns *nsConn, roomName string) *Room {
+	return &Room{
+		nsConn: ns,
+		room:   roomName,
+	}
+}
+
+func (r *Room) Emit(event string, body []byte) bool {
+	return r.nsConn.conn.write(Message{
+		Namespace: r.nsConn.namespace,
+		Room:      r.room,
+		Event:     event,
+		Body:      body,
+	})
+}
+
+func (r *Room) Leave() error {
+	return r.nsConn.askRoomLeave(Message{
+		Namespace: r.nsConn.namespace,
+		Room:      r.room,
+		Event:     OnRoomLeave,
+	})
 }
 
 type connectedNamespaces struct {

@@ -35,21 +35,28 @@ type Message struct {
 	// This field is not filled on sending/receiving.
 	// Err does not matter and never sent to the other side.
 	IsForced bool
-	// True if even came from local,
-	// when asking the other side and take a respond, i.e
-	// if a client (or server)
-	// connection want to connect to a namespace or to join a room.
+	// True when asking the other side and fire the respond's event (which matches the sent for connect/disconnect/join/leave),
+	// i.e if a client (or server) onnection want to connect
+	// to a namespace or join to a room.
 	// Should be used rarely, state can be checked by `Conn#IsClient() bool`.
 	// This field is not filled on sending/receiving.
 	IsLocal bool
 }
 
-func (m Message) isConnect() bool {
+func (m *Message) isConnect() bool {
 	return m.Event == OnNamespaceConnect
 }
 
-func (m Message) isDisconnect() bool {
+func (m *Message) isDisconnect() bool {
 	return m.Event == OnNamespaceDisconnect
+}
+
+func (m *Message) isRoomJoin() bool {
+	return m.Event == OnRoomJoin
+}
+
+func (m *Message) isRoomLeft() bool {
+	return m.Event == OnRoomLeft
 }
 
 type (

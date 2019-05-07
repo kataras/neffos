@@ -61,6 +61,7 @@ type NSConn interface {
 	Conn
 	Emit(event string, body []byte) bool
 	Ask(ctx context.Context, event string, body []byte) Message
+	Room(ctx context.Context, roomName string) (*Room, error)
 	Disconnect(ctx context.Context) error
 }
 
@@ -581,6 +582,16 @@ func (c *conn) write(msg Message) bool {
 		if ns == nil {
 			// println("namespace " + msg.Namespace + " not found")
 			return false
+		}
+
+		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
+			ns.roomsMu.RLock()
+			_, ok := ns.rooms[msg.Room]
+			ns.roomsMu.RUnlock()
+			if !ok {
+				// tried to send to a not joined room.
+				return false
+			}
 		}
 	}
 

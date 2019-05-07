@@ -18,14 +18,17 @@ var (
 	OnNamespaceConnect    = "_OnNamespaceConnect"
 	OnNamespaceConnected  = "_OnNamespaceConnected"
 	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
-	OnRoomJoin            = "_OnRoomJoin"
-	OnRoomLeave           = "_OnRoomLeave"
-	OnAnyEvent            = "_OnAnyEvent" // when event no match.
+	OnRoomJoin            = "_OnRoomJoin"            // able to check if allowed to join.
+	OnRoomJoined          = "_OnRoomJoined"          // able to broadcast messages to room.
+	OnRoomLeave           = "_OnRoomLeave"           // able to broadcast bye-bye messages to room.
+	OnRoomLeft            = "_OnRoomLeft"            // if allowed to join to a room, then its allowed to leave from it.
+	OnAnyEvent            = "_OnAnyEvent"            // when event no match.
 )
 
 func IsSystemEvent(event string) bool {
 	switch event {
-	case OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect, OnRoomJoin, OnRoomLeave:
+	case OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect,
+		OnRoomJoin, OnRoomJoined, OnRoomLeave, OnRoomLeft:
 		return true
 	default:
 		return false
