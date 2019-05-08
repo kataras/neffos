@@ -27,12 +27,15 @@ type (
 		String() string
 
 		Write(msg Message) bool
-		WriteAndWait(ctx context.Context, msg Message) Message
+		Ask(ctx context.Context, msg Message) (Message, error)
 
 		Connect(ctx context.Context, namespace string) (NSConn, error)
 		WaitConnect(ctx context.Context, namespace string) (NSConn, error)
-		DisconnectFrom(ctx context.Context, namespace string) error
-		DisconnectFromAll(ctx context.Context) error
+		Namespace(namespace string) NSConn
+		DisconnectAll(ctx context.Context) error
+
+		// DisconnectFrom(ctx context.Context, namespace string) error
+		// DisconnectFromAll(ctx context.Context) error
 
 		IsClient() bool
 		Server() *Server
@@ -45,10 +48,11 @@ type (
 		Conn() Conn
 
 		Emit(event string, body []byte) bool
-		Ask(ctx context.Context, event string, body []byte) Message
+		Ask(ctx context.Context, event string, body []byte) (Message, error)
 
 		JoinRoom(ctx context.Context, roomName string) (Room, error)
 		Room(roomName string) Room
+		LeaveAll(ctx context.Context) error
 
 		// LeaveRoom(ctx context.Context, roomName string)
 		Disconnect(ctx context.Context) error
@@ -75,26 +79,8 @@ type conn struct {
 	// the gorilla or gobwas socket.
 	socket Socket
 
-	// the defined namespaces, allowed to connect.
-	namespaces Namespaces
-
-	// the current connection's connected namespace.
-	connectedNamespaces *connectedNamespaces
-
-	// useful to terminate the broadcast waiter.
-	closeCh chan struct{}
-	// used to fire `conn#Close` once.
-	once *uint32
-
-	// messages that this connection is waiting for a reply.
-	waitingMessagesMutex sync.RWMutex
-	waitingMessages      map[string]chan Message // messages that this connection waits for a reply.
-
 	// non-nil if server-side connection.
 	server *Server
-
-	// more than 0 if acknowledged.
-	acknowledged *uint32
 
 	// maximum wait time allowed to read a message from the connection.
 	// Defaults to no timeout.
@@ -102,22 +88,37 @@ type conn struct {
 	// maximum wait time allowed to write a message to the connection.
 	// Defaults to no timeout.
 	writeTimeout time.Duration
+
+	// the defined namespaces, allowed to connect.
+	namespaces Namespaces
+
+	// more than 0 if acknowledged.
+	acknowledged *uint32
+
+	// the current connection's connected namespace.
+	connectedNamespaces      map[string]*nsConn
+	connectedNamespacesMutex sync.RWMutex
+
+	// messages that this connection waits for a reply.
+	waitingMessages      map[string]chan Message
+	waitingMessagesMutex sync.RWMutex
+
+	// used to fire `conn#Close` once.
+	closed *uint32
+	// useful to terminate the broadcast waiter.
+	closeCh chan struct{}
 }
 
-func newConn(underline Socket, namespaces Namespaces) *conn {
-	c := &conn{
-		socket:     underline,
-		namespaces: namespaces,
-		connectedNamespaces: &connectedNamespaces{
-			namespaces: make(map[string]*nsConn),
-		},
-		closeCh:         make(chan struct{}),
-		once:            new(uint32),
-		acknowledged:    new(uint32),
-		waitingMessages: make(map[string]chan Message),
+func newConn(socket Socket, namespaces Namespaces) *conn {
+	return &conn{
+		socket:              socket,
+		namespaces:          namespaces,
+		acknowledged:        new(uint32),
+		connectedNamespaces: make(map[string]*nsConn),
+		waitingMessages:     make(map[string]chan Message),
+		closed:              new(uint32),
+		closeCh:             make(chan struct{}),
 	}
-
-	return c
 }
 
 func (c *conn) ID() string {
@@ -233,24 +234,30 @@ func (c *conn) handleMessage(msg Message) bool {
 
 	switch msg.Event {
 	case OnNamespaceConnect:
-		c.connectedNamespaces.replyConnect(c, msg)
+		c.replyConnect(msg)
 	case OnNamespaceDisconnect:
-		c.connectedNamespaces.replyDisconnect(c, msg)
+		c.replyDisconnect(msg)
 	case OnRoomJoin:
-		c.connectedNamespaces.get(msg.Namespace).replyRoomJoin(msg)
+		if ns, ok := c.tryNamespace(msg); ok {
+			ns.replyRoomJoin(msg)
+		}
 	case OnRoomLeave:
-		c.connectedNamespaces.get(msg.Namespace).replyRoomLeave(msg)
+		if ns, ok := c.tryNamespace(msg); ok {
+			ns.replyRoomLeave(msg)
+		}
 	default:
+		ns, ok := c.tryNamespace(msg)
+		if !ok {
+			return true
+		}
+
 		msg.IsLocal = false
-		ns := c.connectedNamespaces.get(msg.Namespace)
-		if ns != nil {
-			err := ns.events.fireEvent(ns, msg)
-			if err != nil {
-				msg.Err = err
-				c.Write(msg)
-				if isManualCloseError(err) {
-					return false // close the connection after sending the closing message.
-				}
+		err := ns.events.fireEvent(ns, msg)
+		if err != nil {
+			msg.Err = err
+			c.Write(msg)
+			if isManualCloseError(err) {
+				return false // close the connection after sending the closing message.
 			}
 		}
 	}
@@ -258,7 +265,274 @@ func (c *conn) handleMessage(msg Message) bool {
 	return true
 }
 
-func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
+const syncWaitDur = 15 * time.Millisecond
+
+func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
+	if !c.IsClient() {
+		for !c.isAcknowledged() {
+			time.Sleep(syncWaitDur)
+		}
+	}
+
+	return c.askConnect(ctx, namespace)
+}
+
+// Nil context means try without timeout, wait until it connects to the specific namespace.
+func (c *conn) WaitConnect(ctx context.Context, namespace string) (ns NSConn, err error) {
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			if ns == nil {
+				ns = c.Namespace(namespace)
+			}
+
+			if ns != nil && c.isAcknowledged() {
+				return
+			}
+
+			time.Sleep(syncWaitDur)
+		}
+	}
+
+	return nil, ErrBadNamespace
+}
+
+func (c *conn) namespace(namespace string) *nsConn {
+	c.connectedNamespacesMutex.RLock()
+	ns := c.connectedNamespaces[namespace]
+	c.connectedNamespacesMutex.RUnlock()
+
+	return ns
+}
+
+func (c *conn) tryNamespace(in Message) (*nsConn, bool) {
+	ns := c.namespace(in.Namespace)
+	if ns == nil {
+		// if _, canConnect := c.namespaces[msg.Namespace]; !canConnect {
+		// 	msg.Err = ErrForbiddenNamespace
+		// }
+		in.Err = ErrBadNamespace
+		c.Write(in)
+		return nil, false
+	}
+
+	return ns, true
+}
+
+func (c *conn) Namespace(namespace string) NSConn {
+	return c.namespace(namespace)
+}
+
+// server#OnConnected -> conn#Connect
+// client#WaitConnect
+// or
+// client#Connect
+func (c *conn) askConnect(ctx context.Context, namespace string) (*nsConn, error) {
+	ns := c.namespace(namespace)
+	if ns != nil {
+		return ns, nil
+	}
+
+	events, ok := c.namespaces[namespace]
+	if !ok {
+		return nil, ErrBadNamespace
+	}
+
+	connectMessage := Message{
+		Namespace: namespace,
+		Event:     OnNamespaceConnect,
+		IsLocal:   true,
+	}
+
+	_, err := c.Ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
+	if err != nil {
+		return nil, err
+	}
+
+	// re-check, maybe connected so far (can happen by a simultaneously `Connect` calls on both server and client, which is not the standard way)
+	c.connectedNamespacesMutex.RLock()
+	ns, ok = c.connectedNamespaces[namespace]
+	c.connectedNamespacesMutex.RUnlock()
+	if ok {
+		return ns, nil
+	}
+
+	ns = newNSConn(c, namespace, events)
+	err = events.fireEvent(ns, connectMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	c.connectedNamespacesMutex.Lock()
+	c.connectedNamespaces[namespace] = ns
+	c.connectedNamespacesMutex.Unlock()
+
+	connectMessage.Event = OnNamespaceConnected
+	events.fireEvent(ns, connectMessage) // omit error, it's connected.
+	return ns, nil
+}
+
+func (c *conn) replyConnect(msg Message) {
+	// must give answer even a noOp if already connected.
+	if msg.wait == "" || msg.isNoOp {
+		return
+	}
+
+	ns := c.namespace(msg.Namespace)
+	if ns != nil {
+		msg.isNoOp = true
+		c.Write(msg)
+		return
+	}
+
+	events, ok := c.namespaces[msg.Namespace]
+	if !ok {
+		msg.Err = ErrBadNamespace
+		c.Write(msg)
+		return
+	}
+
+	ns = newNSConn(c, msg.Namespace, events)
+	err := events.fireEvent(ns, msg)
+	if err != nil {
+		msg.Err = err
+		c.Write(msg)
+		return
+	}
+
+	c.connectedNamespacesMutex.Lock()
+	c.connectedNamespaces[msg.Namespace] = ns
+	c.connectedNamespacesMutex.Unlock()
+
+	msg.Event = OnNamespaceConnected
+	events.fireEvent(ns, msg)
+
+	c.Write(msg)
+}
+
+func (c *conn) DisconnectAll(ctx context.Context) error {
+	c.connectedNamespacesMutex.Lock()
+	defer c.connectedNamespacesMutex.Unlock()
+
+	disconnectMsg := Message{Event: OnNamespaceDisconnect}
+	for namespace := range c.connectedNamespaces {
+		disconnectMsg.Namespace = namespace
+		if err := c.askDisconnect(ctx, disconnectMsg, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *conn) askDisconnect(ctx context.Context, msg Message, lock bool) error {
+	if lock {
+		c.connectedNamespacesMutex.RLock()
+	}
+	ns := c.connectedNamespaces[msg.Namespace]
+	if lock {
+		c.connectedNamespacesMutex.RUnlock()
+	}
+
+	if ns == nil {
+		return ErrBadNamespace
+	}
+
+	_, err := c.Ask(ctx, msg)
+	if err != nil {
+		return err
+	}
+
+	if lock {
+		c.connectedNamespacesMutex.Lock()
+	}
+	delete(c.connectedNamespaces, msg.Namespace)
+	if lock {
+		c.connectedNamespacesMutex.Unlock()
+	}
+
+	msg.IsLocal = true
+	ns.events.fireEvent(ns, msg)
+
+	return nil
+}
+
+func (c *conn) replyDisconnect(msg Message) {
+	if msg.wait == "" || msg.isNoOp {
+		return
+	}
+
+	ns := c.namespace(msg.Namespace)
+	if ns == nil {
+		return
+	}
+
+	// if client then we need to respond to server and delete the namespace without ask the local event.
+	if c.IsClient() {
+		c.connectedNamespacesMutex.Lock()
+		delete(c.connectedNamespaces, msg.Namespace)
+		c.connectedNamespacesMutex.Unlock()
+		c.Write(msg)
+		ns.events.fireEvent(ns, msg)
+		return
+	}
+
+	// server-side, check for error on the local event first.
+	err := ns.events.fireEvent(ns, msg)
+	if err != nil {
+		msg.Err = err
+	} else {
+		c.connectedNamespacesMutex.Lock()
+		delete(c.connectedNamespaces, msg.Namespace)
+		c.connectedNamespacesMutex.Unlock()
+	}
+	c.Write(msg)
+}
+
+var ErrWrite = fmt.Errorf("write closed")
+
+func (c *conn) Write(msg Message) bool {
+	if c.IsClosed() {
+		return false
+	}
+
+	// msg.from = c.ID()
+
+	if !msg.isConnect() && !msg.isDisconnect() {
+		ns := c.namespace(msg.Namespace)
+		if ns == nil {
+			return false
+		}
+
+		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
+			ns.roomsMu.RLock()
+			_, ok := ns.rooms[msg.Room]
+			ns.roomsMu.RUnlock()
+			if !ok {
+				// tried to send to a not joined room.
+				return false
+			}
+		}
+	}
+
+	err := c.socket.WriteText(serializeMessage(nil, msg), c.writeTimeout)
+	if err != nil {
+		if IsCloseError(err) {
+			c.Close()
+		}
+		return false
+	}
+
+	return true
+}
+
+func (c *conn) Ask(ctx context.Context, msg Message) (Message, error) {
 	if c.IsClosed() {
 		return msg, CloseError{Code: -1, error: ErrWrite}
 	}
@@ -300,78 +574,18 @@ func (c *conn) ask(ctx context.Context, msg Message) (Message, error) {
 	}
 }
 
-// DisconnectFrom gracefully disconnects from a namespace.
-func (c *conn) DisconnectFrom(ctx context.Context, namespace string) error {
-	return c.connectedNamespaces.askDisconnect(ctx, c, Message{
-		Namespace: namespace,
-		Event:     OnNamespaceDisconnect,
-	}, true)
-}
-
-var ErrWrite = fmt.Errorf("write closed")
-
-// const defaultWaitServerOrClientConnectTimeout = 8 * time.Second
-
-// const waitConnectDuruation = 100 * time.Millisecond
-
-// Nil context means try without timeout, wait until it connects to the specific namespace.
-func (c *conn) WaitConnect(ctx context.Context, namespace string) (ns NSConn, err error) {
-	if ctx == nil {
-		ctx = context.TODO()
-	}
-
-	// if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-	// 	var cancel context.CancelFunc
-	// 	ctx, cancel = context.WithTimeout(ctx, defaultWaitServerOrClientConnectTimeout)
-	// 	defer cancel()
-	// }
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			if ns == nil {
-				ns = c.connectedNamespaces.get(namespace)
-			}
-
-			if ns != nil && c.isAcknowledged() {
-				return
-			}
-
-			time.Sleep(syncWaitDur)
-		}
-	}
-
-	return nil, ErrBadNamespace
-}
-
-const syncWaitDur = 15 * time.Millisecond
-
-func (c *conn) Connect(ctx context.Context, namespace string) (NSConn, error) {
-	if !c.IsClient() {
-		for !c.isAcknowledged() {
-			time.Sleep(syncWaitDur)
-		}
-	}
-
-	return c.connectedNamespaces.askConnect(ctx, c, namespace)
-}
-
-// DisconnectFromAll gracefully disconnects from all namespaces.
-func (c *conn) DisconnectFromAll(ctx context.Context) error {
-	return c.connectedNamespaces.disconnectAll(ctx, c)
-}
-
-func (c *conn) IsClosed() bool {
-	return atomic.LoadUint32(c.once) > 0
-}
-
 func (c *conn) Close() {
-	if atomic.CompareAndSwapUint32(c.once, 0, 1) {
+	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
 		close(c.closeCh)
 		// fire the namespaces' disconnect event for both server and client.
-		c.connectedNamespaces.forceDisconnectAll()
+		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
+		c.connectedNamespacesMutex.Lock()
+		for namespace, ns := range c.connectedNamespaces {
+			disconnectMsg.Namespace = ns.namespace
+			ns.events.fireEvent(ns, disconnectMsg)
+			delete(c.connectedNamespaces, namespace)
+		}
+		c.connectedNamespacesMutex.Unlock()
 
 		c.waitingMessagesMutex.Lock()
 		for wait := range c.waitingMessages {
@@ -391,47 +605,6 @@ func (c *conn) Close() {
 	}
 }
 
-func (c *conn) WriteAndWait(ctx context.Context, msg Message) Message {
-	response, err := c.ask(ctx, msg)
-
-	if !response.isError && err != nil {
-		return Message{Err: err, isError: true}
-	}
-
-	return response
-}
-
-func (c *conn) Write(msg Message) bool {
-	if c.IsClosed() {
-		return false
-	}
-
-	// msg.from = c.ID()
-
-	if !msg.isConnect() && !msg.isDisconnect() {
-		ns := c.connectedNamespaces.get(msg.Namespace)
-		if ns == nil {
-			return false
-		}
-
-		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
-			ns.roomsMu.RLock()
-			_, ok := ns.rooms[msg.Room]
-			ns.roomsMu.RUnlock()
-			if !ok {
-				// tried to send to a not joined room.
-				return false
-			}
-		}
-	}
-
-	err := c.socket.WriteText(serializeMessage(nil, msg), c.writeTimeout)
-	if err != nil {
-		if IsCloseError(err) {
-			c.Close()
-		}
-		return false
-	}
-
-	return true
+func (c *conn) IsClosed() bool {
+	return atomic.LoadUint32(c.closed) > 0
 }

@@ -45,11 +45,17 @@ func TestAsk(t *testing.T) {
 		}
 
 		for i := 1; i <= 5; i++ {
-			msg := c.Ask(nil, pingEvent, nil)
+			msg, err := c.Ask(nil, pingEvent, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
 			testMessage(dialer, i, msg)
 		}
 
-		msg := c.Ask(nil, pingEvent, nil)
+		msg, err := c.Ask(nil, pingEvent, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		testMessage(dialer, -1, msg)
 	})
 	if err != nil {
@@ -105,7 +111,11 @@ func TestOnAnyEvent(t *testing.T) {
 		c.Emit(expectedMessage.Event, expectedMessage.Body)
 		wg.Wait()
 
-		testMessage(c.Ask(nil, expectedMessage.Event, expectedMessage.Body))
+		msg, err := c.Ask(nil, expectedMessage.Event, expectedMessage.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testMessage(msg)
 	})
 	if err != nil {
 		t.Fatal(err)

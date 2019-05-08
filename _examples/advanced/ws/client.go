@@ -18,13 +18,6 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
-// func (c *Client) Connect(namespace string, waitFromServer bool) (NSConn, error) {
-// 	if waitFromServer {
-// 		return c.conn.WaitConnect(namespace), nil
-// 	}
-// 	return c.conn.Connect(namespace)
-// }
-
 func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (NSConn, error) {
 	return c.conn.WaitConnect(ctx, namespace)
 }

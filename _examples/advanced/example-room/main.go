@@ -154,7 +154,7 @@ func server(upgrader ws.Upgrader) {
 			// })
 			srv.Do(func(c ws.Conn) {
 				// c.Close()
-				c.DisconnectFrom(nil, namespace)
+				c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
 			// srv.Do(func(c ws.Conn) {
