@@ -169,8 +169,6 @@ func TestOnAnyEvent(t *testing.T) {
 }
 
 func TestOnNativeMessage(t *testing.T) {
-	// test valid and not valid namespace connection.
-
 	var (
 		wg            sync.WaitGroup
 		namespace     = "" // empty namespace and OnNativeMessage event defined to allow native websocket messages to come through.
@@ -205,14 +203,12 @@ func TestOnNativeMessage(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Ask is not available on native websocket messages ofcourse.
+			// Ask is not available on native websocket messages of course.
 			wg.Add(1)
 			c.Conn.Write(ws.Message{
 				Body:     nativeMessage,
 				IsNative: true,
 			})
-
-			wg.Wait()
 		})
 	if err != nil {
 		t.Fatal(err)

@@ -31,5 +31,5 @@ func (r *Room) Leave(ctx context.Context) error {
 		Namespace: r.NSConn.namespace,
 		Room:      r.name,
 		Event:     OnRoomLeave,
-	})
+	}, true)
 }

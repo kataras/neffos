@@ -17,8 +17,8 @@ type NSConn struct {
 	// Dynamically channels/rooms for each connected namespace.
 	// Client can ask to join, server can forcely join a connection to a room.
 	// Namespace(room(fire event)).
-	rooms   map[string]*Room
-	roomsMu sync.RWMutex
+	rooms      map[string]*Room
+	roomsMutex sync.RWMutex
 }
 
 func newNSConn(c *Conn, namespace string, events Events) *NSConn {
@@ -59,9 +59,9 @@ func (ns *NSConn) Room(roomName string) *Room {
 		return nil
 	}
 
-	ns.roomsMu.RLock()
+	ns.roomsMutex.RLock()
 	room := ns.rooms[roomName]
-	ns.roomsMu.RUnlock()
+	ns.roomsMutex.RUnlock()
 
 	return room
 }
@@ -71,7 +71,17 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 		return nil
 	}
 
-	// TODO:
+	ns.roomsMutex.Lock()
+	defer ns.roomsMutex.Unlock()
+
+	leaveMsg := Message{Event: OnRoomLeave}
+	for room := range ns.rooms {
+		leaveMsg.Room = room
+		if err := ns.askRoomLeave(ctx, leaveMsg, false); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -87,9 +97,9 @@ func (ns *NSConn) Disconnect(ctx context.Context) error {
 }
 
 func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, error) {
-	ns.roomsMu.RLock()
+	ns.roomsMutex.RLock()
 	room, ok := ns.rooms[roomName]
-	ns.roomsMu.RUnlock()
+	ns.roomsMutex.RUnlock()
 	if ok {
 		return room, nil
 	}
@@ -111,9 +121,9 @@ func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, erro
 		return nil, err
 	}
 
-	ns.roomsMu.Lock()
+	ns.roomsMutex.Lock()
 	ns.rooms[roomName] = newRoom(ns, roomName)
-	ns.roomsMu.Unlock()
+	ns.roomsMutex.Unlock()
 
 	joinMessage.Event = OnRoomJoined
 	ns.events.fireEvent(ns, joinMessage)
@@ -125,9 +135,9 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 		return
 	}
 
-	ns.roomsMu.RLock()
+	ns.roomsMutex.RLock()
 	_, ok := ns.rooms[msg.Room]
-	ns.roomsMu.RUnlock()
+	ns.roomsMutex.RUnlock()
 	if ok {
 		msg.isNoOp = true
 	} else {
@@ -135,9 +145,9 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 		if err != nil {
 			msg.Err = err
 		} else {
-			ns.roomsMu.Lock()
+			ns.roomsMutex.Lock()
 			ns.rooms[msg.Room] = newRoom(ns, msg.Room)
-			ns.roomsMu.Unlock()
+			ns.roomsMutex.Unlock()
 
 			msg.Event = OnRoomJoined
 			ns.events.fireEvent(ns, msg)
@@ -147,11 +157,45 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 	ns.Conn.Write(msg)
 }
 
-func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message) error {
+func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) error {
 	if ns == nil || msg.wait == "" || msg.isNoOp {
 		return nil
 	}
-	// TODO:
+
+	if lock {
+		ns.roomsMutex.RLock()
+	}
+	room := ns.rooms[msg.Room]
+	if lock {
+		ns.roomsMutex.RUnlock()
+	}
+
+	if room == nil {
+		return ErrBadRoom
+	}
+
+	_, err := ns.Conn.Ask(ctx, msg)
+	if err != nil {
+		return err
+	}
+
+	msg.IsLocal = true
+	err = ns.events.fireEvent(ns, msg)
+	if err != nil {
+		return err
+	}
+
+	if lock {
+		ns.roomsMutex.Lock()
+	}
+	delete(ns.rooms, msg.Room)
+	if lock {
+		ns.roomsMutex.Unlock()
+	}
+
+	msg.Event = OnRoomLeft
+	ns.events.fireEvent(ns, msg)
+
 	return nil
 }
 
@@ -159,5 +203,39 @@ func (ns *NSConn) replyRoomLeave(msg Message) {
 	if ns == nil || msg.wait == "" || msg.isNoOp {
 		return
 	}
-	// TODO:
+
+	room := ns.Room(msg.Room)
+	if room == nil {
+		return
+	}
+
+	// if client then we need to respond to server and delete the room without ask the local event.
+	if ns.Conn.IsClient() {
+		ns.events.fireEvent(ns, msg)
+
+		ns.roomsMutex.Lock()
+		delete(ns.rooms, msg.Room)
+		ns.roomsMutex.Unlock()
+		ns.Conn.Write(msg)
+
+		msg.Event = OnRoomLeft
+		ns.events.fireEvent(ns, msg)
+		return
+	}
+
+	// server-side, check for error on the local event first.
+	err := ns.events.fireEvent(ns, msg)
+	if err != nil {
+		msg.Err = err
+	} else {
+		ns.roomsMutex.Lock()
+		delete(ns.rooms, msg.Room)
+		ns.roomsMutex.Unlock()
+
+		msg.Event = OnRoomLeft
+		ns.events.fireEvent(ns, msg)
+		msg.Event = OnRoomLeave
+	}
+
+	ns.Conn.Write(msg)
 }

@@ -505,9 +505,9 @@ func (c *Conn) Write(msg Message) bool {
 		}
 
 		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
-			ns.roomsMu.RLock()
+			ns.roomsMutex.RLock()
 			_, ok := ns.rooms[msg.Room]
-			ns.roomsMu.RUnlock()
+			ns.roomsMutex.RUnlock()
 			if !ok {
 				// tried to send to a not joined room.
 				return false

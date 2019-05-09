@@ -261,3 +261,4 @@ func (s *Server) GetConnections() map[string]*Conn {
 }
 
 var ErrBadNamespace = errors.New("bad namespace")
+var ErrBadRoom = errors.New("bad room")

@@ -196,6 +196,8 @@ func deserializeInput(b []byte, allowNativeMessages bool) (
 			switch errorText {
 			case ErrBadNamespace.Error():
 				err = ErrBadNamespace
+			case ErrBadRoom.Error():
+				err = ErrBadRoom
 			default:
 				err = errors.New(errorText)
 			}
