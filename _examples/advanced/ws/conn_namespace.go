@@ -74,7 +74,7 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	ns.roomsMutex.Lock()
 	defer ns.roomsMutex.Unlock()
 
-	leaveMsg := Message{Event: OnRoomLeave}
+	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave}
 	for room := range ns.rooms {
 		leaveMsg.Room = room
 		if err := ns.askRoomLeave(ctx, leaveMsg, false); err != nil {
