@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-type MessageHandlerFunc func(NSConn, Message) error
+type MessageHandlerFunc func(*NSConn, Message) error
 
 var (
 	OnNamespaceConnect    = "_OnNamespaceConnect"

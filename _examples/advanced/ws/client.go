@@ -7,7 +7,7 @@ import (
 )
 
 type Client struct {
-	conn *conn
+	conn *Conn
 }
 
 func (c *Client) Close() {
@@ -18,11 +18,11 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
-func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (NSConn, error) {
+func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (*NSConn, error) {
 	return c.conn.WaitConnect(ctx, namespace)
 }
 
-func (c *Client) Connect(ctx context.Context, namespace string) (NSConn, error) {
+func (c *Client) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 	return c.conn.Connect(ctx, namespace)
 }
 

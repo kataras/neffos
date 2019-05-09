@@ -29,11 +29,11 @@ var (
 const (
 	verbose = false
 	// max depends on the OS.
-	totalClients         = 100000
+	totalClients         = 50000
 	maxConcurrentClients = 0
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
 	clientHandleNamespaceConnect = true
-	broadcast                    = false
+	broadcast                    = true
 )
 
 var totalConnectedNamespace = new(uint64)
@@ -45,18 +45,18 @@ var (
 		ReadTimeout:  60 * time.Second, // alive,
 		WriteTimeout: 60 * time.Second, // alive,
 		Events: ws.Events{
-			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
 				atomic.AddUint64(totalConnectedNamespace, 1)
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
 				if maxConcurrentClients > 0 {
 					sem.Release(1)
 				}
 
 				return nil
 			},
-			"chat": func(c ws.NSConn, msg ws.Message) error {
+			"chat": func(c *ws.NSConn, msg ws.Message) error {
 				if verbose {
 					log.Println(string(msg.Body))
 				}
@@ -264,7 +264,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	ctxConnect, cancelConnect := context.WithDeadline(context.Background(), time.Now().Add(25*time.Second))
 	defer cancelConnect()
 
-	var c ws.NSConn
+	var c *ws.NSConn
 
 	if clientHandleNamespaceConnect {
 		c, err = client.Connect(ctxConnect, "")
@@ -282,7 +282,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 		return
 	}
 
-	if c.Conn().ID() == "" {
+	if c.Conn.ID() == "" {
 		panic("CLIENT'S CONNECTION ID IS EMPTY.\nCONNECT SHOULD BLOCK UNTIL ID IS FILLED(ACK) AND UNTIL SERVER'S CONFIRMATION TO NAMESPACE CONNECTION")
 	}
 

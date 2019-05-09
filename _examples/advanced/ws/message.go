@@ -174,8 +174,6 @@ func deserializeInput(b []byte) (
 			switch errorText {
 			case ErrBadNamespace.Error():
 				err = ErrBadNamespace
-			case ErrForbiddenNamespace.Error():
-				err = ErrForbiddenNamespace
 			default:
 				err = errors.New(errorText)
 			}

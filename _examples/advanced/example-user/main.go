@@ -29,15 +29,15 @@ type Users struct {
 }
 
 // returns true if new conn.
-func (u *Users) conn(c ws.NSConn) (*userConn, bool) {
-	user := c.Conn().ID()
+func (u *Users) conn(c *ws.NSConn) (*userConn, bool) {
+	user := c.Conn.ID()
 	u.mu.RLock()
 	entry, ok := u.entries[user]
 	u.mu.RUnlock()
 
 	if !ok {
 		entry = &userConn{
-			conns: make(map[ws.NSConn]struct{}),
+			conns: make(map[*ws.NSConn]struct{}),
 		}
 
 		u.mu.Lock()
@@ -49,9 +49,9 @@ func (u *Users) conn(c ws.NSConn) (*userConn, bool) {
 	return entry, !ok
 }
 
-func (u *Users) get(c ws.NSConn) *userConn {
+func (u *Users) get(c *ws.NSConn) *userConn {
 	u.mu.RLock()
-	entry, ok := u.entries[c.Conn().ID()]
+	entry, ok := u.entries[c.Conn.ID()]
 	u.mu.RUnlock()
 
 	if !ok {
@@ -69,11 +69,11 @@ func (u *Users) remove(user string) {
 
 type userConn struct {
 	mu    sync.RWMutex
-	conns map[ws.NSConn]struct{}
+	conns map[*ws.NSConn]struct{}
 }
 
 // returns true for new conn.
-func (u *userConn) addConn(c ws.NSConn) bool {
+func (u *userConn) addConn(c *ws.NSConn) bool {
 	u.mu.RLock()
 	_, ok := u.conns[c]
 	u.mu.RUnlock()
@@ -87,7 +87,7 @@ func (u *userConn) addConn(c ws.NSConn) bool {
 	return false
 }
 
-func (u *userConn) deleteConn(c ws.NSConn) (wasLast bool) {
+func (u *userConn) deleteConn(c *ws.NSConn) (wasLast bool) {
 	u.mu.Lock()
 	delete(u.conns, c)
 	wasLast = len(u.conns) == 0
@@ -124,7 +124,7 @@ func (u *userConn) Close() {
 	defer u.mu.Unlock()
 
 	for c := range u.conns {
-		c.Conn().Close()
+		c.Conn.Close()
 		delete(u.conns, c)
 	}
 }
@@ -138,19 +138,19 @@ var handler = ws.WithTimeout{
 	WriteTimeout: timeout,
 	Namespaces: ws.Namespaces{
 		"default": ws.Events{
-			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
 				_, isNew := users.conn(c)
-				if isNew || c.Conn().IsClient() {
-					log.Printf("[%s] connected to [%s].", c.Conn().ID(), msg.Namespace)
+				if isNew || c.Conn.IsClient() {
+					log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
 				}
 
-				if !c.Conn().IsClient() {
+				if !c.Conn.IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
 
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
 				if msg.Err != nil {
 					log.Printf("This client can't disconnect yet, server does not allow that action, reason: %v", msg.Err)
 					return nil
@@ -164,18 +164,18 @@ var handler = ws.WithTimeout{
 				wasLast := conn.deleteConn(c)
 
 				if wasLast {
-					users.remove(c.Conn().ID())
-					log.Printf("[%s] disconnected from [%s].", c.Conn().ID(), msg.Namespace)
+					users.remove(c.Conn.ID())
+					log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
 				}
 
-				if c.Conn().IsClient() {
+				if c.Conn.IsClient() {
 					os.Exit(0)
 				}
 
 				return nil
 			},
-			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if !c.Conn().IsClient() {
+			"chat": func(c *ws.NSConn, msg ws.Message) error {
+				if !c.Conn.IsClient() {
 					// this is possible too:
 					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
 					// 	println("force disconnect")
@@ -190,7 +190,7 @@ var handler = ws.WithTimeout{
 					users.get(c).Emit(msg.Event, msg.Body)
 				}
 
-				log.Printf("---------------------\n[%s] %s", c.Conn().ID(), msg.Body)
+				log.Printf("---------------------\n[%s] %s", c.Conn.ID(), msg.Body)
 				return nil
 			},
 		},
@@ -238,7 +238,7 @@ func server(upgrader ws.Upgrader) {
 		return r.RemoteAddr[:strings.IndexByte(r.RemoteAddr, ':')]
 	}
 
-	srv.OnConnect = func(c ws.Conn) error {
+	srv.OnConnect = func(c *ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
 		// c.Connect(nil, namespace) // auto-connect to a specific namespace.
@@ -246,10 +246,10 @@ func server(upgrader ws.Upgrader) {
 		// println("client connected")
 		return nil
 	}
-	srv.OnDisconnect = func(c ws.Conn) {
+	srv.OnDisconnect = func(c *ws.Conn) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
-	srv.OnError = func(c ws.Conn, err error) bool {
+	srv.OnError = func(c *ws.Conn, err error) bool {
 		log.Printf("ERROR: [%s] %v", c.ID(), err)
 		return false
 	}
@@ -274,12 +274,12 @@ func server(upgrader ws.Upgrader) {
 			// 	Namespace: namespace,
 			// 	Event:     ws.OnNamespaceDisconnect,
 			// })
-			srv.Do(func(c ws.Conn) {
+			srv.Do(func(c *ws.Conn) {
 				// c.Close()
 				c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
-			// srv.Do(func(c ws.Conn) {
+			// srv.Do(func(c *ws.Conn) {
 			// 	c.Write(namespace, "chat", text)
 			// })
 			srv.Broadcast(nil, ws.Message{Namespace: namespace, Event: "chat", Body: text})

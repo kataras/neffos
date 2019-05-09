@@ -20,10 +20,10 @@ const (
 	verbose  = false
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
 	serverHandleNamespaceConnect = false
-	broadcast                    = false
+	broadcast                    = true
 )
 
-var totalClients uint64 = 100000 // max depends on the OS, read more below.
+var totalClients uint64 = 50000 // max depends on the OS, read more below.
 // For example for windows:
 //
 // $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
@@ -63,7 +63,7 @@ func main() {
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		Events: ws.Events{
-			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
 				if msg.Err != nil {
 					//	if verbose {
 					log.Println(msg.Err)
@@ -72,21 +72,21 @@ func main() {
 				atomic.AddUint64(totalNamespaceConnected, 1)
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
+			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
 				// if !c.isAcknowledged() {
 				// 	log.Printf("[%s] on namespace[%s] disconnecting without even acknowledged first.", c.ID(), msg.Namespace)
 				// }
 
 				newC := atomic.AddUint64(&totalDisconnected, 1)
 				if verbose {
-					log.Printf("[%d] client [%s] disconnected!\n", newC, c.Conn().ID())
+					log.Printf("[%d] client [%s] disconnected!\n", newC, c.Conn.ID())
 				}
 
 				return nil
 			},
-			"chat": func(c ws.NSConn, msg ws.Message) error {
+			"chat": func(c *ws.NSConn, msg ws.Message) error {
 				if broadcast {
-					c.Conn().Server().Broadcast(c.Conn(), msg)
+					c.Conn.Server().Broadcast(c.Conn, msg)
 				} else {
 					c.Emit("chat", msg.Body)
 				}
@@ -165,7 +165,7 @@ func main() {
 		}
 	}()
 
-	srv.OnConnect = func(c ws.Conn) error {
+	srv.OnConnect = func(c *ws.Conn) error {
 		n := atomic.AddUint64(&totalConnected, 1)
 		if n == 1 {
 			started = true
@@ -179,7 +179,7 @@ func main() {
 		return nil
 	}
 
-	srv.OnError = func(c ws.Conn, err error) bool {
+	srv.OnError = func(c *ws.Conn, err error) bool {
 		log.Printf("ERROR: [%s] %v\n", c.ID(), err)
 		return true
 	}
@@ -189,7 +189,7 @@ func main() {
 	// 	return
 	// }
 
-	//	srv.OnError("", func(c ws.Conn, err error) { handleErr(c, err) })
+	//	srv.OnError("", func(c *ws.Conn, err error) { handleErr(c, err) })
 	//	srv.OnDisconnect = handleDisconnect
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
@@ -201,14 +201,14 @@ var (
 	totalDisconnected uint64
 )
 
-func handleDisconnect(c ws.Conn) {
+func handleDisconnect(c *ws.Conn) {
 	newC := atomic.AddUint64(&totalDisconnected, 1)
 	if verbose {
 		log.Printf("[%d] client [%s] disconnected!\n", newC, c.ID())
 	}
 }
 
-func handleErr(c ws.Conn, err error) {
+func handleErr(c *ws.Conn, err error) {
 	if !fastws.IsDisconnected(err) {
 		log.Printf("client [%s] errorred: %v\n", c.ID(), err)
 	}

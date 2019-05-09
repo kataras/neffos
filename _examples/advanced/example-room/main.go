@@ -26,34 +26,34 @@ var handler = ws.WithTimeout{
 	WriteTimeout: timeout,
 	Namespaces: ws.Namespaces{
 		"default": ws.Events{
-			ws.OnNamespaceConnected: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] connected to [%s].", c.Conn().ID(), msg.Namespace)
+			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
 
-				if !c.Conn().IsClient() {
+				if !c.Conn.IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
 
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] disconnected from [%s].", c.Conn().ID(), msg.Namespace)
+			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
 
-				if c.Conn().IsClient() {
+				if c.Conn.IsClient() {
 					os.Exit(0)
 				}
 
 				return nil
 			},
-			ws.OnRoomJoined: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] joined to room [%s].", c.Conn().ID(), msg.Room)
+			ws.OnRoomJoined: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] joined to room [%s].", c.Conn.ID(), msg.Room)
 				return nil
 			},
-			ws.OnRoomLeft: func(c ws.NSConn, msg ws.Message) error {
-				log.Printf("[%s] left from room [%s].", c.Conn().ID(), msg.Room)
+			ws.OnRoomLeft: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] left from room [%s].", c.Conn.ID(), msg.Room)
 				return nil
 			},
-			"chat": func(c ws.NSConn, msg ws.Message) error {
-				if !c.Conn().IsClient() {
+			"chat": func(c *ws.NSConn, msg ws.Message) error {
+				if !c.Conn.IsClient() {
 					log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
 
 					if msg.Room == "" {
@@ -62,7 +62,7 @@ var handler = ws.WithTimeout{
 						return ws.Reply(msg.Body)
 					}
 
-					c.Conn().Server().Broadcast(c.Conn(), ws.Message{
+					c.Conn.Server().Broadcast(c.Conn, ws.Message{
 						Namespace: msg.Namespace,
 						Event:     msg.Event,
 						// Broadcast to all other members inside this room except this connection(the emmiter, client in this case).
@@ -72,7 +72,7 @@ var handler = ws.WithTimeout{
 					})
 				}
 
-				log.Printf("---------------------\n[%s] %s", c.Conn().ID(), msg.Body)
+				log.Printf("---------------------\n[%s] %s", c.Conn.ID(), msg.Body)
 				return nil
 			},
 		},
@@ -116,7 +116,7 @@ func main() {
 
 func server(upgrader ws.Upgrader) {
 	srv := ws.New(upgrader, handler)
-	srv.OnConnect = func(c ws.Conn) error {
+	srv.OnConnect = func(c *ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
 		// c.Connect(nil, namespace) // auto-connect to a specific namespace.
@@ -124,10 +124,10 @@ func server(upgrader ws.Upgrader) {
 		// println("client connected")
 		return nil
 	}
-	srv.OnDisconnect = func(c ws.Conn) {
+	srv.OnDisconnect = func(c *ws.Conn) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
-	srv.OnError = func(c ws.Conn, err error) bool {
+	srv.OnError = func(c *ws.Conn, err error) bool {
 		log.Printf("ERROR: [%s] %v", c.ID(), err)
 		return false
 	}
@@ -152,7 +152,7 @@ func server(upgrader ws.Upgrader) {
 			// 	Namespace: namespace,
 			// 	Event:     ws.OnNamespaceDisconnect,
 			// })
-			srv.Do(func(c ws.Conn) {
+			srv.Do(func(c *ws.Conn) {
 				// c.Close()
 				c.Namespace(namespace).Disconnect(nil)
 			})

@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-type nsConn struct {
-	*conn
+type NSConn struct {
+	Conn *Conn
 	// Static from server, client can select which to use or not.
 	// Client and server can ask to connect.
 	// Server can forcely disconnect.
@@ -17,40 +17,36 @@ type nsConn struct {
 	// Dynamically channels/rooms for each connected namespace.
 	// Client can ask to join, server can forcely join a connection to a room.
 	// Namespace(room(fire event)).
-	rooms   map[string]*room
+	rooms   map[string]*Room
 	roomsMu sync.RWMutex
 }
 
-func newNSConn(c *conn, namespace string, events Events) *nsConn {
-	return &nsConn{
-		conn:      c,
+func newNSConn(c *Conn, namespace string, events Events) *NSConn {
+	return &NSConn{
+		Conn:      c,
 		namespace: namespace,
 		events:    events,
-		rooms:     make(map[string]*room),
+		rooms:     make(map[string]*Room),
 	}
 }
 
-func (ns *nsConn) Conn() Conn {
-	return ns.conn
-}
-
-func (ns *nsConn) Emit(event string, body []byte) bool {
+func (ns *NSConn) Emit(event string, body []byte) bool {
 	if ns == nil { // if for any reason Namespace() called without be available.
 		return false
 	}
 
-	return ns.conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body})
+	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body})
 }
 
-func (ns *nsConn) Ask(ctx context.Context, event string, body []byte) (Message, error) {
+func (ns *NSConn) Ask(ctx context.Context, event string, body []byte) (Message, error) {
 	if ns == nil {
 		return Message{}, ErrWrite
 	}
 
-	return ns.conn.Ask(ctx, Message{Namespace: ns.namespace, Event: event, Body: body})
+	return ns.Conn.Ask(ctx, Message{Namespace: ns.namespace, Event: event, Body: body})
 }
 
-func (ns *nsConn) JoinRoom(ctx context.Context, roomName string) (Room, error) {
+func (ns *NSConn) JoinRoom(ctx context.Context, roomName string) (*Room, error) {
 	if ns == nil {
 		return nil, ErrWrite
 	}
@@ -58,7 +54,7 @@ func (ns *nsConn) JoinRoom(ctx context.Context, roomName string) (Room, error) {
 	return ns.askRoomJoin(ctx, roomName)
 }
 
-func (ns *nsConn) Room(roomName string) Room {
+func (ns *NSConn) Room(roomName string) *Room {
 	if ns == nil {
 		return nil
 	}
@@ -70,7 +66,7 @@ func (ns *nsConn) Room(roomName string) Room {
 	return room
 }
 
-func (ns *nsConn) LeaveAll(ctx context.Context) error {
+func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	if ns == nil {
 		return nil
 	}
@@ -79,18 +75,18 @@ func (ns *nsConn) LeaveAll(ctx context.Context) error {
 	return nil
 }
 
-func (ns *nsConn) Disconnect(ctx context.Context) error {
+func (ns *NSConn) Disconnect(ctx context.Context) error {
 	if ns == nil {
 		return nil
 	}
 
-	return ns.conn.askDisconnect(ctx, Message{
+	return ns.Conn.askDisconnect(ctx, Message{
 		Namespace: ns.namespace,
 		Event:     OnNamespaceDisconnect,
 	}, true)
 }
 
-func (ns *nsConn) askRoomJoin(ctx context.Context, roomName string) (*room, error) {
+func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, error) {
 	ns.roomsMu.RLock()
 	room, ok := ns.rooms[roomName]
 	ns.roomsMu.RUnlock()
@@ -105,7 +101,7 @@ func (ns *nsConn) askRoomJoin(ctx context.Context, roomName string) (*room, erro
 		IsLocal:   true,
 	}
 
-	_, err := ns.conn.Ask(ctx, joinMessage)
+	_, err := ns.Conn.Ask(ctx, joinMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +120,7 @@ func (ns *nsConn) askRoomJoin(ctx context.Context, roomName string) (*room, erro
 	return room, nil
 }
 
-func (ns *nsConn) replyRoomJoin(msg Message) {
+func (ns *NSConn) replyRoomJoin(msg Message) {
 	if ns == nil || msg.wait == "" || msg.isNoOp {
 		return
 	}
@@ -148,10 +144,10 @@ func (ns *nsConn) replyRoomJoin(msg Message) {
 		}
 	}
 
-	ns.conn.Write(msg)
+	ns.Conn.Write(msg)
 }
 
-func (ns *nsConn) askRoomLeave(msg Message) error {
+func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message) error {
 	if ns == nil || msg.wait == "" || msg.isNoOp {
 		return nil
 	}
@@ -159,7 +155,7 @@ func (ns *nsConn) askRoomLeave(msg Message) error {
 	return nil
 }
 
-func (ns *nsConn) replyRoomLeave(msg Message) {
+func (ns *NSConn) replyRoomLeave(msg Message) {
 	if ns == nil || msg.wait == "" || msg.isNoOp {
 		return
 	}

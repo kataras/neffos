@@ -20,7 +20,7 @@ func (e Events) getNamespaces() Namespaces {
 	return Namespaces{"": e}
 }
 
-func (e Events) fireEvent(c NSConn, msg Message) error {
+func (e Events) fireEvent(c *NSConn, msg Message) error {
 	if h, ok := e[msg.Event]; ok {
 		return h(c, msg)
 	}

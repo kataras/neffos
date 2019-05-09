@@ -43,10 +43,10 @@ type Server struct {
 
 	count uint64
 
-	connections map[*conn]struct{}
-	connect     chan *conn
-	disconnect  chan *conn
-	actions     chan func(Conn)
+	connections map[*Conn]struct{}
+	connect     chan *Conn
+	disconnect  chan *Conn
+	actions     chan func(*Conn)
 
 	//
 	// broadcastMessage Message
@@ -59,9 +59,9 @@ type Server struct {
 
 	closed uint32
 
-	OnError      func(c Conn, err error) bool
-	OnConnect    func(c Conn) error
-	OnDisconnect func(c Conn)
+	OnError      func(c *Conn, err error) bool
+	OnConnect    func(c *Conn) error
+	OnDisconnect func(c *Conn)
 }
 
 func New(upgrader Upgrader, connHandler ConnHandler) *Server {
@@ -72,10 +72,10 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		namespaces:   connHandler.getNamespaces(),
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
-		connections:  make(map[*conn]struct{}),
-		connect:      make(chan *conn, 1),
-		disconnect:   make(chan *conn),
-		actions:      make(chan func(Conn)),
+		connections:  make(map[*Conn]struct{}),
+		connect:      make(chan *Conn, 1),
+		disconnect:   make(chan *Conn),
+		actions:      make(chan func(*Conn)),
 		broadcaster:  newBroadcaster(),
 		IDGenerator:  DefaultIDGenerator,
 	}
@@ -114,7 +114,7 @@ func (s *Server) start() {
 
 func (s *Server) Close() {
 	if atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
-		s.Do(func(c Conn) {
+		s.Do(func(c *Conn) {
 			c.Close()
 		})
 	}
@@ -176,7 +176,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// }(c)
 
-	go func(c *conn) {
+	go func(c *Conn) {
 		for s.waitMessage(c) {
 		}
 	}(c)
@@ -190,7 +190,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) waitMessage(c *conn) bool {
+func (s *Server) waitMessage(c *Conn) bool {
 	s.broadcaster.mu.Lock()
 	defer s.broadcaster.mu.Unlock()
 
@@ -212,11 +212,11 @@ func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
-func (s *Server) Do(fn func(Conn)) {
+func (s *Server) Do(fn func(*Conn)) {
 	s.actions <- fn
 }
 
-func (s *Server) Broadcast(from Conn, msg Message) {
+func (s *Server) Broadcast(from *Conn, msg Message) {
 	if from != nil {
 		msg.from = from.ID()
 	}
@@ -233,13 +233,13 @@ func (s *Server) Broadcast(from Conn, msg Message) {
 }
 
 // not thread safe.
-func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
-	conns := make(map[string]NSConn)
+func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn {
+	conns := make(map[string]*NSConn)
 
 	s.mu.RLock()
 	for c := range s.connections {
-		if ns := c.namespace(namespace); ns != nil {
-			conns[ns.ID()] = ns
+		if ns := c.Namespace(namespace); ns != nil {
+			conns[ns.Conn.ID()] = ns
 		}
 	}
 	s.mu.RUnlock()
@@ -248,8 +248,8 @@ func (s *Server) GetConnectionsByNamespace(namespace string) map[string]NSConn {
 }
 
 // not thread safe.
-func (s *Server) GetConnections() map[string]Conn {
-	conns := make(map[string]Conn)
+func (s *Server) GetConnections() map[string]*Conn {
+	conns := make(map[string]*Conn)
 
 	s.mu.RLock()
 	for c := range s.connections {
@@ -261,4 +261,3 @@ func (s *Server) GetConnections() map[string]Conn {
 }
 
 var ErrBadNamespace = errors.New("bad namespace")
-var ErrForbiddenNamespace = errors.New("forbidden namespace")

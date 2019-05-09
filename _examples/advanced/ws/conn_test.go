@@ -8,6 +8,51 @@ import (
 	"github.com/kataras/fastws/_examples/advanced/ws"
 )
 
+func TestConnect(t *testing.T) {
+	// test valid and not valid namespace connection.
+
+	var (
+		namespace    = "default"
+		onlyOnServer = "only_on_server"
+		onlyOnClient = "only_on_client"
+		emptyEvents  = ws.Events{}
+	)
+
+	teardownServer := runTestServer("localhost:8080", ws.Namespaces{"": emptyEvents, namespace: emptyEvents, onlyOnServer: emptyEvents})
+	defer teardownServer()
+
+	err := runTestClient("localhost:8080", ws.Namespaces{"": emptyEvents, namespace: emptyEvents, onlyOnClient: emptyEvents},
+		func(dialer string, client *ws.Client) {
+			defer client.Close()
+
+			// should success, empty namespace naming is allowed and it's defined on both server and client-side.
+			c, err := client.Connect(nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// should success, namespace exists in server-side and it's defined on client-side.
+			c, err = client.Connect(nil, namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			c, err = client.Connect(nil, onlyOnServer)
+			if err == nil || c != nil {
+				t.Fatalf("%s namespace connect should fail, namespace exists on server but not defined at client-side", onlyOnServer)
+			}
+
+			c, err = client.Connect(nil, onlyOnClient)
+			if err == nil || c != nil {
+				t.Fatalf("%s namespace connect should fail, namespace defined on client but not exists at server-side.", onlyOnClient)
+			}
+
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAsk(t *testing.T) {
 	var (
 		namespace   = "default"
@@ -30,7 +75,7 @@ func TestAsk(t *testing.T) {
 	}
 
 	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		pingEvent: func(c ws.NSConn, msg ws.Message) error {
+		pingEvent: func(c *ws.NSConn, msg ws.Message) error {
 			// c.Emit("event", pongMessage)
 			return ws.Reply(pongMessage) // changes only body; ns,event remains.
 		}}})
@@ -83,7 +128,7 @@ func TestOnAnyEvent(t *testing.T) {
 	)
 
 	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		ws.OnAnyEvent: func(c ws.NSConn, msg ws.Message) error {
+		ws.OnAnyEvent: func(c *ws.NSConn, msg ws.Message) error {
 			if ws.IsSystemEvent(msg.Event) { // skip connect/disconnect messages.
 				return nil
 			}
@@ -93,7 +138,7 @@ func TestOnAnyEvent(t *testing.T) {
 	defer teardownServer()
 
 	err := runTestClient("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		expectedMessage.Event: func(c ws.NSConn, msg ws.Message) error {
+		expectedMessage.Event: func(c *ws.NSConn, msg ws.Message) error {
 			defer wg.Done()
 			testMessage(msg)
 
