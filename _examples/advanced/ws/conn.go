@@ -169,6 +169,7 @@ func (c *Conn) startReader() {
 
 			queue = nil
 		}
+		allowNativeMessages = c.namespaces[""] != nil && c.namespaces[""][OnNativeMessage] != nil
 	)
 
 	for {
@@ -197,7 +198,7 @@ func (c *Conn) startReader() {
 			continue
 		}
 
-		msg := deserializeMessage(nil, b)
+		msg := deserializeMessage(nil, b, allowNativeMessages)
 		if msg.isInvalid {
 			// fmt.Printf("%s[%d] is invalid payload\n", b, len(b))
 			continue

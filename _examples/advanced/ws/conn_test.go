@@ -2,6 +2,7 @@ package ws_test
 
 import (
 	"bytes"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -162,6 +163,57 @@ func TestOnAnyEvent(t *testing.T) {
 		}
 		testMessage(msg)
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOnNativeMessage(t *testing.T) {
+	// test valid and not valid namespace connection.
+
+	var (
+		wg            sync.WaitGroup
+		namespace     = "" // empty namespace and OnNativeMessage event defined to allow native websocket messages to come through.
+		nativeMessage = []byte("this is a native/raw websocket message")
+		events        = ws.Events{
+			ws.OnNativeMessage: func(c *ws.NSConn, msg ws.Message) error {
+				defer wg.Done()
+				expectedMessage := ws.Message{
+					Event:    ws.OnNativeMessage,
+					Body:     nativeMessage,
+					IsNative: true,
+				}
+
+				if !reflect.DeepEqual(expectedMessage, msg) {
+					t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+				}
+
+				return nil
+			},
+		}
+	)
+
+	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: events})
+	defer teardownServer()
+
+	err := runTestClient("localhost:8080", ws.Namespaces{namespace: events},
+		func(dialer string, client *ws.Client) {
+			defer client.Close()
+
+			c, err := client.Connect(nil, namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Ask is not available on native websocket messages ofcourse.
+			wg.Add(1)
+			c.Conn.Write(ws.Message{
+				Body:     nativeMessage,
+				IsNative: true,
+			})
+
+			wg.Wait()
+		})
 	if err != nil {
 		t.Fatal(err)
 	}

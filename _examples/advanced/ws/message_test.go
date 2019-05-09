@@ -88,14 +88,29 @@ func TestMessageSerialization(t *testing.T) {
 			t.Fatalf("[%d] serialize: expected %s but got %s", i, tt.serialized, got)
 		}
 
-		msg := deserializeMessage(nil, got)
+		msg := deserializeMessage(nil, got, false)
 		if !reflect.DeepEqual(msg, tt.msg) {
 			t.Fatalf("[%d] deserialize: expected\n%#+v but got\n%#+v", i, tt.msg, msg)
 		}
 	}
 
-	msg := deserializeMessage(nil, []byte("default;chat;"))
+	msg := deserializeMessage(nil, []byte("default;chat;"), false)
 	if !msg.isInvalid {
 		t.Fatalf("expected message to be invalid but it seems that it is a valid one")
+	}
+
+	nativeMessage := []byte("a native websocket message")
+	msg = deserializeMessage(nil, nativeMessage, true)
+	if msg.isInvalid {
+		t.Fatalf("expected message to be valid native/raw websocket message")
+	}
+
+	expectedNativeMessage := Message{
+		Event:    OnNativeMessage,
+		Body:     nativeMessage,
+		IsNative: true,
+	}
+	if !reflect.DeepEqual(expectedNativeMessage, msg) {
+		t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedNativeMessage, msg)
 	}
 }

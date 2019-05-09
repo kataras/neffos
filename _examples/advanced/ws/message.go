@@ -41,6 +41,11 @@ type Message struct {
 	// Should be used rarely, state can be checked by `Conn#IsClient() bool`.
 	// This field is not filled on sending/receiving.
 	IsLocal bool
+
+	// True when user define it for writing, only its body is written as raw native websocket message, namespace, event and all other fields are empty.
+	// The receiver should accept it on the `OnNativeMessage` event.
+	// This field is not filled on sending/receiving.
+	IsNative bool
 }
 
 func (m *Message) isConnect() bool {
@@ -72,7 +77,11 @@ var (
 )
 
 func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
-	out = serializeOutput(msg.wait, msg.Namespace, msg.Room, msg.Event, msg.Body, msg.Err, msg.isNoOp)
+	if msg.IsNative && msg.wait == "" {
+		out = msg.Body
+	} else {
+		out = serializeOutput(msg.wait, msg.Namespace, msg.Room, msg.Event, msg.Body, msg.Err, msg.isNoOp)
+	}
 
 	if encrypt != nil {
 		out = encrypt(out)
@@ -123,12 +132,13 @@ func serializeOutput(wait, namespace, room, event string,
 	return msg
 }
 
-func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
+// when allowNativeMessages only Body is filled and check about message format is skipped.
+func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bool) Message {
 	if decrypt != nil {
 		b = decrypt(b)
 	}
 
-	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b)
+	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages)
 	return Message{
 		wait,
 		namespace,
@@ -142,10 +152,11 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte) Message {
 		"",
 		false,
 		false,
+		allowNativeMessages && event == OnNativeMessage,
 	}
 }
 
-func deserializeInput(b []byte) (
+func deserializeInput(b []byte, allowNativeMessages bool) (
 	wait,
 	namespace,
 	room,
@@ -156,9 +167,20 @@ func deserializeInput(b []byte) (
 	isInvalid bool,
 ) {
 
+	if len(b) == 0 {
+		isInvalid = true
+		return
+	}
+
 	dts := bytes.SplitN(b, messageSeparator, 7)
 	if len(dts) != 7 {
-		isInvalid = true
+		if !allowNativeMessages {
+			isInvalid = true
+			return
+		}
+
+		event = OnNativeMessage
+		body = b
 		return
 	}
 

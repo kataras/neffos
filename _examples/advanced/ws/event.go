@@ -18,7 +18,13 @@ var (
 	OnRoomJoined          = "_OnRoomJoined"          // able to broadcast messages to room.
 	OnRoomLeave           = "_OnRoomLeave"           // able to broadcast bye-bye messages to room.
 	OnRoomLeft            = "_OnRoomLeft"            // if allowed to join to a room, then its allowed to leave from it.
-	OnAnyEvent            = "_OnAnyEvent"            // when event no match.
+
+	OnAnyEvent = "_OnAnyEvent" // when event no match.
+	// OnNativeMessage is fired on incoming native/raw websocket messages.
+	// If this event defined then an incoming message can pass the check (it's an invalid message format)
+	// with just the Message's Body filled, the Event is "OnNativeMessage" and IsNative always true.
+	// This event should be defined under an empty namespace in order this to work.
+	OnNativeMessage = "_OnNativeMessage"
 )
 
 func IsSystemEvent(event string) bool {
