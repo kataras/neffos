@@ -3,7 +3,7 @@ package gorilla
 import (
 	"net/http"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/ws"
 
 	gorilla "github.com/gorilla/websocket"
 )

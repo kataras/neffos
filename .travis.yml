@@ -4,7 +4,7 @@ os:
   - osx
 go:
   - 1.11.x
-go_import_path: github.com/kataras/fastws
+go_import_path: github.com/kataras/ws
 install:
   - go get ./...
 script:

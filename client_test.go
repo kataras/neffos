@@ -3,10 +3,10 @@ package ws_test
 import (
 	"fmt"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/ws"
 
-	gobwas "github.com/kataras/fastws/_examples/advanced/ws/gobwas"
-	gorilla "github.com/kataras/fastws/_examples/advanced/ws/gorilla"
+	gobwas "github.com/kataras/ws/gobwas"
+	gorilla "github.com/kataras/ws/gorilla"
 )
 
 func runTestClient(addr string, connHandler ws.ConnHandler, testFn func(string, *ws.Client)) error {

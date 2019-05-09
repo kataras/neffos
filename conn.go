@@ -1,395 +1,604 @@
-package fastws
+package ws
 
 import (
-	"encoding/json"
-	"encoding/xml"
-	"io"
-	"io/ioutil"
+	"bytes"
+	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/gobwas/ws"
-	"github.com/gobwas/ws/wsutil"
 )
 
-// Conn is stream-oriented websocket connection.
-// Both server and client sides uses it.
-// Its fields can be customized after connection established.
-type Conn struct { // io.Reader and io.Writer fully compatible, bufio.Scanner can be used.
-	// ID is the unique identifier for this Conn, it is only used on server-side and its `Conn.tring()`
-	// but callers can use it for higher level features as well.
-	//
-	// Look at `FastWS#IDGenerator` to change how this string field is generated.
-	ID string
+type (
+	Socket interface {
+		NetConn() net.Conn
+		Request() *http.Request
 
-	// Request is the underline HTTP request value.
-	Request *http.Request
-	// Header is a server-side only field.
-	// It can be modified on the `OnUpgrade` event to send custom headers on HTTP upgrade.
-	Header http.Header
-
-	// After connected successfully.
-
-	// NetConn is available at the `OnConnected` state for server-side and
-	// after `Dial` for client-side.
-	// It is the underline generic network connection.
-	netConn net.Conn
-	// Handshake is available for reading at the `OnConnected` state for server-side
-	// and after `Dial` for client-side.
-	Handshake ws.Handshake
-	// State is available for reading at the `OnConnected` state for server-side
-	// and after `Dial` for client-side.
-	State ws.State
-
-	// These can be customized before each `Read` and `Decode`.
-
-	// ControlHandler is the underline `gobwas/wsutil#FrameHandlerFunc` which
-	// can be modified to a custom FrameHandlerFunc before `Read` and `Decode`.
-	//
-	// It is available for both server and client sides at `OnConnected` and after `Dial`.
-	ControlHandler wsutil.FrameHandlerFunc
-	// ControlHandler is the underline `gobwas/wsutil#Reader` which
-	// can be modified to a custom FrameHandlerFunc before `Read` and `Decode`.
-	//
-	// It is available for both server and client sides at `OnConnected` and after `Dial`.
-	Reader *wsutil.Reader
-	// ReadTimeout time allowed to read a message from the connection, can be altered before `Read` and `Decode`.
-	// It is available for both server and client sides at `OnConnected` and after `Dial`.
-	// Defaults to no timeout.
-	ReadTimeout time.Duration
-
-	// These can be customized before each `Write`, `WriteWithCode` and `Encode`.
-
-	// If non-nil its `Write` will be used instead, on `Encode` its `Write` +`Flush`.
-	// Defaults to a buffered writer, if nil then it will write all data without buffering.
-	Writer    *wsutil.Writer
-	Flush     bool // if true and Writer is non-nil (as defaulted) it will call c.Writer.Flush after each .Write. Defaults to true.
-	WriteCode ws.OpCode
-	mu        sync.Mutex
-	// WriteTimeout time allowed to write a message to the connection, can be altered before `Write`, `WriteWithCode` and `Encoder`.
-	// Defaults to no timeout.
-	WriteTimeout time.Duration
-
-	encoder Encoder
-	decoder Decoder
-
-	reason error
-
-	// OnError fires whenever an error returned from `FastWS#OnUpgrade` or `FastWS#OnConnected`.
-	// If it is from `OnUpgrade` then the boolean result will define if
-	// the connection should be closed (force client disconnect) with "true" or
-	// log and ignore the error with "false" if error is not a "closed type" (see below).
-	// If it is from `OnConnected` then the result does not really matter.
-	// It accepts the  error which contains the last known reason that it raised the `OnError` callback.
-	//
-	// Look `IsTimeout`, `IsClosed` and `IsDisconnected` error check helpers too,
-	// this pattern allows the caller to define its own custom errors and handle them in one place.
-	OnError func(err error) bool
-}
-
-func (c *Conn) establish(conn net.Conn, hs ws.Handshake, state ws.State) {
-	controlHandler := wsutil.ControlFrameHandler(conn, state)
-
-	rd := &wsutil.Reader{
-		Source:          conn,
-		State:           state,
-		CheckUTF8:       true,
-		SkipHeaderCheck: false,
-		// OnIntermediate:  controlHandler,
+		ReadText(timeout time.Duration) (body []byte, err error)
+		WriteText(body []byte, timeout time.Duration) error
 	}
 
-	c.netConn = conn
-	c.Handshake = hs
-	c.State = state
-	c.ControlHandler = controlHandler
-	c.Reader = rd
-	c.WriteCode = ws.OpText // OpBinary
-	// c.Writer = wsutil.NewWriter(conn, state, c.WriteCode)
-	// c.Writer = wsutil.GetWriter(conn, state, c.WriteCode, 0)
-	c.Flush = true
+	// Conn interface {
+	// 	Socket() Socket
+	// 	ID() string
+	// 	String() string
+
+	// 	Write(msg Message) bool
+	// 	Ask(ctx context.Context, msg Message) (Message, error)
+
+	// 	Connect(ctx context.Context, namespace string) (NSConn, error)
+	// 	WaitConnect(ctx context.Context, namespace string) (NSConn, error)
+	// 	Namespace(namespace string) NSConn
+	// 	DisconnectAll(ctx context.Context) error
+
+	// 	IsClient() bool
+	// 	Server() *Server
+
+	// 	Close()
+	// 	IsClosed() bool
+	// }
+
+	// NSConn interface {
+	// 	Conn() Conn
+
+	// 	Emit(event string, body []byte) bool
+	// 	Ask(ctx context.Context, event string, body []byte) (Message, error)
+
+	// 	JoinRoom(ctx context.Context, roomName string) (Room, error)
+	// 	Room(roomName string) Room
+	// 	LeaveAll(ctx context.Context) error
+
+	// 	Disconnect(ctx context.Context) error
+	// }
+
+	// Room interface {
+	// 	NSConn() NSConn
+
+	// 	Emit(event string, body []byte) bool
+	// 	Leave(ctx context.Context) error
+	// }
+)
+
+// var (
+// 	_ Conn   = (*conn)(nil)
+// 	_ NSConn = (*nsConn)(nil)
+// 	_ Room   = (*room)(nil)
+// )
+
+type Conn struct {
+	// the ID generated by `Server#IDGenerator`.
+	id string
+
+	// the gorilla or gobwas socket.
+	socket Socket
+
+	// non-nil if server-side connection.
+	server *Server
+
+	// maximum wait time allowed to read a message from the connection.
+	// Defaults to no timeout.
+	readTimeout time.Duration
+	// maximum wait time allowed to write a message to the connection.
+	// Defaults to no timeout.
+	writeTimeout time.Duration
+
+	// the defined namespaces, allowed to connect.
+	namespaces Namespaces
+
+	// more than 0 if acknowledged.
+	acknowledged *uint32
+
+	// the current connection's connected namespace.
+	connectedNamespaces      map[string]*NSConn
+	connectedNamespacesMutex sync.RWMutex
+
+	// messages that this connection waits for a reply.
+	waitingMessages      map[string]chan Message
+	waitingMessagesMutex sync.RWMutex
+
+	// used to fire `conn#Close` once.
+	closed *uint32
+	// useful to terminate the broadcast waiter.
+	closeCh chan struct{}
 }
 
-func (c *Conn) NetConn() net.Conn {
-	return c.netConn
+func newConn(socket Socket, namespaces Namespaces) *Conn {
+	return &Conn{
+		socket:              socket,
+		namespaces:          namespaces,
+		acknowledged:        new(uint32),
+		connectedNamespaces: make(map[string]*NSConn),
+		waitingMessages:     make(map[string]chan Message),
+		closed:              new(uint32),
+		closeCh:             make(chan struct{}),
+	}
 }
 
-// IsClient reports wether this Conn is client side.
+func (c *Conn) ID() string {
+	return c.id
+}
+
+func (c *Conn) String() string {
+	return c.ID()
+}
+
+func (c *Conn) Socket() Socket {
+	return c.socket
+}
+
 func (c *Conn) IsClient() bool {
-	return c.State == ws.StateClientSide
+	return c.server == nil
 }
 
-func (c *Conn) HandleError(err error) bool {
-	if err == nil {
-		return true
+func (c *Conn) Server() *Server {
+	if c.IsClient() {
+		return nil
 	}
 
-	c.reason = err
+	return c.server
+}
 
-	if c.OnError == nil {
-		return false
+var (
+	ackBinary   = []byte("ack")
+	ackOKBinary = []byte("ack_ok")
+)
+
+func (c *Conn) isAcknowledged() bool {
+	return atomic.LoadUint32(c.acknowledged) > 0
+}
+
+func (c *Conn) startReader() {
+	if c.IsClosed() {
+		return
+	}
+	defer c.Close()
+
+	var (
+		queue       = make([]*Message, 0)
+		queueMutex  = new(sync.Mutex)
+		handleQueue = func() {
+			queueMutex.Lock()
+			defer queueMutex.Unlock()
+
+			for _, msg := range queue {
+				c.handleMessage(*msg)
+			}
+
+			queue = nil
+		}
+		allowNativeMessages = c.namespaces[""] != nil && c.namespaces[""][OnNativeMessage] != nil
+	)
+
+	for {
+		b, err := c.socket.ReadText(c.readTimeout)
+		if err != nil {
+			return
+		}
+
+		if !c.isAcknowledged() && bytes.HasPrefix(b, ackBinary) {
+			if c.IsClient() {
+				id := string(b[len(ackBinary):])
+				c.id = id
+				atomic.StoreUint32(c.acknowledged, 1)
+				c.socket.WriteText(ackOKBinary, c.writeTimeout)
+				handleQueue()
+			} else {
+				if len(b) == len(ackBinary) {
+					c.socket.WriteText(append(ackBinary, []byte(c.id)...), c.writeTimeout)
+				} else {
+					// its ackOK, answer from client when ID received and it's ready for write/read.
+					atomic.StoreUint32(c.acknowledged, 1)
+					handleQueue()
+				}
+			}
+
+			continue
+		}
+
+		msg := deserializeMessage(nil, b, allowNativeMessages)
+		if msg.isInvalid {
+			// fmt.Printf("%s[%d] is invalid payload\n", b, len(b))
+			continue
+		}
+
+		if !c.isAcknowledged() {
+			queueMutex.Lock()
+			queue = append(queue, &msg)
+			queueMutex.Unlock()
+
+			continue
+		}
+
+		if !c.handleMessage(msg) {
+			return
+		}
+	}
+}
+
+func (c *Conn) handleMessage(msg Message) bool {
+	if msg.wait != "" {
+		c.waitingMessagesMutex.RLock()
+		ch, ok := c.waitingMessages[msg.wait]
+		c.waitingMessagesMutex.RUnlock()
+		if ok {
+			ch <- msg
+			return true
+		}
 	}
 
-	return c.OnError(err)
+	switch msg.Event {
+	case OnNamespaceConnect:
+		c.replyConnect(msg)
+	case OnNamespaceDisconnect:
+		c.replyDisconnect(msg)
+	case OnRoomJoin:
+		if ns, ok := c.tryNamespace(msg); ok {
+			ns.replyRoomJoin(msg)
+		}
+	case OnRoomLeave:
+		if ns, ok := c.tryNamespace(msg); ok {
+			ns.replyRoomLeave(msg)
+		}
+	default:
+		ns, ok := c.tryNamespace(msg)
+		if !ok {
+			return true
+		}
+
+		msg.IsLocal = false
+		err := ns.events.fireEvent(ns, msg)
+		if err != nil {
+			msg.Err = err
+			c.Write(msg)
+			if isManualCloseError(err) {
+				return false // close the connection after sending the closing message.
+			}
+		}
+	}
+
+	return true
 }
 
-// Err may return the reason of an error, available at the `OnError` event for server-side.
-func (c *Conn) Err() error {
-	return c.reason
+const syncWaitDur = 15 * time.Millisecond
+
+func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
+	if !c.IsClient() {
+		for !c.isAcknowledged() {
+			time.Sleep(syncWaitDur)
+		}
+	}
+
+	return c.askConnect(ctx, namespace)
 }
 
-func (c *Conn) String() (s string) {
-	if c.netConn == nil {
+// Nil context means try without timeout, wait until it connects to the specific namespace.
+// Note that, this function will not return an `ErrBadNamespace` if namespace does not exist in the server-side
+// or it's not defined in the client-side, it waits until deadline (if any, or loop forever).
+func (c *Conn) WaitConnect(ctx context.Context, namespace string) (ns *NSConn, err error) {
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			if ns == nil {
+				ns = c.Namespace(namespace)
+			}
+
+			if ns != nil && c.isAcknowledged() {
+				return
+			}
+
+			time.Sleep(syncWaitDur)
+		}
+	}
+}
+
+func (c *Conn) Namespace(namespace string) *NSConn {
+	c.connectedNamespacesMutex.RLock()
+	ns := c.connectedNamespaces[namespace]
+	c.connectedNamespacesMutex.RUnlock()
+
+	return ns
+}
+
+func (c *Conn) tryNamespace(in Message) (*NSConn, bool) {
+	ns := c.Namespace(in.Namespace)
+	if ns == nil {
+		// if _, canConnect := c.namespaces[msg.Namespace]; !canConnect {
+		// 	msg.Err = ErrForbiddenNamespace
+		// }
+		in.Err = ErrBadNamespace
+		c.Write(in)
+		return nil, false
+	}
+
+	return ns, true
+}
+
+// server#OnConnected -> conn#Connect
+// client#WaitConnect
+// or
+// client#Connect
+func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error) {
+	ns := c.Namespace(namespace)
+	if ns != nil {
+		return ns, nil
+	}
+
+	events, ok := c.namespaces[namespace]
+	if !ok {
+		return nil, ErrBadNamespace
+	}
+
+	connectMessage := Message{
+		Namespace: namespace,
+		Event:     OnNamespaceConnect,
+		IsLocal:   true,
+	}
+
+	_, err := c.Ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
+	if err != nil {
+		return nil, err
+	}
+
+	// re-check, maybe connected so far (can happen by a simultaneously `Connect` calls on both server and client, which is not the standard way)
+	c.connectedNamespacesMutex.RLock()
+	ns, ok = c.connectedNamespaces[namespace]
+	c.connectedNamespacesMutex.RUnlock()
+	if ok {
+		return ns, nil
+	}
+
+	ns = newNSConn(c, namespace, events)
+	err = events.fireEvent(ns, connectMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	c.connectedNamespacesMutex.Lock()
+	c.connectedNamespaces[namespace] = ns
+	c.connectedNamespacesMutex.Unlock()
+
+	connectMessage.Event = OnNamespaceConnected
+	events.fireEvent(ns, connectMessage) // omit error, it's connected.
+
+	return ns, nil
+}
+
+func (c *Conn) replyConnect(msg Message) {
+	// must give answer even a noOp if already connected.
+	if msg.wait == "" || msg.isNoOp {
 		return
 	}
 
-	if c.ID != "" {
-		s = c.ID + " "
+	ns := c.Namespace(msg.Namespace)
+	if ns != nil {
+		msg.isNoOp = true
+		c.Write(msg)
+		return
 	}
 
-	s += "<" + c.netConn.RemoteAddr().String() + ">"
-	return
-}
+	events, ok := c.namespaces[msg.Namespace]
+	if !ok {
+		msg.Err = ErrBadNamespace
+		c.Write(msg)
+		return
+	}
 
-type (
-	Encoder interface{ Encode(v interface{}) error }
-	Decoder interface{ Decode(vPtr interface{}) error }
-)
-
-func (c *Conn) SetEncoding(encoder Encoder, decoder Decoder) {
-	c.encoder = encoder
-	c.decoder = decoder
-}
-
-func (c *Conn) Encode(v interface{}) error {
-	err := c.encoder.Encode(v)
+	ns = newNSConn(c, msg.Namespace, events)
+	err := events.fireEvent(ns, msg)
 	if err != nil {
-		return err
+		msg.Err = err
+		c.Write(msg)
+		return
 	}
 
-	if c.Writer != nil && !c.Flush { // Flushed already if c.Flush is true.
-		return c.Writer.Flush()
+	c.connectedNamespacesMutex.Lock()
+	c.connectedNamespaces[msg.Namespace] = ns
+	c.connectedNamespacesMutex.Unlock()
+
+	c.Write(msg)
+
+	msg.Event = OnNamespaceConnected
+	events.fireEvent(ns, msg)
+}
+
+func (c *Conn) DisconnectAll(ctx context.Context) error {
+	c.connectedNamespacesMutex.Lock()
+	defer c.connectedNamespacesMutex.Unlock()
+
+	disconnectMsg := Message{Event: OnNamespaceDisconnect}
+	for namespace := range c.connectedNamespaces {
+		disconnectMsg.Namespace = namespace
+		if err := c.askDisconnect(ctx, disconnectMsg, false); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (c *Conn) Decode(vPtr interface{}) error {
-	return c.decoder.Decode(vPtr)
-}
-
-func (c *Conn) applyReadTimeout() {
-	if c.ReadTimeout > 0 {
-		c.netConn.SetReadDeadline(time.Now().Add(c.ReadTimeout))
+func (c *Conn) askDisconnect(ctx context.Context, msg Message, lock bool) error {
+	if lock {
+		c.connectedNamespacesMutex.RLock()
 	}
-}
-
-// Returns io.EOF on remote close.
-func (c *Conn) Read(b []byte) (n int, err error) {
-	if c.Reader != nil {
-		for {
-			c.applyReadTimeout()
-
-			hdr, err := c.Reader.NextFrame()
-			if err != nil {
-				if err == io.EOF {
-					return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
-				}
-				return 0, err
-			}
-
-			if hdr.OpCode == ws.OpClose {
-				return 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
-			}
-
-			if hdr.OpCode.IsControl() {
-				err = c.ControlHandler(hdr, c.Reader)
-				if err != nil {
-					return 0, err
-				}
-				continue
-			}
-
-			if hdr.OpCode&c.WriteCode == 0 {
-				err = c.Reader.Discard()
-				if err != nil {
-					return 0, err
-				}
-				continue
-			}
-
-			return c.Reader.Read(b)
-		}
+	ns := c.connectedNamespaces[msg.Namespace]
+	if lock {
+		c.connectedNamespacesMutex.RUnlock()
 	}
 
-	for {
-		c.applyReadTimeout()
-
-		data, opCode, err := wsutil.ReadData(c.netConn, c.State)
-		if err != nil {
-			return 0, err
-		}
-
-		if opCode&c.WriteCode == 0 { //&& opCode&ws.OpBinary == 0 {
-			continue
-		}
-
-		n = copy(b, data)
-		return n, io.EOF
-	}
-}
-
-func (c *Conn) Write(b []byte) (int, error) {
-	if c.WriteTimeout > 0 {
-		c.netConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
+	if ns == nil {
+		return ErrBadNamespace
 	}
 
-	if c.Writer != nil {
-		// Note if available buffer is smaller than len(b) then it will write through all.
-		n, err := c.Writer.Write(b)
-		// n, err := c.Writer.WriteThrough(b)
-		if err != nil {
-			return 0, err
-		}
-
-		if c.Flush {
-			err = c.Writer.Flush()
-			c.Writer.Reset(c.netConn, c.State, c.WriteCode)
-			if err != nil {
-				return 0, err
-			}
-		}
-
-		return n, err
-	}
-
-	// if c.Writer != nil {
-	// 	err := ws.WriteHeader(c.netConn, ws.Header{
-	// 		Fin:    false,
-	// 		Length: int64(len(b)),
-	// 		Masked: c.IsClient(),
-	// 		OpCode: c.WriteCode,
-	// 	})
-
-	// 	if err != nil {
-	// 		// fmt.Printf("error while writing the write header: %v\n", err)
-	// 		return 0, err
-	// 	}
-
-	// 	return c.netConn.Write(b)
-	// }
-
-	err := wsutil.WriteMessage(c.netConn, c.State, c.WriteCode, b)
-	if err != nil {
-		return 0, err
-	}
-
-	return len(b), nil
-
-	// c.Writer.Reset(c.netConn, c.State, ws.OpText)
-	//
-	// n, err := c.Writer.Write(b)
-	// if err != nil {
-	// 	return 0, err
-	// }
-	// err = c.Writer.Flush()
-	// if err != nil {
-	// 	return 0, err
-	// }
-	//
-	//	return n, err
-}
-
-// OpCode a type alias for `ws#OpCode`.
-type OpCode = ws.OpCode
-
-// Operation codes defined by specification.
-// See https://tools.ietf.org/html/rfc6455#section-5.2
-const (
-	// OpText denotes a text data message. The text message payload is
-	// interpreted as UTF-8 encoded text data.
-	OpText OpCode = ws.OpText
-	// OpBinary denotes a binary data message.
-	OpBinary OpCode = ws.OpBinary
-	// OpClose denotes a close control message.
-	OpClose OpCode = ws.OpClose
-
-	// OpPing denotes a ping control message. The optional message payload
-	// is UTF-8 encoded text.
-	OpPing OpCode = ws.OpPing
-	// OpPong denotes a ping control message. The optional message payload
-	// is UTF-8 encoded text.
-	OpPong OpCode = ws.OpPong
-)
-
-// WriteWithCode writes to the connection by passing bypasses the `Writer` and `WriterCode`.
-func (c *Conn) WriteWithCode(opCode OpCode, b []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.WriteTimeout > 0 {
-		c.netConn.SetWriteDeadline(time.Now().Add(c.WriteTimeout))
-	}
-
-	err := wsutil.WriteMessage(c.netConn, c.State, opCode, b)
-	if err != nil {
-		return 0, err
-	}
-
-	return len(b), nil
-}
-
-func (c *Conn) WriteText(body []byte, timeout time.Duration) error {
-	_, err := c.WriteWithCode(OpText, body)
-	return err
-}
-
-func (c *Conn) ReadBinary() ([]byte, error) {
-	return ioutil.ReadAll(c)
-}
-
-func (c *Conn) ReadText(timeout time.Duration) ([]byte, error) {
-	return c.ReadBinary()
-}
-
-func (c *Conn) ReadJSON(vPtr interface{}) error {
-	b, err := c.ReadBinary()
+	_, err := c.Ask(ctx, msg)
 	if err != nil {
 		return err
 	}
 
-	return json.Unmarshal(b, vPtr)
-}
-
-func (c *Conn) ReadXML(vPtr interface{}) error {
-	b, err := c.ReadBinary()
-	if err != nil {
-		return err
+	if lock {
+		c.connectedNamespacesMutex.Lock()
+	}
+	delete(c.connectedNamespaces, msg.Namespace)
+	if lock {
+		c.connectedNamespacesMutex.Unlock()
 	}
 
-	return xml.Unmarshal(b, vPtr)
+	msg.IsLocal = true
+	ns.events.fireEvent(ns, msg)
+
+	return nil
 }
 
-func (c *Conn) WriteJSON(v interface{}) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
+func (c *Conn) replyDisconnect(msg Message) {
+	if msg.wait == "" || msg.isNoOp {
+		return
 	}
-	_, err = c.Write(b)
-	return err
-}
 
-func (c *Conn) WriteXML(v interface{}) error {
-	b, err := xml.Marshal(v)
-	if err != nil {
-		return err
+	ns := c.Namespace(msg.Namespace)
+	if ns == nil {
+		return
 	}
-	_, err = c.Write(b)
-	return err
+
+	// if client then we need to respond to server and delete the namespace without ask the local event.
+	if c.IsClient() {
+		c.connectedNamespacesMutex.Lock()
+		delete(c.connectedNamespaces, msg.Namespace)
+		c.connectedNamespacesMutex.Unlock()
+		c.Write(msg)
+		ns.events.fireEvent(ns, msg)
+		return
+	}
+
+	// server-side, check for error on the local event first.
+	err := ns.events.fireEvent(ns, msg)
+	if err != nil {
+		msg.Err = err
+	} else {
+		c.connectedNamespacesMutex.Lock()
+		delete(c.connectedNamespaces, msg.Namespace)
+		c.connectedNamespacesMutex.Unlock()
+	}
+	c.Write(msg)
 }
 
-func (c *Conn) Close() error {
-	// wsutil.PutWriter(c.Writer)
-	return c.netConn.Close()
+var ErrWrite = fmt.Errorf("write closed")
+
+func (c *Conn) Write(msg Message) bool {
+	if c.IsClosed() {
+		return false
+	}
+
+	// msg.from = c.ID()
+
+	if !msg.isConnect() && !msg.isDisconnect() {
+		ns := c.Namespace(msg.Namespace)
+		if ns == nil {
+			return false
+		}
+
+		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
+			ns.roomsMutex.RLock()
+			_, ok := ns.rooms[msg.Room]
+			ns.roomsMutex.RUnlock()
+			if !ok {
+				// tried to send to a not joined room.
+				return false
+			}
+		}
+	}
+
+	err := c.socket.WriteText(serializeMessage(nil, msg), c.writeTimeout)
+	if err != nil {
+		if IsCloseError(err) {
+			c.Close()
+		}
+		return false
+	}
+
+	return true
+}
+
+func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
+	if c.IsClosed() {
+		return msg, CloseError{Code: -1, error: ErrWrite}
+	}
+
+	now := time.Now().UnixNano()
+	msg.wait = strconv.FormatInt(now, 10)
+	if c.IsClient() {
+		msg.wait = "client_" + msg.wait
+	}
+
+	if ctx == nil {
+		ctx = context.TODO()
+	} else {
+		if deadline, has := ctx.Deadline(); has {
+			if deadline.Before(time.Now().Add(-1 * time.Second)) {
+				return Message{}, context.DeadlineExceeded
+			}
+		}
+	}
+
+	ch := make(chan Message)
+	c.waitingMessagesMutex.Lock()
+	c.waitingMessages[msg.wait] = ch
+	c.waitingMessagesMutex.Unlock()
+
+	if !c.Write(msg) {
+		return Message{}, ErrWrite
+	}
+
+	select {
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	case receive := <-ch:
+		c.waitingMessagesMutex.Lock()
+		delete(c.waitingMessages, receive.wait)
+		c.waitingMessagesMutex.Unlock()
+
+		return receive, receive.Err
+	}
+}
+
+func (c *Conn) Close() {
+	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
+		close(c.closeCh)
+		// fire the namespaces' disconnect event for both server and client.
+		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
+		c.connectedNamespacesMutex.Lock()
+		for namespace, ns := range c.connectedNamespaces {
+			disconnectMsg.Namespace = ns.namespace
+			ns.events.fireEvent(ns, disconnectMsg)
+			delete(c.connectedNamespaces, namespace)
+		}
+		c.connectedNamespacesMutex.Unlock()
+
+		c.waitingMessagesMutex.Lock()
+		for wait := range c.waitingMessages {
+			delete(c.waitingMessages, wait)
+		}
+		c.waitingMessagesMutex.Unlock()
+
+		atomic.StoreUint32(c.acknowledged, 0)
+
+		go func() {
+			if !c.IsClient() {
+				c.server.disconnect <- c
+			}
+		}()
+
+		c.socket.NetConn().Close()
+	}
+}
+
+func (c *Conn) IsClosed() bool {
+	return atomic.LoadUint32(c.closed) > 0
 }

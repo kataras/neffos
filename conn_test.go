@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/ws"
 )
 
 func TestConnect(t *testing.T) {

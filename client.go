@@ -1,33 +1,36 @@
-package fastws
+package ws
 
 import (
 	"context"
-	"net"
 	"strings"
-
-	"github.com/gobwas/ws"
+	// "time"
 )
 
-// ErrBadHandshake is returned when the server response to opening handshake is
-// invalid.
-var ErrBadHandshake = ws.ErrHandshakeBadConnection
-
-// Dial creates a new client connection.
-//
-// The context will be used for the handshake deadline.
-//
-// If the WebSocket handshake fails, `ErrHandshakeBadConnection` is returned.
-//
-// The "url" input parameter is the url to connect to the server, it should be
-// the ws:// (or wss:// if secure) + the host + the endpoint of the
-// open socket of the server, i.e ws://localhost:8080/my_websocket_endpoint.
-//
-// Custom dialers can be used by wrapping the iris websocket connection via `websocket.WrapConnection`.
-func Dial(ctx context.Context, url string) (*Conn, error) {
-	return dial(ctx, url)
+type Client struct {
+	conn *Conn
 }
 
-func dial(ctx context.Context, url string) (*Conn, error) {
+func (c *Client) Close() {
+	if c == nil || c.conn == nil {
+		return
+	}
+
+	c.conn.Close()
+}
+
+func (c *Client) WaitServerConnect(ctx context.Context, namespace string) (*NSConn, error) {
+	return c.conn.WaitConnect(ctx, namespace)
+}
+
+func (c *Client) Connect(ctx context.Context, namespace string) (*NSConn, error) {
+	return c.conn.Connect(ctx, namespace)
+}
+
+type Dialer func(ctx context.Context, url string) (Socket, error)
+
+// Dial establish a new websocket client.
+// Context "ctx" is used for handshake timeout.
+func Dial(dial Dialer, ctx context.Context, url string, connHandler ConnHandler) (*Client, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -36,18 +39,27 @@ func dial(ctx context.Context, url string) (*Conn, error) {
 		url = "ws://" + url
 	}
 
-	conn, _, hs, err := ws.DefaultDialer.Dial(ctx, url)
+	underline, err := dial(ctx, url)
 	if err != nil {
 		return nil, err
 	}
 
-	c := WrapConn(conn, hs, ws.StateClientSide)
-	return c, nil
-}
+	if connHandler == nil {
+		connHandler = Namespaces{}
+	}
 
-// WrapConn can be used to wrap the result of a custom ws.Dialer#Dial operation.
-func WrapConn(conn net.Conn, hs ws.Handshake, state ws.State) *Conn {
-	c := new(Conn)
-	c.establish(conn, hs, state)
-	return c
+	c := newConn(underline, connHandler.getNamespaces())
+	readTimeout, writeTimeout := getTimeouts(connHandler)
+	c.readTimeout = readTimeout
+	c.writeTimeout = writeTimeout
+
+	go c.startReader()
+
+	client := &Client{
+		conn: c,
+	}
+
+	underline.WriteText(ackBinary, writeTimeout)
+
+	return client, nil
 }

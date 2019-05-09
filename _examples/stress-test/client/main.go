@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
-	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
-	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
+	"github.com/kataras/ws"
+	"github.com/kataras/ws/gobwas"
+	"github.com/kataras/ws/gorilla"
 
 	"golang.org/x/sync/semaphore"
 )

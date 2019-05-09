@@ -3,7 +3,7 @@ package gobwas
 import (
 	"net/http"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/ws"
 
 	gobwas "github.com/gobwas/ws"
 )

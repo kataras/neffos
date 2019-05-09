@@ -8,130 +8,18 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
-	"sync"
 	"time"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
-	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
-	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
+	"github.com/kataras/ws"
+	"github.com/kataras/ws/gobwas"
+	"github.com/kataras/ws/gorilla"
 )
 
 const (
 	endpoint  = "localhost:9090"
 	namespace = "default"
-	timeout   = 20 * time.Second
+	timeout   = 60 * time.Second
 )
-
-type Users struct {
-	mu      sync.RWMutex
-	entries map[string]*userConn // key = user's unique identifier, i.e "username".
-}
-
-// returns true if new conn.
-func (u *Users) conn(c *ws.NSConn) (*userConn, bool) {
-	user := c.Conn.ID()
-	u.mu.RLock()
-	entry, ok := u.entries[user]
-	u.mu.RUnlock()
-
-	if !ok {
-		entry = &userConn{
-			conns: make(map[*ws.NSConn]struct{}),
-		}
-
-		u.mu.Lock()
-		u.entries[user] = entry
-		u.mu.Unlock()
-	}
-
-	entry.addConn(c)
-	return entry, !ok
-}
-
-func (u *Users) get(c *ws.NSConn) *userConn {
-	u.mu.RLock()
-	entry, ok := u.entries[c.Conn.ID()]
-	u.mu.RUnlock()
-
-	if !ok {
-		return nil
-	}
-
-	return entry
-}
-
-func (u *Users) remove(user string) {
-	u.mu.Lock()
-	delete(u.entries, user)
-	u.mu.Unlock()
-}
-
-type userConn struct {
-	mu    sync.RWMutex
-	conns map[*ws.NSConn]struct{}
-}
-
-// returns true for new conn.
-func (u *userConn) addConn(c *ws.NSConn) bool {
-	u.mu.RLock()
-	_, ok := u.conns[c]
-	u.mu.RUnlock()
-	if !ok {
-		u.mu.Lock()
-		u.conns[c] = struct{}{}
-		u.mu.Unlock()
-		return true
-	}
-
-	return false
-}
-
-func (u *userConn) deleteConn(c *ws.NSConn) (wasLast bool) {
-	u.mu.Lock()
-	delete(u.conns, c)
-	wasLast = len(u.conns) == 0
-	u.mu.Unlock()
-
-	return
-}
-
-func (u *userConn) Emit(event string, data []byte) (ok bool) {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-
-	for c := range u.conns {
-		ok = c.Emit(event, data)
-		if !ok {
-			delete(u.conns, c)
-		}
-	}
-
-	return
-}
-
-func (u *userConn) Disconnect(ctx context.Context) {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-
-	for c := range u.conns {
-		c.Disconnect(ctx)
-	}
-}
-
-func (u *userConn) Close() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	for c := range u.conns {
-		c.Conn.Close()
-		delete(u.conns, c)
-	}
-}
-
-var users = &Users{
-	entries: make(map[string]*userConn),
-}
 
 var handler = ws.WithTimeout{
 	ReadTimeout:  timeout,
@@ -139,10 +27,7 @@ var handler = ws.WithTimeout{
 	Namespaces: ws.Namespaces{
 		"default": ws.Events{
 			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
-				_, isNew := users.conn(c)
-				if isNew || c.Conn.IsClient() {
-					log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
-				}
+				log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
 
 				if !c.Conn.IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
@@ -151,22 +36,7 @@ var handler = ws.WithTimeout{
 				return nil
 			},
 			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
-				if msg.Err != nil {
-					log.Printf("This client can't disconnect yet, server does not allow that action, reason: %v", msg.Err)
-					return nil
-				}
-
-				conn := users.get(c)
-				if conn == nil {
-					return nil
-				}
-
-				wasLast := conn.deleteConn(c)
-
-				if wasLast {
-					users.remove(c.Conn.ID())
-					log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
-				}
+				log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
 
 				if c.Conn.IsClient() {
 					os.Exit(0)
@@ -174,20 +44,32 @@ var handler = ws.WithTimeout{
 
 				return nil
 			},
+			ws.OnRoomJoined: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] joined to room [%s].", c.Conn.ID(), msg.Room)
+				return nil
+			},
+			ws.OnRoomLeft: func(c *ws.NSConn, msg ws.Message) error {
+				log.Printf("[%s] left from room [%s].", c.Conn.ID(), msg.Room)
+				return nil
+			},
 			"chat": func(c *ws.NSConn, msg ws.Message) error {
 				if !c.Conn.IsClient() {
-					// this is possible too:
-					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
-					// 	println("force disconnect")
-					// 	return c.Disconnect()
-					// }
-
 					log.Printf("--server-side-- send back the message [%s:%s]", msg.Event, string(msg.Body))
-					//	c.Emit(msg.Event, msg.Body)
-					//	c.Server().Broadcast(nil, msg) // to all including this connection.
-					// c.Server().Broadcast(c, msg) // to all except this connection.
 
-					users.get(c).Emit(msg.Event, msg.Body)
+					if msg.Room == "" {
+						// send back the message to the client.
+						// c.Emit(msg.Event, msg.Body) or
+						return ws.Reply(msg.Body)
+					}
+
+					c.Conn.Server().Broadcast(c.Conn, ws.Message{
+						Namespace: msg.Namespace,
+						Event:     msg.Event,
+						// Broadcast to all other members inside this room except this connection(the emmiter, client in this case).
+						// If first argument was nil then to all inside this room including this connection.
+						Room: msg.Room,
+						Body: msg.Body,
+					})
 				}
 
 				log.Printf("---------------------\n[%s] %s", c.Conn.ID(), msg.Body)
@@ -234,10 +116,6 @@ func main() {
 
 func server(upgrader ws.Upgrader) {
 	srv := ws.New(upgrader, handler)
-	srv.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
-		return r.RemoteAddr[:strings.IndexByte(r.RemoteAddr, ':')]
-	}
-
 	srv.OnConnect = func(c *ws.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
@@ -279,7 +157,7 @@ func server(upgrader ws.Upgrader) {
 				c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
-			// srv.Do(func(c *ws.Conn) {
+			// srv.Do(func(c ws.Conn) {
 			// 	c.Write(namespace, "chat", text)
 			// })
 			srv.Broadcast(nil, ws.Message{Namespace: namespace, Event: "chat", Body: text})
@@ -309,6 +187,9 @@ func client(dialer ws.Dialer) {
 	}
 	// println("connected.")
 
+	var joinKeyword = []byte("join")
+	var joinedRoom string
+
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -323,6 +204,20 @@ func client(dialer ws.Dialer) {
 			if err := c.Disconnect(nil); err != nil {
 				// log.Printf("from server: %v", err)
 			}
+			continue
+		} else if bytes.HasPrefix(text, joinKeyword) {
+			// join room1
+			joinedRoom = string(text[len(joinKeyword)+1:])
+			_, err := c.JoinRoom(nil, joinedRoom)
+			if err != nil {
+				log.Printf("from server when trying to join to room[%s]: %v", joinedRoom, err)
+				joinedRoom = ""
+			}
+			continue
+		}
+
+		if joinedRoom != "" {
+			c.Room(joinedRoom).Emit("chat", text)
 			continue
 		}
 

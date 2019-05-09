@@ -8,11 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
-	"github.com/kataras/fastws/_examples/advanced/ws/gobwas"
-	"github.com/kataras/fastws/_examples/advanced/ws/gorilla"
-
-	"github.com/kataras/fastws"
+	"github.com/kataras/ws"
+	"github.com/kataras/ws/gobwas"
+	"github.com/kataras/ws/gorilla"
 )
 
 const (
@@ -209,10 +207,9 @@ func handleDisconnect(c *ws.Conn) {
 }
 
 func handleErr(c *ws.Conn, err error) {
-	if !fastws.IsDisconnected(err) {
+	if !ws.IsDisconnectError(err) {
 		log.Printf("client [%s] errorred: %v\n", c.ID(), err)
 	}
-
 }
 
 func toMB(b uint64) uint64 {

@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kataras/fastws/_examples/advanced/ws"
+	"github.com/kataras/ws"
 
-	gobwas "github.com/kataras/fastws/_examples/advanced/ws/gobwas"
-	gorilla "github.com/kataras/fastws/_examples/advanced/ws/gorilla"
+	gobwas "github.com/kataras/ws/gobwas"
+	gorilla "github.com/kataras/ws/gorilla"
 )
 
 func runTestServer(addr string, connHandler ws.ConnHandler) func() error {
