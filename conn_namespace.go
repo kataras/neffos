@@ -66,6 +66,20 @@ func (ns *NSConn) Room(roomName string) *Room {
 	return room
 }
 
+// Rooms returns a slice copy of the joined rooms.
+func (ns *NSConn) Rooms() []*Room {
+	ns.roomsMutex.RLock()
+	rooms := make([]*Room, len(ns.rooms))
+	i := 0
+	for _, room := range ns.rooms {
+		rooms[i] = room
+		i++
+	}
+	ns.roomsMutex.RUnlock()
+
+	return rooms
+}
+
 func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	if ns == nil {
 		return nil
@@ -74,7 +88,7 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	ns.roomsMutex.Lock()
 	defer ns.roomsMutex.Unlock()
 
-	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave}
+	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave, IsLocal: true, locked: true}
 	for room := range ns.rooms {
 		leaveMsg.Room = room
 		if err := ns.askRoomLeave(ctx, leaveMsg, false); err != nil {
@@ -83,6 +97,24 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (ns *NSConn) forceLeaveAll(isLocal bool) {
+	ns.roomsMutex.Lock()
+	defer ns.roomsMutex.Unlock()
+
+	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave, IsForced: true, IsLocal: isLocal}
+	for room := range ns.rooms {
+		leaveMsg.Room = room
+		ns.events.fireEvent(ns, leaveMsg)
+
+		delete(ns.rooms, room)
+
+		leaveMsg.Event = OnRoomLeft
+		ns.events.fireEvent(ns, leaveMsg)
+
+		leaveMsg.Event = OnRoomLeave
+	}
 }
 
 func (ns *NSConn) Disconnect(ctx context.Context) error {
@@ -138,27 +170,26 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 	ns.roomsMutex.RLock()
 	_, ok := ns.rooms[msg.Room]
 	ns.roomsMutex.RUnlock()
-	if ok {
-		msg.isNoOp = true
-	} else {
+	if !ok {
 		err := ns.events.fireEvent(ns, msg)
 		if err != nil {
 			msg.Err = err
-		} else {
-			ns.roomsMutex.Lock()
-			ns.rooms[msg.Room] = newRoom(ns, msg.Room)
-			ns.roomsMutex.Unlock()
-
-			msg.Event = OnRoomJoined
-			ns.events.fireEvent(ns, msg)
+			ns.Conn.Write(msg)
+			return
 		}
+		ns.roomsMutex.Lock()
+		ns.rooms[msg.Room] = newRoom(ns, msg.Room)
+		ns.roomsMutex.Unlock()
+
+		msg.Event = OnRoomJoined
+		ns.events.fireEvent(ns, msg)
 	}
 
-	ns.Conn.Write(msg)
+	ns.Conn.writeEmptyReply(msg.wait)
 }
 
 func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) error {
-	if ns == nil || msg.wait == "" || msg.isNoOp {
+	if ns == nil {
 		return nil
 	}
 
@@ -179,7 +210,7 @@ func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) erro
 		return err
 	}
 
-	msg.IsLocal = true
+	// msg.IsLocal = true
 	err = ns.events.fireEvent(ns, msg)
 	if err != nil {
 		return err
@@ -188,7 +219,9 @@ func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) erro
 	if lock {
 		ns.roomsMutex.Lock()
 	}
+
 	delete(ns.rooms, msg.Room)
+
 	if lock {
 		ns.roomsMutex.Unlock()
 	}
@@ -206,6 +239,7 @@ func (ns *NSConn) replyRoomLeave(msg Message) {
 
 	room := ns.Room(msg.Room)
 	if room == nil {
+		ns.Conn.writeEmptyReply(msg.wait)
 		return
 	}
 
@@ -216,7 +250,8 @@ func (ns *NSConn) replyRoomLeave(msg Message) {
 		ns.roomsMutex.Lock()
 		delete(ns.rooms, msg.Room)
 		ns.roomsMutex.Unlock()
-		ns.Conn.Write(msg)
+
+		ns.Conn.writeEmptyReply(msg.wait)
 
 		msg.Event = OnRoomLeft
 		ns.events.fireEvent(ns, msg)
@@ -227,15 +262,16 @@ func (ns *NSConn) replyRoomLeave(msg Message) {
 	err := ns.events.fireEvent(ns, msg)
 	if err != nil {
 		msg.Err = err
-	} else {
-		ns.roomsMutex.Lock()
-		delete(ns.rooms, msg.Room)
-		ns.roomsMutex.Unlock()
-
-		msg.Event = OnRoomLeft
-		ns.events.fireEvent(ns, msg)
-		msg.Event = OnRoomLeave
+		ns.Conn.Write(msg)
+		return
 	}
 
-	ns.Conn.Write(msg)
+	ns.roomsMutex.Lock()
+	delete(ns.rooms, msg.Room)
+	ns.roomsMutex.Unlock()
+
+	msg.Event = OnRoomLeft
+	ns.events.fireEvent(ns, msg)
+
+	ns.Conn.writeEmptyReply(msg.wait)
 }

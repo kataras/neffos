@@ -260,5 +260,8 @@ func (s *Server) GetConnections() map[string]*Conn {
 	return conns
 }
 
-var ErrBadNamespace = errors.New("bad namespace")
-var ErrBadRoom = errors.New("bad room")
+var (
+	ErrBadNamespace = errors.New("bad namespace")
+	ErrBadRoom      = errors.New("bad room")
+	ErrWrite        = fmt.Errorf("write closed")
+)

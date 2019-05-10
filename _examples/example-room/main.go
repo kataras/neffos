@@ -188,7 +188,7 @@ func client(dialer ws.Dialer) {
 	// println("connected.")
 
 	var joinKeyword = []byte("join")
-	var joinedRoom string
+	var leaveKeyword = []byte("leave")
 
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -207,17 +207,31 @@ func client(dialer ws.Dialer) {
 			continue
 		} else if bytes.HasPrefix(text, joinKeyword) {
 			// join room1
-			joinedRoom = string(text[len(joinKeyword)+1:])
-			_, err := c.JoinRoom(nil, joinedRoom)
+			roomName := string(text[len(joinKeyword)+1:])
+			_, err := c.JoinRoom(nil, roomName)
 			if err != nil {
-				log.Printf("from server when trying to join to room[%s]: %v", joinedRoom, err)
-				joinedRoom = ""
+				log.Printf("from server when trying to join to room[%s]: %v", roomName, err)
+			}
+			continue
+		} else if bytes.HasPrefix(text, leaveKeyword) {
+			roomName := string(text[len(leaveKeyword)+1:])
+			if roomName == "all" {
+				c.LeaveAll(nil)
+			} else {
+				c.Room(roomName).Leave(nil)
 			}
 			continue
 		}
 
-		if joinedRoom != "" {
-			c.Room(joinedRoom).Emit("chat", text)
+		if rooms := c.Rooms(); len(rooms) > 0 {
+			for _, room := range rooms {
+				ok := room.Emit("chat", text)
+				if !ok {
+					// this should never happen.
+					log.Printf("tried to send to a left room[%s]", room.Name)
+					break
+				}
+			}
 			continue
 		}
 

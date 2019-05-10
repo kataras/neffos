@@ -46,6 +46,10 @@ type Message struct {
 	// The receiver should accept it on the `OnNativeMessage` event.
 	// This field is not filled on sending/receiving.
 	IsNative bool
+
+	// Useful rarely internally on `Conn#Write` namespace and rooms checks, i.e `Conn#DisconnectAll` and `NSConn#RemoveAll`.
+	// If true then the writer's checks will not lock connectedNamespacesMutex or roomsMutex again. May be useful in the future, keep that solution.
+	locked bool
 }
 
 func (m *Message) isConnect() bool {
@@ -119,7 +123,7 @@ func serializeOutput(wait, namespace, room, event string,
 		waitByte = []byte(wait)
 	}
 
-	msg := bytes.Join([][]byte{
+	msg := bytes.Join([][]byte{ // this number of fields should match the deserializer's, see `validMessageSepCount`.
 		waitByte,
 		[]byte(namespace),
 		[]byte(room),
@@ -153,8 +157,11 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 		false,
 		false,
 		allowNativeMessages && event == OnNativeMessage,
+		false,
 	}
 }
+
+const validMessageSepCount = 7
 
 func deserializeInput(b []byte, allowNativeMessages bool) (
 	wait,
@@ -172,8 +179,8 @@ func deserializeInput(b []byte, allowNativeMessages bool) (
 		return
 	}
 
-	dts := bytes.SplitN(b, messageSeparator, 7)
-	if len(dts) != 7 {
+	dts := bytes.SplitN(b, messageSeparator, validMessageSepCount)
+	if len(dts) != validMessageSepCount {
 		if !allowNativeMessages {
 			isInvalid = true
 			return
@@ -208,4 +215,8 @@ func deserializeInput(b []byte, allowNativeMessages bool) (
 	}
 
 	return
+}
+
+func genEmptyReplyToWait(wait string) []byte {
+	return append([]byte(wait), bytes.Repeat(messageSeparator, validMessageSepCount-1)...)
 }

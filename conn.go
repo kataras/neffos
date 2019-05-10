@@ -3,7 +3,6 @@ package ws
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -380,8 +379,7 @@ func (c *Conn) replyConnect(msg Message) {
 
 	ns := c.Namespace(msg.Namespace)
 	if ns != nil {
-		msg.isNoOp = true
-		c.Write(msg)
+		c.writeEmptyReply(msg.wait)
 		return
 	}
 
@@ -404,7 +402,7 @@ func (c *Conn) replyConnect(msg Message) {
 	c.connectedNamespaces[msg.Namespace] = ns
 	c.connectedNamespacesMutex.Unlock()
 
-	c.Write(msg)
+	c.writeEmptyReply(msg.wait)
 
 	msg.Event = OnNamespaceConnected
 	events.fireEvent(ns, msg)
@@ -414,7 +412,7 @@ func (c *Conn) DisconnectAll(ctx context.Context) error {
 	c.connectedNamespacesMutex.Lock()
 	defer c.connectedNamespacesMutex.Unlock()
 
-	disconnectMsg := Message{Event: OnNamespaceDisconnect}
+	disconnectMsg := Message{Event: OnNamespaceDisconnect, IsLocal: true, locked: true}
 	for namespace := range c.connectedNamespaces {
 		disconnectMsg.Namespace = namespace
 		if err := c.askDisconnect(ctx, disconnectMsg, false); err != nil {
@@ -429,7 +427,9 @@ func (c *Conn) askDisconnect(ctx context.Context, msg Message, lock bool) error 
 	if lock {
 		c.connectedNamespacesMutex.RLock()
 	}
+
 	ns := c.connectedNamespaces[msg.Namespace]
+
 	if lock {
 		c.connectedNamespacesMutex.RUnlock()
 	}
@@ -443,10 +443,16 @@ func (c *Conn) askDisconnect(ctx context.Context, msg Message, lock bool) error 
 		return err
 	}
 
+	// if disconnect is allowed then leave rooms first with force property
+	// before namespace's deletion.
+	ns.forceLeaveAll(true)
+
 	if lock {
 		c.connectedNamespacesMutex.Lock()
 	}
+
 	delete(c.connectedNamespaces, msg.Namespace)
+
 	if lock {
 		c.connectedNamespacesMutex.Unlock()
 	}
@@ -464,15 +470,22 @@ func (c *Conn) replyDisconnect(msg Message) {
 
 	ns := c.Namespace(msg.Namespace)
 	if ns == nil {
+		c.writeEmptyReply(msg.wait)
 		return
 	}
 
 	// if client then we need to respond to server and delete the namespace without ask the local event.
 	if c.IsClient() {
+		// if disconnect is allowed then leave rooms first with force property
+		// before namespace's deletion.
+		ns.forceLeaveAll(false)
+
 		c.connectedNamespacesMutex.Lock()
 		delete(c.connectedNamespaces, msg.Namespace)
 		c.connectedNamespacesMutex.Unlock()
-		c.Write(msg)
+
+		c.writeEmptyReply(msg.wait)
+
 		ns.events.fireEvent(ns, msg)
 		return
 	}
@@ -481,15 +494,30 @@ func (c *Conn) replyDisconnect(msg Message) {
 	err := ns.events.fireEvent(ns, msg)
 	if err != nil {
 		msg.Err = err
-	} else {
-		c.connectedNamespacesMutex.Lock()
-		delete(c.connectedNamespaces, msg.Namespace)
-		c.connectedNamespacesMutex.Unlock()
+		c.Write(msg)
+		return
 	}
-	c.Write(msg)
+
+	ns.forceLeaveAll(false)
+
+	c.connectedNamespacesMutex.Lock()
+	delete(c.connectedNamespaces, msg.Namespace)
+	c.connectedNamespacesMutex.Unlock()
+
+	c.writeEmptyReply(msg.wait)
 }
 
-var ErrWrite = fmt.Errorf("write closed")
+func (c *Conn) write(b []byte) bool {
+	err := c.socket.WriteText(b, c.writeTimeout)
+	if err != nil {
+		if IsCloseError(err) {
+			c.Close()
+		}
+		return false
+	}
+
+	return true
+}
 
 func (c *Conn) Write(msg Message) bool {
 	if c.IsClosed() {
@@ -499,15 +527,31 @@ func (c *Conn) Write(msg Message) bool {
 	// msg.from = c.ID()
 
 	if !msg.isConnect() && !msg.isDisconnect() {
-		ns := c.Namespace(msg.Namespace)
+		if !msg.locked {
+			c.connectedNamespacesMutex.RLock()
+		}
+
+		ns := c.connectedNamespaces[msg.Namespace]
+
+		if !msg.locked {
+			c.connectedNamespacesMutex.RUnlock()
+		}
+
 		if ns == nil {
 			return false
 		}
 
 		if msg.Room != "" && !msg.isRoomJoin() && !msg.isRoomLeft() {
-			ns.roomsMutex.RLock()
+			if !msg.locked {
+				ns.roomsMutex.RLock()
+			}
+
 			_, ok := ns.rooms[msg.Room]
-			ns.roomsMutex.RUnlock()
+
+			if !msg.locked {
+				ns.roomsMutex.RUnlock()
+			}
+
 			if !ok {
 				// tried to send to a not joined room.
 				return false
@@ -515,15 +559,12 @@ func (c *Conn) Write(msg Message) bool {
 		}
 	}
 
-	err := c.socket.WriteText(serializeMessage(nil, msg), c.writeTimeout)
-	if err != nil {
-		if IsCloseError(err) {
-			c.Close()
-		}
-		return false
-	}
+	return c.write(serializeMessage(nil, msg))
+}
 
-	return true
+// used when `Ask` caller cares only for succesful call and not the message, for performance reasons we just use raw bytes.
+func (c *Conn) writeEmptyReply(wait string) bool {
+	return c.write(genEmptyReplyToWait(wait))
 }
 
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
@@ -571,10 +612,13 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 func (c *Conn) Close() {
 	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
 		close(c.closeCh)
-		// fire the namespaces' disconnect event for both server and client.
+
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
 		c.connectedNamespacesMutex.Lock()
 		for namespace, ns := range c.connectedNamespaces {
+			// leave rooms first with force and local property before remove the namespace completely.
+			ns.forceLeaveAll(true)
+
 			disconnectMsg.Namespace = ns.namespace
 			ns.events.fireEvent(ns, disconnectMsg)
 			delete(c.connectedNamespaces, namespace)
