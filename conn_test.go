@@ -118,7 +118,7 @@ func TestOnAnyEvent(t *testing.T) {
 		}
 		wg          sync.WaitGroup // a pure check for client's `Emit` to fire (`Ask` don't need this).
 		testMessage = func(msg ws.Message) {
-			// if !reflect.DeepEqual(msg, expectedMessage) { no becasue of Ask.wait.
+			// if !reflect.DeepEqual(msg, expectedMessage) { no because of Ask.wait.
 			if msg.Namespace != expectedMessage.Namespace ||
 				msg.Event != expectedMessage.Event ||
 				!bytes.Equal(msg.Body, expectedMessage.Body) {
@@ -224,19 +224,20 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 		event2           = "event2"
 		event3           = "event3"
 		expectedMessages = map[string]ws.Message{
-			event1: ws.Message{Namespace: namespace,
-				Event: event1,
-				Body:  []byte("body1"),
+			event1: {
+				Namespace: namespace,
+				Event:     event1,
+				Body:      []byte("body1"),
 			},
-			event2: ws.Message{
+			event2: {
 				Namespace: namespace,
 				Event:     event2,
 				Body:      []byte("body2"),
 			},
-			event3: ws.Message{
+			event3: {
 				Namespace: namespace,
 				Event:     event3,
-				Body:      []byte("body2"),
+				Body:      []byte("body3"),
 			},
 		}
 		events = ws.Events{
@@ -252,9 +253,10 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 				}
 
 				if c.Conn.IsClient() {
-					// wait for the reply for server before done with this event test.
+					// wait for server's reply to the client's send act before done with this event test.
 					defer wg.Done()
 				} else {
+					// send back to the client the message as it's.
 					return ws.Reply(msg.Body)
 				}
 

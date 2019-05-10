@@ -562,7 +562,7 @@ func (c *Conn) Write(msg Message) bool {
 	return c.write(serializeMessage(nil, msg))
 }
 
-// used when `Ask` caller cares only for succesful call and not the message, for performance reasons we just use raw bytes.
+// used when `Ask` caller cares only for successful call and not the message, for performance reasons we just use raw bytes.
 func (c *Conn) writeEmptyReply(wait string) bool {
 	return c.write(genEmptyReplyToWait(wait))
 }
