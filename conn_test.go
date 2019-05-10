@@ -214,3 +214,88 @@ func TestOnNativeMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSimultaneouslyEventsRoutines(t *testing.T) {
+	// test multiple goroutines sending events, it should work because the lib it is designed to take care of these things.
+	var (
+		wg               sync.WaitGroup
+		namespace        = "namespace1"
+		event1           = "event1"
+		event2           = "event2"
+		event3           = "event3"
+		expectedMessages = map[string]ws.Message{
+			event1: ws.Message{Namespace: namespace,
+				Event: event1,
+				Body:  []byte("body1"),
+			},
+			event2: ws.Message{
+				Namespace: namespace,
+				Event:     event2,
+				Body:      []byte("body2"),
+			},
+			event3: ws.Message{
+				Namespace: namespace,
+				Event:     event3,
+				Body:      []byte("body2"),
+			},
+		}
+		events = ws.Events{
+			ws.OnAnyEvent: func(c *ws.NSConn, msg ws.Message) error {
+				if ws.IsSystemEvent(msg.Event) {
+					return nil
+				}
+
+				expectedMessage := expectedMessages[msg.Event]
+
+				if !reflect.DeepEqual(msg, expectedMessage) {
+					t.Fatalf("expected message:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+				}
+
+				if c.Conn.IsClient() {
+					// wait for the reply for server before done with this event test.
+					defer wg.Done()
+				} else {
+					return ws.Reply(msg.Body)
+				}
+
+				return nil
+			},
+		}
+	)
+
+	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: events})
+	defer teardownServer()
+
+	err := runTestClient("localhost:8080", ws.Namespaces{namespace: events},
+		func(dialer string, client *ws.Client) {
+			defer client.Close()
+
+			c, err := client.Connect(nil, namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			send := func(event string) {
+				wg.Add(1)
+				msg := expectedMessages[event]
+				c.Emit(msg.Event, msg.Body)
+			}
+
+			for i := 0; i < 5; i++ {
+				go send(event1)
+				go send(event2)
+				go send(event3)
+			}
+
+			for i := 0; i < 5; i++ {
+				go send(event3)
+				go send(event2)
+				go send(event1)
+			}
+
+			wg.Wait()
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
