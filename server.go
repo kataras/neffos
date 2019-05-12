@@ -3,7 +3,6 @@ package ws
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -47,21 +46,13 @@ type Server struct {
 	connect     chan *Conn
 	disconnect  chan *Conn
 	actions     chan func(*Conn)
-
-	//
-	// broadcastMessage Message
-	// broadcastMu      sync.Mutex
-	// broadcastCond    *sync.Cond
-	//	broadcast        chan Message
-	// no... currentReceivers map[string]map[*nsConn]struct{}
 	broadcaster *broadcaster
-	//
 
 	closed uint32
 
-	OnError      func(c *Conn, err error) bool
-	OnConnect    func(c *Conn) error
-	OnDisconnect func(c *Conn)
+	OnUpgradeError func(err error)
+	OnConnect      func(c *Conn) error
+	OnDisconnect   func(c *Conn)
 }
 
 func New(upgrader Upgrader, connHandler ConnHandler) *Server {
@@ -144,7 +135,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	socket, err := s.upgrader(w, r)
 	if err != nil {
-		log.Printf("Upgrade: %v", err)
+		if s.OnUpgradeError != nil {
+			s.OnUpgradeError(err)
+		}
 		return
 	}
 
@@ -205,7 +198,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// `#Write:serverReadyWaiter.unwait` (for things like server connect).
 	// All cases tested & worked perfectly.
 	if s.OnConnect != nil {
-		if err = s.OnConnect(c); err != nil {
+		if err := s.OnConnect(c); err != nil {
+			// TODO: Do something with that error.
+			// The most suitable thing we can do is to somehow send this to the client's `Dial` return statement.
+			// This can be done if client waits for "OK" signal or a failure with an error before return the websocket connection,
+			// as for today we have the ack process which does NOT block and end-developer can send messages and server will handle them when both sides are ready.
+			// So, maybe it's a better solution to transform that process into a blocking state which can handle any `Server#OnConnect` error and return it at client's `Dial`.
+			// Think more later today.
 			c.Close()
 			return
 		}
