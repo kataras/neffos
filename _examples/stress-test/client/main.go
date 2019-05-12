@@ -32,8 +32,8 @@ const (
 	totalClients         = 50000
 	maxConcurrentClients = 0
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
-	clientHandleNamespaceConnect = true
-	broadcast                    = true
+	clientHandleNamespaceConnect = false
+	broadcast                    = false
 )
 
 var totalConnectedNamespace = new(uint64)

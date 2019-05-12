@@ -18,7 +18,7 @@ import (
 const (
 	endpoint  = "localhost:9090"
 	namespace = "default"
-	timeout   = 8 * time.Second
+	timeout   = 0 // 30 * time.Second
 )
 
 var handler = ws.WithTimeout{
@@ -128,20 +128,48 @@ func main() {
 	}
 }
 
+var (
+	// tests immediately closed on the `Server#OnConnect`.
+	dissalowAll = false
+	// if not empty, tests broadcast on `Server#OnConnect` (expect this conn because it is not yet connected to any namespace locally).
+	notifyOthers                  = true
+	serverHandlesConnectNamespace = true
+)
+
 func server(upgrader ws.Upgrader) {
 	srv := ws.New(upgrader, handler)
 
 	srv.OnConnect = func(c *ws.Conn) error {
+		if dissalowAll {
+			return fmt.Errorf("you are not allowed to connect here for some reason")
+		}
+
 		log.Printf("[%s] connected to server.", c.ID())
-		// time.Sleep(3 * time.Second)
-		// c.Connect(nil, namespace) // auto-connect to a specific namespace.
-		// c.Write(namespace, "chat", []byte("Welcome to the server (after namespace connect)"))
-		// println("client connected")
+
+		if serverHandlesConnectNamespace {
+			ns, err := c.Connect(nil, namespace)
+			if err != nil {
+				panic(err)
+			}
+
+			ns.Emit("chat", []byte("(Force-connected by server)"))
+		}
+
+		if notifyOthers {
+			c.Server().Broadcast(c, ws.Message{
+				Namespace: namespace,
+				Event:     "chat",
+				Body:      []byte(fmt.Sprintf("Client [%s] connected too.", c.ID())),
+			})
+		}
+
 		return nil
 	}
+
 	srv.OnDisconnect = func(c *ws.Conn) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
+
 	srv.OnError = func(c *ws.Conn, err error) bool {
 		log.Printf("ERROR: [%s] %v", c.ID(), err)
 		return false
@@ -160,16 +188,9 @@ func server(upgrader ws.Upgrader) {
 
 		text := scanner.Bytes()
 		if bytes.Equal(text, []byte("force disconnect")) {
-			// for _, conn := range srv.GetConnectionsByNamespace(namespace) {
-			// 	conn.Disconnect()
-			// }
-			// srv.Broadcast(nil, ws.Message{
-			// 	Namespace: namespace,
-			// 	Event:     ws.OnNamespaceDisconnect,
-			// })
 			srv.Do(func(c *ws.Conn) {
-				// c.Close()
-				c.Namespace(namespace).Disconnect(nil)
+				c.DisconnectAll(nil)
+				//	c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
 			// srv.Do(func(c ws.Conn) {
@@ -181,8 +202,10 @@ func server(upgrader ws.Upgrader) {
 	}
 }
 
+const dialAndConnectTimeout = 2 * time.Second
+
 func client(dialer ws.Dialer) {
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(timeout))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
 	defer cancel()
 
 	client, err := ws.Dial(dialer, ctx, endpoint, handler)
@@ -192,15 +215,17 @@ func client(dialer ws.Dialer) {
 
 	defer client.Close()
 
-	// connectNamespaceTimeout, cancel2 := context.WithTimeout(context.Background(), timeout/2)
-	// defer cancel2()
+	var c *ws.NSConn
 
-	// c, err := client.WaitServerConnect(nil, namespace)
-	c, err := client.Connect(nil, namespace)
+	if serverHandlesConnectNamespace {
+		c, err = client.WaitServerConnect(ctx, namespace)
+	} else {
+		c, err = client.Connect(ctx, namespace)
+	}
+
 	if err != nil {
 		panic(err)
 	}
-	// println("connected.")
 
 	fmt.Fprint(os.Stdout, ">> ")
 	scanner := bufio.NewScanner(os.Stdin)

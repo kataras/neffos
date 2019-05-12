@@ -76,6 +76,8 @@ type Conn struct {
 
 	// non-nil if server-side connection.
 	server *Server
+	// when sever is ready to handle messages, ack and queue is available, see `Server#ServeHTTP.?OnConnect!=nil`.
+	serverReadyWaiter *waiter
 
 	// maximum wait time allowed to read a message from the connection.
 	// Defaults to no timeout.
@@ -102,6 +104,54 @@ type Conn struct {
 	closed *uint32
 	// useful to terminate the broadcast waiter.
 	closeCh chan struct{}
+}
+
+type waiter struct {
+	locked *uint32
+	ready  *uint32
+	mu     sync.Mutex
+}
+
+func newWaiter() *waiter {
+	return &waiter{
+		locked: new(uint32),
+		ready:  new(uint32),
+	}
+}
+
+func (w *waiter) isReady() bool {
+	if w == nil { // it's nil if not server-side connection and it's always "ready" to send/receive events on client-side.
+		return true
+	}
+
+	return atomic.LoadUint32(w.ready) > 0
+}
+
+func (w *waiter) wait() {
+	if w == nil {
+		return
+	}
+
+	if w.isReady() {
+		return // no need to wait.
+	}
+
+	if atomic.CompareAndSwapUint32(w.locked, 0, 1) {
+		w.mu.Lock() // lock once.
+	}
+}
+
+func (w *waiter) unwait() {
+	if w == nil {
+		return
+	}
+
+	if atomic.CompareAndSwapUint32(w.locked, 1, 0) { // unlock once.
+		w.mu.Unlock()
+	}
+
+	// at any case mark it as ready for future `wait` call to exit immediately.
+	atomic.StoreUint32(w.ready, 1)
 }
 
 func newConn(socket Socket, namespaces Namespaces) *Conn {
@@ -159,6 +209,9 @@ func (c *Conn) startReader() {
 		queue       = make([]*Message, 0)
 		queueMutex  = new(sync.Mutex)
 		handleQueue = func() {
+			// ready to handle queue when server is ready (if server-side conn).
+			c.serverReadyWaiter.wait()
+
 			queueMutex.Lock()
 			defer queueMutex.Unlock()
 
@@ -171,6 +224,8 @@ func (c *Conn) startReader() {
 		allowNativeMessages = c.namespaces[""] != nil && c.namespaces[""][OnNativeMessage] != nil
 	)
 
+	// CLIENT is ready when ACK done
+	// SERVER is ready when ACK is done AND `Server#OnConnected` returns with nil error.
 	for {
 		b, err := c.socket.ReadText(c.readTimeout)
 		if err != nil {
@@ -203,11 +258,10 @@ func (c *Conn) startReader() {
 			continue
 		}
 
-		if !c.isAcknowledged() {
+		if !c.isAcknowledged() || !c.serverReadyWaiter.isReady() {
 			queueMutex.Lock()
 			queue = append(queue, &msg)
 			queueMutex.Unlock()
-
 			continue
 		}
 
@@ -263,10 +317,37 @@ func (c *Conn) handleMessage(msg Message) bool {
 
 const syncWaitDur = 15 * time.Millisecond
 
+// 10 seconds is high value which is not realistic on healthy networks, but may useful for slow connections.
+// This value is used just for the ack(which is usually done before the Connect call itself) wait on Connect when on server-side only.
+const maxSyncWaitDur = 10 * time.Second
+
 func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
+	// if c.IsClosed() {
+	// 	return nil, ErrWrite
+	// }
+
 	if !c.IsClient() {
+		// server-side check for ack-ed, it should be done almost immediately the client connected
+		// but give it sometime for slow networks and add an extra check for closed after 5 seconds and a deadline of 10seconds.
+		t := maxSyncWaitDur
 		for !c.isAcknowledged() {
 			time.Sleep(syncWaitDur)
+			t = -syncWaitDur
+
+			if t <= maxSyncWaitDur/2 { // check once after 5 seconds if closed.
+				if c.IsClosed() {
+					return nil, ErrWrite
+				}
+			}
+
+			if t == 0 {
+				// when maxSyncWaitDur passed,
+				// we could use the context's deadline but it will make things slower (extracting its value slower than the sleep time).
+				if c.IsClosed() {
+					return nil, ErrWrite
+				}
+				return nil, context.DeadlineExceeded
+			}
 		}
 	}
 
@@ -275,7 +356,7 @@ func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 
 // Nil context means try without timeout, wait until it connects to the specific namespace.
 // Note that, this function will not return an `ErrBadNamespace` if namespace does not exist in the server-side
-// or it's not defined in the client-side, it waits until deadline (if any, or loop forever).
+// or it's not defined in the client-side, it waits until deadline (if any, or loop forever, so a context with deadline is highly recommended).
 func (c *Conn) WaitConnect(ctx context.Context, namespace string) (ns *NSConn, err error) {
 	if ctx == nil {
 		ctx = context.TODO()
@@ -524,6 +605,8 @@ func (c *Conn) Write(msg Message) bool {
 		return false
 	}
 
+	c.serverReadyWaiter.unwait() // for server-side if tries to send, then error will be not ignored but events should continue.
+
 	// msg.from = c.ID()
 
 	if !msg.isConnect() && !msg.isDisconnect() {
@@ -599,6 +682,9 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 
 	select {
 	case <-ctx.Done():
+		if c.IsClosed() {
+			return Message{}, ErrWrite
+		}
 		return Message{}, ctx.Err()
 	case receive := <-ch:
 		c.waitingMessagesMutex.Lock()

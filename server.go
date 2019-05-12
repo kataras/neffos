@@ -101,6 +101,10 @@ func (s *Server) start() {
 				delete(s.connections, c)
 				atomic.AddUint64(&s.count, ^uint64(0))
 				if s.OnDisconnect != nil {
+					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
+					if !c.serverReadyWaiter.isReady() {
+						continue
+					}
 					s.OnDisconnect(c)
 				}
 			}
@@ -149,9 +153,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
-
+	c.serverReadyWaiter = newWaiter()
 	go c.startReader()
-	// go c.startWriter()
 
 	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
 	// DONE: found, see `waitMessage`.
@@ -183,11 +186,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.connect <- c
 
+	// Start the reader before `OnConnect`, remember clients may remotely connect to namespace before `Server#OnConnect`
+	// therefore any `Server:NSConn#OnNamespaceConnected` can write immediately to the client too.
+	// Note also that the `Server#OnConnect` itself can do that as well but if the written Message's Namespace is not locally connected
+	// it, correctly, can't pass the write checks. Also, and most important, the `OnConnect` is ready to connect a client to a namespace (locally and remotely).
+	//
+	// This has a downside:
+	// We need a way to check if the `OnConnect` returns an non-nil error which means that the connection should terminate before namespace connect or anything.
+	// The solution is to still accept reading messages but add them to the queue(like we already do for any case messages came before ack),
+	// the problem to that is that the queue handler is fired when ack is done but `OnConnect` may not even return yet, so we introduce a `mark ready` atomic scope
+	// and a channel which will wait for that `mark ready` if handle queue is called before ready.
+	// Also make the same check before emit the connection's disconnect event (if defined),
+	// which will be always ready to be called because we added the connections via the connect channel;
+	// we still need the connection to be available for any broadcasting on connected events.
+	// ^ All these only when server-side connection in order to correctly handle the end-developer's `OnConnect`.
+	//
+	// Look `Conn.serverReadyWaiter#startReader##handleQueue.serverReadyWaiter.unwait`(to hold the events until no error returned or)
+	// `#Write:serverReadyWaiter.unwait` (for things like server connect).
+	// All cases tested & worked perfectly.
 	if s.OnConnect != nil {
 		if err = s.OnConnect(c); err != nil {
-			s.disconnect <- c
+			c.Close()
+			return
 		}
 	}
+
+	c.serverReadyWaiter.unwait()
 }
 
 func (s *Server) waitMessage(c *Conn) bool {
@@ -263,5 +287,5 @@ func (s *Server) GetConnections() map[string]*Conn {
 var (
 	ErrBadNamespace = errors.New("bad namespace")
 	ErrBadRoom      = errors.New("bad room")
-	ErrWrite        = fmt.Errorf("write closed")
+	ErrWrite        = errors.New("write closed")
 )

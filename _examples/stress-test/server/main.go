@@ -16,32 +16,26 @@ import (
 const (
 	endpoint = "localhost:9595"
 	verbose  = false
+	// max depends on the OS, read more below.
+	// For example for windows:
+	//
+	// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
+	// $ netsh int ipv4 set dynamicport udp start=10000 num=36000
+	// $ netsh int ipv6 set dynamicport tcp start=10000 num=36000
+	// $ netsh int ipv6 set dynamicport udp start=10000 num=36000
+	//
+	// Optionally but good practice if you want to re-test over and over,
+	// close all apps and execute:
+	//
+	// $ net session /delete
+	//
+	// Note that this test is hardly depends on the host machine,
+	// maybe there is a case where those settings does not apply to your system.
+	totalClients uint64 = 50000
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = false
-	broadcast                    = true
+	serverHandleNamespaceConnect = true
+	broadcast                    = false
 )
-
-var totalClients uint64 = 50000 // max depends on the OS, read more below.
-// For example for windows:
-//
-// $ netsh int ipv4 set dynamicport tcp start=10000 num=36000
-// $ netsh int ipv4 set dynamicport udp start=10000 num=36000
-// $ netsh int ipv6 set dynamicport tcp start=10000 num=36000
-// $ netsh int ipv6 set dynamicport udp start=10000 num=36000
-//
-// Optionally but good practice if you want to re-test over and over,
-// close all apps and execute:
-//
-// $ net session /delete
-//
-// Note that this test is hardly depends on the host machine,
-// maybe there is a case where those settings does not apply to your system.
-
-// func init() {
-// 	if broadcast {
-// 		totalClients = 14000
-// 	}
-// }
 
 var (
 	started                 bool
