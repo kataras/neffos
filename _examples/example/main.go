@@ -170,9 +170,8 @@ func server(upgrader ws.Upgrader) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
 
-	srv.OnError = func(c *ws.Conn, err error) bool {
-		log.Printf("ERROR: [%s] %v", c.ID(), err)
-		return false
+	srv.OnUpgradeError = func(err error) {
+		log.Printf("ERROR: [%s] %v", err)
 	}
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
@@ -202,7 +201,7 @@ func server(upgrader ws.Upgrader) {
 	}
 }
 
-const dialAndConnectTimeout = 2 * time.Second
+const dialAndConnectTimeout = 5 * time.Second
 
 func client(dialer ws.Dialer) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))

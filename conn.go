@@ -3,9 +3,11 @@ package ws
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,7 +94,7 @@ type Conn struct {
 	// more than 0 if acknowledged.
 	acknowledged *uint32
 
-	// the current connection's connected namespace.
+	// the connection's current connected namespace.
 	connectedNamespaces      map[string]*NSConn
 	connectedNamespacesMutex sync.RWMutex
 
@@ -102,56 +104,67 @@ type Conn struct {
 
 	// used to fire `conn#Close` once.
 	closed *uint32
-	// useful to terminate the broadcast waiter.
+	// useful to terminate the broadcaster, see `Server#ServeHTTP.waitMessage`.
 	closeCh chan struct{}
 }
 
 type waiter struct {
 	locked *uint32
 	ready  *uint32
-	mu     sync.Mutex
+	err    error
+	// mu     sync.Mutex
+	ch chan struct{}
 }
 
 func newWaiter() *waiter {
 	return &waiter{
 		locked: new(uint32),
 		ready:  new(uint32),
+		ch:     make(chan struct{}),
 	}
 }
 
 func (w *waiter) isReady() bool {
-	if w == nil { // it's nil if not server-side connection and it's always "ready" to send/receive events on client-side.
+	if w == nil { // it's nil if not server-side connection; it's always "ready" to send/receive events on client-side.
 		return true
 	}
 
 	return atomic.LoadUint32(w.ready) > 0
 }
 
-func (w *waiter) wait() {
+func (w *waiter) wait() error {
 	if w == nil {
-		return
+		return nil
 	}
 
 	if w.isReady() {
-		return // no need to wait.
+		// println("waiter: wait() is Ready")
+		return w.err // no need to wait.
 	}
 
 	if atomic.CompareAndSwapUint32(w.locked, 0, 1) {
-		w.mu.Lock() // lock once.
+		// println("waiter: lock")
+		<-w.ch
 	}
+
+	return w.err
 }
 
-func (w *waiter) unwait() {
-	if w == nil {
+func (w *waiter) unwait(err error) {
+	if w == nil || w.isReady() {
+		// println("waiter: it's ready, do nothing and return")
 		return
 	}
 
-	if atomic.CompareAndSwapUint32(w.locked, 1, 0) { // unlock once.
-		w.mu.Unlock()
-	}
-
+	w.err = err
+	// println("waiter: mark ready")
 	// at any case mark it as ready for future `wait` call to exit immediately.
 	atomic.StoreUint32(w.ready, 1)
+	if atomic.CompareAndSwapUint32(w.locked, 1, 0) { // unlock once.
+		// fmt.Printf("waiter: unlock and set error: %v\n", err)
+
+		close(w.ch)
+	}
 }
 
 func newConn(socket Socket, namespaces Namespaces) *Conn {
@@ -191,13 +204,192 @@ func (c *Conn) Server() *Server {
 }
 
 var (
-	ackBinary   = []byte("ack")
-	ackOKBinary = []byte("ack_ok")
+	ackBinary      = []byte("ack")
+	ackOKBinary    = []byte("ack_ok")
+	ackNotOKBinary = []byte("ack_err")
 )
 
 func (c *Conn) isAcknowledged() bool {
 	return atomic.LoadUint32(c.acknowledged) > 0
 }
+
+// blocking and waits for err if any, on the `Server#OnConnect`
+func (c *Conn) clientAck() error {
+	waiter := newWaiter()
+
+	go func() {
+		for {
+			b, err := c.socket.ReadText(c.readTimeout)
+			if err != nil {
+				waiter.unwait(err)
+				return
+			}
+			//	println("[BINARY] client ack: " + string(b))
+
+			if bytes.HasPrefix(b, ackNotOKBinary) {
+				errText := string(b[len(ackNotOKBinary):])
+				//println("client ack: got an error: " + errText)
+				err = errors.New(errText)
+				waiter.unwait(err)
+				return
+			}
+
+			if bytes.HasPrefix(b, ackBinary) {
+				//println("client ack: all OK, set ack to 1 and set ID.")
+				id := string(b[len(ackBinary):])
+				c.id = id
+				atomic.StoreUint32(c.acknowledged, 1)
+				c.socket.WriteText(ackOKBinary, c.writeTimeout)
+				waiter.unwait(nil)
+				return
+			}
+
+			continue
+		}
+	}()
+
+	//println("client ack: send ackBinary to start the process")
+	c.socket.WriteText(ackBinary, c.writeTimeout)
+
+	//println("client ack: wait for server response")
+	err := waiter.wait()
+	if err != nil {
+		c.Close()
+	}
+	//println("client ack: got server response", err)
+	return err
+}
+
+// no blocking.
+func (c *Conn) serverAck() {
+	go func() {
+		defer c.Close()
+
+		var (
+			queue       = make([]*Message, 0)
+			queueMutex  = new(sync.Mutex)
+			handleQueue = func() {
+				// ready to handle queue when server is ready (if server-side conn).
+				// c.serverReadyWaiter.wait()
+
+				queueMutex.Lock()
+				defer queueMutex.Unlock()
+
+				for _, msg := range queue {
+					c.handleMessage(*msg)
+				}
+
+				queue = queue[0:0]
+			}
+			allowNativeMessages = c.namespaces[""] != nil && c.namespaces[""][OnNativeMessage] != nil
+		)
+
+		for {
+			b, err := c.socket.ReadText(c.readTimeout)
+			if err != nil {
+				//println("server ack: ReadText error: " + err.Error())
+				//	c.Close()
+				return
+			}
+			// println("[BINARY] server ack: " + string(b))
+			if bytes.HasPrefix(b, ackBinary) {
+				if len(b) == len(ackBinary) {
+					//println("server ack: client sent ackBinary, wait for serverReadyWaiter...")
+					err := c.serverReadyWaiter.wait()
+					// fmt.Printf("server ack: we have a response from OnConnect or no: %v\n", err)
+					if err == nil {
+						// it's ok send ack.
+						c.socket.WriteText(append(ackBinary, []byte(c.id)...), c.writeTimeout)
+					} else {
+						// it's not Ok, send error which client's Dial should return.
+						// See `clientAck`.
+						//println("server ack: send the ack Not OK:" + string(append(ackNotOKBinary, []byte(err.Error())...)))
+						c.socket.WriteText(append(ackNotOKBinary, []byte(err.Error())...), c.writeTimeout)
+						// c.Close()
+						return
+					}
+				} else {
+					// its ackOK, answer from client when ID received and it's ready for write/read.
+					//println("server ack: all OK, set ack to 1 and start reader.", string(b))
+					atomic.StoreUint32(c.acknowledged, 1)
+					handleQueue()
+					// go c.startReader()
+					// return
+				}
+				continue
+			}
+
+			msg := deserializeMessage(nil, b, allowNativeMessages)
+			if msg.isInvalid {
+				// fmt.Printf("%s[%d] is invalid payload\n", b, len(b))
+				continue
+			}
+
+			if !c.isAcknowledged() { // || !c.serverReadyWaiter.isReady() {
+				queueMutex.Lock()
+				queue = append(queue, &msg)
+				queueMutex.Unlock()
+				continue
+			}
+
+			// if !c.handleMessage(msg) {
+			// 	return
+			// }
+
+			go c.handleMessage(msg)
+		}
+	}()
+}
+
+// func (c *Conn) ack() error {
+// 	go func() {
+// 		for {
+// 			b, err := c.socket.ReadText(c.readTimeout)
+// 			if err != nil {
+// 				return
+// 			}
+
+// 			if c.IsClient() && bytes.HasPrefix(b, ackNotOKBinary) {
+// 				errText := string(b[len(ackNotOKBinary):])
+// 				err = errors.New(errText)
+// 				return
+// 			}
+
+// 			if bytes.HasPrefix(b, ackBinary) {
+// 				if !c.IsClient() {
+// 					if len(b) == len(ackBinary) {
+// 						err := c.serverReadyWaiter.wait()
+// 						if err == nil {
+// 							// it's ok send ack.
+// 							// it's not Ok, send error which client's Dial should return.
+// 							c.socket.WriteText(append(ackBinary, []byte(c.id)...), c.writeTimeout)
+// 						} else {
+// 							c.socket.WriteText(append(ackNotOKBinary, []byte(err.Error())...), c.writeTimeout)
+// 							return
+// 						}
+// 					} else {
+// 						// its ackOK, answer from client when ID received and it's ready for write/read.
+// 						atomic.StoreUint32(c.acknowledged, 1)
+// 						return
+// 					}
+// 				} else {
+// 					id := string(b[len(ackBinary):])
+// 					c.id = id
+// 					atomic.StoreUint32(c.acknowledged, 1)
+// 					c.socket.WriteText(ackOKBinary, c.writeTimeout)
+// 					return
+// 				}
+
+// 				continue
+// 			}
+// 		}
+// 	}()
+
+// 	if c.IsClient() {
+// 		c.write(ackBinary)
+// 	}
+
+// }
 
 func (c *Conn) startReader() {
 	if c.IsClosed() {
@@ -206,21 +398,21 @@ func (c *Conn) startReader() {
 	defer c.Close()
 
 	var (
-		queue       = make([]*Message, 0)
-		queueMutex  = new(sync.Mutex)
-		handleQueue = func() {
-			// ready to handle queue when server is ready (if server-side conn).
-			c.serverReadyWaiter.wait()
+		// queue       = make([]*Message, 0)
+		// queueMutex  = new(sync.Mutex)
+		// handleQueue = func() {
+		// 	// ready to handle queue when server is ready (if server-side conn).
+		// 	c.serverReadyWaiter.wait()
 
-			queueMutex.Lock()
-			defer queueMutex.Unlock()
+		// 	queueMutex.Lock()
+		// 	defer queueMutex.Unlock()
 
-			for _, msg := range queue {
-				c.handleMessage(*msg)
-			}
+		// 	for _, msg := range queue {
+		// 		c.handleMessage(*msg)
+		// 	}
 
-			queue = nil
-		}
+		// 	queue = nil
+		// }
 		allowNativeMessages = c.namespaces[""] != nil && c.namespaces[""][OnNativeMessage] != nil
 	)
 
@@ -232,25 +424,26 @@ func (c *Conn) startReader() {
 			return
 		}
 
-		if !c.isAcknowledged() && bytes.HasPrefix(b, ackBinary) {
-			if c.IsClient() {
-				id := string(b[len(ackBinary):])
-				c.id = id
-				atomic.StoreUint32(c.acknowledged, 1)
-				c.socket.WriteText(ackOKBinary, c.writeTimeout)
-				handleQueue()
-			} else {
-				if len(b) == len(ackBinary) {
-					c.socket.WriteText(append(ackBinary, []byte(c.id)...), c.writeTimeout)
-				} else {
-					// its ackOK, answer from client when ID received and it's ready for write/read.
-					atomic.StoreUint32(c.acknowledged, 1)
-					handleQueue()
-				}
-			}
+		// println("[BINARY startReader] " + string(b))
+		// if !c.isAcknowledged() && bytes.HasPrefix(b, ackBinary) {
+		// 	if c.IsClient() {
+		// 		id := string(b[len(ackBinary):])
+		// 		c.id = id
+		// 		atomic.StoreUint32(c.acknowledged, 1)
+		// 		c.socket.WriteText(ackOKBinary, c.writeTimeout)
+		// 		handleQueue()
+		// 	} else {
+		// 		if len(b) == len(ackBinary) {
+		// 			c.socket.WriteText(append(ackBinary, []byte(c.id)...), c.writeTimeout)
+		// 		} else {
+		// 			// its ackOK, answer from client when ID received and it's ready for write/read.
+		// 			atomic.StoreUint32(c.acknowledged, 1)
+		// 			handleQueue()
+		// 		}
+		// 	}
 
-			continue
-		}
+		// 	continue
+		// }
 
 		msg := deserializeMessage(nil, b, allowNativeMessages)
 		if msg.isInvalid {
@@ -258,27 +451,42 @@ func (c *Conn) startReader() {
 			continue
 		}
 
-		if !c.isAcknowledged() || !c.serverReadyWaiter.isReady() {
-			queueMutex.Lock()
-			queue = append(queue, &msg)
-			queueMutex.Unlock()
-			continue
-		}
+		// if !c.isAcknowledged()  || !c.serverReadyWaiter.isReady() {
+		// 	queueMutex.Lock()
+		// 	queue = append(queue, &msg)
+		// 	queueMutex.Unlock()
+		// 	continue
+		// }
 
-		if !c.handleMessage(msg) {
-			return
-		}
+		// if !c.handleMessage(msg) {
+		// 	return
+		// }
+
+		go c.handleMessage(msg)
 	}
 }
 
-func (c *Conn) handleMessage(msg Message) bool {
-	if msg.wait != "" {
+func (c *Conn) isMsgWait(wait string) bool {
+	if strings.HasPrefix(wait, "confirmation_") {
+		// println("is confirmation of: " + wait)
+		return true
+	}
+
+	if strings.Contains(wait, "_") {
+		return c.IsClient()
+	}
+
+	return wait != ""
+}
+
+func (c *Conn) handleMessage(msg Message) {
+	if c.isMsgWait(msg.wait) {
 		c.waitingMessagesMutex.RLock()
 		ch, ok := c.waitingMessages[msg.wait]
 		c.waitingMessagesMutex.RUnlock()
 		if ok {
 			ch <- msg
-			return true
+			return
 		}
 	}
 
@@ -298,7 +506,8 @@ func (c *Conn) handleMessage(msg Message) bool {
 	default:
 		ns, ok := c.tryNamespace(msg)
 		if !ok {
-			return true
+			// println(msg.Namespace + " namespace and incoming message of event: " + msg.Event + " is not connected or not exists\n\n")
+			return
 		}
 
 		msg.IsLocal = false
@@ -307,12 +516,13 @@ func (c *Conn) handleMessage(msg Message) bool {
 			msg.Err = err
 			c.Write(msg)
 			if isManualCloseError(err) {
-				return false // close the connection after sending the closing message.
+				// return false // close the connection after sending the closing message.
+				c.Close()
+				return
 			}
 		}
 	}
 
-	return true
 }
 
 const syncWaitDur = 15 * time.Millisecond
@@ -327,6 +537,7 @@ func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 	// }
 
 	if !c.IsClient() {
+		c.serverReadyWaiter.unwait(nil)
 		// server-side check for ack-ed, it should be done almost immediately the client connected
 		// but give it sometime for slow networks and add an extra check for closed after 5 seconds and a deadline of 10seconds.
 		t := maxSyncWaitDur
@@ -423,11 +634,12 @@ func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error
 		IsLocal:   true,
 	}
 
+	// println("ask connect")
 	_, err := c.Ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
 	if err != nil {
 		return nil, err
 	}
-
+	// println("got connect")
 	// re-check, maybe connected so far (can happen by a simultaneously `Connect` calls on both server and client, which is not the standard way)
 	c.connectedNamespacesMutex.RLock()
 	ns, ok = c.connectedNamespaces[namespace]
@@ -446,6 +658,8 @@ func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error
 	c.connectedNamespaces[namespace] = ns
 	c.connectedNamespacesMutex.Unlock()
 
+	// println("write confirmation: " + "confirmation_" + reply.wait)
+	// c.writeEmptyReply("confirmation_" + reply.wait)
 	connectMessage.Event = OnNamespaceConnected
 	events.fireEvent(ns, connectMessage) // omit error, it's connected.
 
@@ -485,6 +699,8 @@ func (c *Conn) replyConnect(msg Message) {
 
 	c.writeEmptyReply(msg.wait)
 
+	// c.waitConfirmation(nil, msg.wait)
+	// println("confirmation got")
 	msg.Event = OnNamespaceConnected
 	events.fireEvent(ns, msg)
 }
@@ -605,7 +821,9 @@ func (c *Conn) Write(msg Message) bool {
 		return false
 	}
 
-	c.serverReadyWaiter.unwait() // for server-side if tries to send, then error will be not ignored but events should continue.
+	//	println("c.Write")
+	c.serverReadyWaiter.unwait(nil) // for server-side if tries to send, then error will be not ignored but events should continue.
+	//	fmt.Printf("c.Write: %#+v\n", msg)
 
 	// msg.from = c.ID()
 
@@ -648,6 +866,36 @@ func (c *Conn) Write(msg Message) bool {
 // used when `Ask` caller cares only for successful call and not the message, for performance reasons we just use raw bytes.
 func (c *Conn) writeEmptyReply(wait string) bool {
 	return c.write(genEmptyReplyToWait(wait))
+}
+
+func (c *Conn) waitConfirmation(ctx context.Context, wait string) error {
+	if c.IsClosed() {
+		return ErrWrite
+	}
+
+	wait = "confirmation_" + wait
+	ch := make(chan Message)
+	c.waitingMessagesMutex.Lock()
+	c.waitingMessages[wait] = ch
+	c.waitingMessagesMutex.Unlock()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// println("waiting for confirmation: " + wait)
+	select {
+	case <-ctx.Done():
+		if c.IsClosed() {
+			return ErrWrite
+		}
+		return ctx.Err()
+	case receive := <-ch:
+		c.waitingMessagesMutex.Lock()
+		delete(c.waitingMessages, receive.wait)
+		c.waitingMessagesMutex.Unlock()
+		return receive.Err
+	}
 }
 
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {

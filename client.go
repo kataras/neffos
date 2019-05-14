@@ -53,13 +53,11 @@ func Dial(dial Dialer, ctx context.Context, url string, connHandler ConnHandler)
 	c.readTimeout = readTimeout
 	c.writeTimeout = writeTimeout
 
-	go c.startReader()
-
-	client := &Client{
-		conn: c,
+	if err = c.clientAck(); err != nil {
+		return nil, err
 	}
 
-	underline.WriteText(ackBinary, writeTimeout)
+	go c.startReader()
 
-	return client, nil
+	return &Client{conn: c}, nil
 }

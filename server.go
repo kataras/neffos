@@ -91,9 +91,10 @@ func (s *Server) start() {
 				// close(c.out)
 				delete(s.connections, c)
 				atomic.AddUint64(&s.count, ^uint64(0))
+				// println("disconnect...")
 				if s.OnDisconnect != nil {
 					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
-					if !c.serverReadyWaiter.isReady() {
+					if !c.serverReadyWaiter.isReady() || (c.serverReadyWaiter.err != nil) {
 						continue
 					}
 					s.OnDisconnect(c)
@@ -147,7 +148,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.writeTimeout = s.writeTimeout
 	c.server = s
 	c.serverReadyWaiter = newWaiter()
-	go c.startReader()
+	// go c.startReader()
 
 	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
 	// DONE: found, see `waitMessage`.
@@ -179,6 +180,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.connect <- c
 
+	c.serverAck()
 	// Start the reader before `OnConnect`, remember clients may remotely connect to namespace before `Server#OnConnect`
 	// therefore any `Server:NSConn#OnNamespaceConnected` can write immediately to the client too.
 	// Note also that the `Server#OnConnect` itself can do that as well but if the written Message's Namespace is not locally connected
@@ -198,19 +200,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// `#Write:serverReadyWaiter.unwait` (for things like server connect).
 	// All cases tested & worked perfectly.
 	if s.OnConnect != nil {
-		if err := s.OnConnect(c); err != nil {
+		if err = s.OnConnect(c); err != nil {
 			// TODO: Do something with that error.
 			// The most suitable thing we can do is to somehow send this to the client's `Dial` return statement.
 			// This can be done if client waits for "OK" signal or a failure with an error before return the websocket connection,
 			// as for today we have the ack process which does NOT block and end-developer can send messages and server will handle them when both sides are ready.
 			// So, maybe it's a better solution to transform that process into a blocking state which can handle any `Server#OnConnect` error and return it at client's `Dial`.
 			// Think more later today.
-			c.Close()
+			// Done but with a lot of code.... will try to cleanup some things.
+			//println("OnConnect error: " + err.Error())
+			c.serverReadyWaiter.unwait(err)
+			// c.Close()
 			return
 		}
 	}
 
-	c.serverReadyWaiter.unwait()
+	//println("OnConnect does not exist or no error, fire unwait")
+	c.serverReadyWaiter.unwait(nil)
 }
 
 func (s *Server) waitMessage(c *Conn) bool {

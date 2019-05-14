@@ -31,10 +31,10 @@ const (
 	//
 	// Note that this test is hardly depends on the host machine,
 	// maybe there is a case where those settings does not apply to your system.
-	totalClients uint64 = 50000
+	totalClients uint64 = 100000
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
 	serverHandleNamespaceConnect = true
-	broadcast                    = false
+	broadcast                    = true
 )
 
 var (
@@ -171,9 +171,8 @@ func main() {
 		return nil
 	}
 
-	srv.OnError = func(c *ws.Conn, err error) bool {
-		log.Printf("ERROR: [%s] %v\n", c.ID(), err)
-		return true
+	srv.OnUpgradeError = func(err error) {
+		log.Printf("ERROR: [%s] %v\n", err)
 	}
 
 	// if c.Err() != nil {
