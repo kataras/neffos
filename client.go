@@ -8,6 +8,8 @@ import (
 
 type Client struct {
 	conn *Conn
+
+	ID string
 }
 
 func (c *Client) Close() {
@@ -53,11 +55,11 @@ func Dial(dial Dialer, ctx context.Context, url string, connHandler ConnHandler)
 	c.readTimeout = readTimeout
 	c.writeTimeout = writeTimeout
 
-	if err = c.clientAck(); err != nil {
+	go c.startReader()
+
+	if err = c.sendClientACK(); err != nil {
 		return nil, err
 	}
 
-	go c.startReader()
-
-	return &Client{conn: c}, nil
+	return &Client{conn: c, ID: c.id}, nil
 }

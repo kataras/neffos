@@ -34,7 +34,7 @@ const (
 	totalClients uint64 = 100000
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
 	serverHandleNamespaceConnect = true
-	broadcast                    = true
+	broadcast                    = false
 )
 
 var (
@@ -145,7 +145,7 @@ func main() {
 					}
 
 					if n != connectedN {
-						log.Printf("%d CLIENT(S) FAILED TO CONNECT TO THE NAMESPACE", (connectedN-disconnectedN)-n)
+						log.Printf("%d CLIENT(S) FAILED TO CONNECT TO THE NAMESPACE", 1+(connectedN-disconnectedN)-n)
 					} else if totalClients-totalConnected > 0 {
 						log.Printf("%v/%d CLIENT(S) WERE NOT CONNECTED AT ALL. CHECK YOUR OS NET SETTINGS. THE REST CLIENTS WERE DISCONNECTED SUCCESSFULLY.\n",
 							totalClients-totalConnected, totalClients)

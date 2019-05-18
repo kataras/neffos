@@ -23,6 +23,8 @@ type Socket struct {
 	mu sync.Mutex
 }
 
+const defaultOp = gobwas.OpBinary
+
 func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
 	state := gobwas.StateServerSide
 	if client {
@@ -62,9 +64,6 @@ func (s *Socket) Request() *http.Request {
 
 // Returns io.EOF on remote close.
 func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
-	// s.mu.Lock()
-	// defer s.mu.Unlock()
-
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -90,7 +89,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		if hdr.OpCode&gobwas.OpText == 0 {
+		if hdr.OpCode&defaultOp == 0 {
 			err = s.reader.Discard()
 			if err != nil {
 				return nil, err
@@ -98,7 +97,10 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		return ioutil.ReadAll(s.reader)
+		// s.readerSync.Lock()
+		b, err := ioutil.ReadAll(s.reader)
+		// println("read: " + string(b))
+		return b, err
 	}
 
 	// for {
@@ -111,7 +113,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 	// 		return nil, err
 	// 	}
 
-	// 	if code != gobwas.OpText {
+	// 	if code != defaultOp {
 	// 		continue
 	// 	}
 
@@ -125,7 +127,8 @@ func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
 		s.UnderlyingConn.SetWriteDeadline(time.Now().Add(timeout))
 	}
 
-	err := wsutil.WriteMessage(s.UnderlyingConn, s.state, gobwas.OpText, body)
+	// println("write: " + string(body))
+	err := wsutil.WriteMessage(s.UnderlyingConn, s.state, defaultOp, body)
 	s.mu.Unlock()
 
 	return err

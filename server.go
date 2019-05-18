@@ -94,7 +94,7 @@ func (s *Server) start() {
 				// println("disconnect...")
 				if s.OnDisconnect != nil {
 					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
-					if !c.serverReadyWaiter.isReady() || (c.serverReadyWaiter.err != nil) {
+					if !c.readiness.isReady() || (c.readiness.err != nil) {
 						continue
 					}
 					s.OnDisconnect(c)
@@ -147,8 +147,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
-	c.serverReadyWaiter = newWaiter()
-	// go c.startReader()
 
 	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
 	// DONE: found, see `waitMessage`.
@@ -180,7 +178,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.connect <- c
 
-	c.serverAck()
+	go c.startReader()
 	// Start the reader before `OnConnect`, remember clients may remotely connect to namespace before `Server#OnConnect`
 	// therefore any `Server:NSConn#OnNamespaceConnected` can write immediately to the client too.
 	// Note also that the `Server#OnConnect` itself can do that as well but if the written Message's Namespace is not locally connected
@@ -209,14 +207,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Think more later today.
 			// Done but with a lot of code.... will try to cleanup some things.
 			//println("OnConnect error: " + err.Error())
-			c.serverReadyWaiter.unwait(err)
+			c.readiness.unwait(err)
 			// c.Close()
 			return
 		}
 	}
 
 	//println("OnConnect does not exist or no error, fire unwait")
-	c.serverReadyWaiter.unwait(nil)
+	c.readiness.unwait(nil)
 }
 
 func (s *Server) waitMessage(c *Conn) bool {

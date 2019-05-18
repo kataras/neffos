@@ -26,6 +26,8 @@ var (
 	testdata []byte
 )
 
+// na dokimasw na to kanw channels ta namespaces...
+
 const (
 	verbose = false
 	// max depends on the OS.
@@ -33,7 +35,7 @@ const (
 	maxConcurrentClients = 0
 	// if server's `serverHandleNamespaceConnect` is true then this value should be false.
 	clientHandleNamespaceConnect = false
-	broadcast                    = true
+	broadcast                    = false
 )
 
 var totalConnectedNamespace = new(uint64)
@@ -246,17 +248,21 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	// t := atomic.AddUint32(&counter, 1)
 
 	// log.Printf("[%d] try to connect\n", t)
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancel()
 
 	client, err := ws.Dial(dialer, ctx, url, handler)
 
 	if err != nil {
-		//	log.Printf("[%d] %s\n", t, err)
+		// log.Printf("connection failure: %v\n", err)
 		atomic.AddUint64(&connectionFailures, 1)
 		collectError("connect", err)
 		return
 		// return err
+	}
+
+	if client.ID == "" {
+		panic("CLIENT'S ID IS EMPTY.\n DIAL NOW SHOULD BLOCK UNTIL ID IS FILLED(ACK) AND UNTIL SERVER'S CONFIRMATION")
 	}
 
 	// defer client.Close()
@@ -275,6 +281,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	if err != nil {
 		// atomic.AddUint64(&connectionFailures, 1)
 		collectError("connect namespace", err)
+
 		if verbose {
 			log.Println(err)
 		}

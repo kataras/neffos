@@ -18,6 +18,8 @@ type Socket struct {
 	mu sync.Mutex
 }
 
+const defaultOp = gorilla.BinaryMessage
+
 func newSocket(underline *gorilla.Conn, request *http.Request, client bool) *Socket {
 	return &Socket{
 		UnderlyingConn: underline,
@@ -45,7 +47,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			return nil, err
 		}
 
-		if opCode != gorilla.TextMessage {
+		if opCode != defaultOp {
 			// if gorilla.IsUnexpectedCloseError(err, gorilla.CloseGoingAway) ...
 			continue
 		}
@@ -60,7 +62,7 @@ func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
 	}
 
 	s.mu.Lock()
-	err := s.UnderlyingConn.WriteMessage(gorilla.TextMessage, body)
+	err := s.UnderlyingConn.WriteMessage(defaultOp, body)
 	s.mu.Unlock()
 
 	return err

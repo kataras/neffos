@@ -3,6 +3,8 @@ package ws
 import (
 	"bytes"
 	"errors"
+	"strconv"
+	"time"
 )
 
 // <wait(0-uint64)>;
@@ -66,6 +68,45 @@ func (m *Message) isRoomJoin() bool {
 
 func (m *Message) isRoomLeft() bool {
 	return m.Event == OnRoomLeft
+}
+
+const (
+	waitIsConfirmationBinary  = byte(0x5)
+	waitComesFromClientBinary = byte(0x6)
+)
+
+func (m *Message) isWait(isClientConn bool) bool {
+	if m.wait == "" {
+		return false
+	}
+
+	if m.wait[0] == waitIsConfirmationBinary {
+		// true even if it's not client-client but it's a confirmation message.
+		return true
+	}
+
+	if m.wait[0] == waitComesFromClientBinary {
+		if isClientConn {
+			return true
+		}
+		return false
+	}
+
+	return true
+}
+
+func genWait(isClientConn bool) string {
+	now := time.Now().UnixNano()
+	wait := strconv.FormatInt(now, 10)
+	if isClientConn {
+		wait = string(waitComesFromClientBinary) + wait
+	}
+
+	return wait
+}
+
+func genWaitConfirmation(wait string) string {
+	return string(waitIsConfirmationBinary) + wait
 }
 
 type (
