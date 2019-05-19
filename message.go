@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// <wait(0-uint64)>;
+// <wait()>;
 // <namespace>;
 // <room>;
 // <event>;
