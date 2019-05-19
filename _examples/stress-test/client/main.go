@@ -26,8 +26,6 @@ var (
 	testdata []byte
 )
 
-// na dokimasw na to kanw channels ta namespaces...
-
 const (
 	verbose = false
 	// max depends on the OS.

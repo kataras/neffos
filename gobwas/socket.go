@@ -89,7 +89,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		if hdr.OpCode&defaultOp == 0 {
+		if hdr.OpCode&defaultOp == 0 /* || (allowText && hdr.OpCode&gobwas.OpText == 0) */ {
 			err = s.reader.Discard()
 			if err != nil {
 				return nil, err
@@ -97,10 +97,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		// s.readerSync.Lock()
-		b, err := ioutil.ReadAll(s.reader)
-		// println("read: " + string(b))
-		return b, err
+		return ioutil.ReadAll(s.reader)
 	}
 
 	// for {

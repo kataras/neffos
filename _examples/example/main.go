@@ -171,7 +171,7 @@ func server(upgrader ws.Upgrader) {
 	}
 
 	srv.OnUpgradeError = func(err error) {
-		log.Printf("ERROR: [%s] %v", err)
+		log.Printf("ERROR: %v", err)
 	}
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
