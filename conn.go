@@ -15,6 +15,7 @@ type (
 		NetConn() net.Conn
 		Request() *http.Request
 		ReadText(timeout time.Duration) (body []byte, err error)
+		WriteBinary(body []byte, timeout time.Duration) error
 		WriteText(body []byte, timeout time.Duration) error
 	}
 )
@@ -118,7 +119,7 @@ const (
 )
 
 func (c *Conn) sendClientACK() error {
-	ok := c.write([]byte{ackBinary})
+	ok := c.write([]byte{ackBinary}, true)
 	if !ok {
 		c.Close()
 		return ErrWrite
@@ -162,6 +163,7 @@ func (c *Conn) startReader() {
 	}
 }
 
+// ack uses binary, bytebuffer messages type, after this client/server can still use binary if `Message#SetBinary` or text message by-default.
 func (c *Conn) handleACK(b []byte) bool {
 	switch typ := b[0]; typ {
 	case ackBinary:
@@ -169,14 +171,14 @@ func (c *Conn) handleACK(b []byte) bool {
 		err := c.readiness.wait()
 		if err != nil {
 			// it's not Ok, send error which client's Dial should return.
-			c.write(append([]byte{ackNotOKBinary}, []byte(err.Error())...))
+			c.write(append([]byte{ackNotOKBinary}, []byte(err.Error())...), true)
 			return false
 		}
 		atomic.StoreUint32(c.acknowledged, 1)
 		c.handleQueue()
 
 		// it's ok send ID.
-		return c.write(append([]byte{ackIDBinary}, []byte(c.id)...))
+		return c.write(append([]byte{ackIDBinary}, []byte(c.id)...), true)
 
 	// case ackOKBinary:
 	// 	// from client to server.
@@ -570,8 +572,14 @@ func (c *Conn) replyDisconnect(msg Message) {
 	c.writeEmptyReply(msg.wait)
 }
 
-func (c *Conn) write(b []byte) bool {
-	err := c.socket.WriteText(b, c.writeTimeout)
+func (c *Conn) write(b []byte, binary bool) bool {
+	var err error
+	if binary {
+		err = c.socket.WriteBinary(b, c.writeTimeout)
+	} else {
+		err = c.socket.WriteText(b, c.writeTimeout)
+	}
+
 	if err != nil {
 		if IsCloseError(err) {
 			c.Close()
@@ -625,12 +633,12 @@ func (c *Conn) Write(msg Message) bool {
 		}
 	}
 
-	return c.write(serializeMessage(nil, msg))
+	return c.write(serializeMessage(nil, msg), msg.SetBinary)
 }
 
 // used when `Ask` caller cares only for successful call and not the message, for performance reasons we just use raw bytes.
 func (c *Conn) writeEmptyReply(wait string) bool {
-	return c.write(genEmptyReplyToWait(wait))
+	return c.write(genEmptyReplyToWait(wait), false)
 }
 
 func (c *Conn) waitConfirmation(wait string) {

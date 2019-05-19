@@ -23,8 +23,6 @@ type Socket struct {
 	mu sync.Mutex
 }
 
-const defaultOp = gobwas.OpBinary
-
 func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
 	state := gobwas.StateServerSide
 	if client {
@@ -89,7 +87,7 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		if hdr.OpCode&defaultOp == 0 /* || (allowText && hdr.OpCode&gobwas.OpText == 0) */ {
+		if hdr.OpCode&gobwas.OpBinary == 0 && hdr.OpCode&gobwas.OpText == 0 {
 			err = s.reader.Discard()
 			if err != nil {
 				return nil, err
@@ -119,13 +117,21 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 }
 
 func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
+	return s.write(body, gobwas.OpText, timeout)
+}
+
+func (s *Socket) WriteBinary(body []byte, timeout time.Duration) error {
+	return s.write(body, gobwas.OpBinary, timeout)
+}
+
+func (s *Socket) write(body []byte, op gobwas.OpCode, timeout time.Duration) error {
 	s.mu.Lock()
 	if timeout > 0 {
 		s.UnderlyingConn.SetWriteDeadline(time.Now().Add(timeout))
 	}
 
 	// println("write: " + string(body))
-	err := wsutil.WriteMessage(s.UnderlyingConn, s.state, defaultOp, body)
+	err := wsutil.WriteMessage(s.UnderlyingConn, s.state, op, body)
 	s.mu.Unlock()
 
 	return err

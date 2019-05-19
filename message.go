@@ -52,6 +52,10 @@ type Message struct {
 	// Useful rarely internally on `Conn#Write` namespace and rooms checks, i.e `Conn#DisconnectAll` and `NSConn#RemoveAll`.
 	// If true then the writer's checks will not lock connectedNamespacesMutex or roomsMutex again. May be useful in the future, keep that solution.
 	locked bool
+
+	// if server or client should write using Binary message.
+	// This field is not filled on sending/receiving.
+	SetBinary bool
 }
 
 func (m *Message) isConnect() bool {
@@ -198,6 +202,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 		false,
 		false,
 		allowNativeMessages && event == OnNativeMessage,
+		false,
 		false,
 	}
 }

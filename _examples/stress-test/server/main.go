@@ -33,7 +33,7 @@ const (
 	// maybe there is a case where those settings does not apply to your system.
 	totalClients uint64 = 100000
 	// if this value is true then client's `clientHandleNamespaceConnect` should be false.
-	serverHandleNamespaceConnect = true
+	serverHandleNamespaceConnect = false
 	broadcast                    = false
 )
 

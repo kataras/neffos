@@ -1,4 +1,5 @@
 // start of javascript-based client.
+// tsc --outDir ./_examples/browser client.ts
 var OnNamespaceConnect = "_OnNamespaceConnect";
 var OnNamespaceConnected = "_OnNamespaceConnected";
 var OnNamespaceDisconnect = "_OnNamespaceDisconnect";
@@ -8,6 +9,9 @@ var OnRoomLeave = "_OnRoomLeave";
 var OnRoomLeft = "_OnRoomLeft";
 var OnAnyEvent = "_OnAnyEvent";
 var OnNativeMessage = "_OnNativeMessage";
+// see `handleAck`.
+var ackIDBinary = 2; // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
+var ackNotOKBinary = 4; // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 function IsSystemEvent(event) {
     switch (event) {
         case OnNamespaceConnect:
@@ -39,6 +43,11 @@ var Message = /** @class */ (function () {
     };
     return Message;
 }());
+// interface Events {
+//     "error": Event;
+//     "message": MessageEvent;
+//     "open": Event;
+// }
 var Ws = /** @class */ (function () {
     // // listeners.
     // private errorListeners: (err:string)
@@ -65,8 +74,8 @@ var Ws = /** @class */ (function () {
             console.error("WebSocket error observed:", event);
         });
         this.conn.onopen = (function (evt) {
-            console.log("WebSocket connected;");
-            let b = new Uint8Array(1);
+            console.log("WebSocket connected.");
+            var b = new Uint8Array(1);
             b[0] = 1;
             _this.conn.send(b.buffer);
             return null;
@@ -77,17 +86,42 @@ var Ws = /** @class */ (function () {
         });
         this.conn.onmessage = (function (evt) {
             console.log("WebSocket On Message.");
-            console.log("ID: ", _this.dec.decode(evt.data.slice(1)));
-            //  let bytearray = new Uint8Array(event.data);
+            if (evt.data instanceof ArrayBuffer) {
+                if (!_this.isAcknowledged) {
+                    var errorText = _this.handleAck(new Uint8Array(evt.data));
+                    if (errorText == undefined) {
+                        _this.isAcknowledged = true;
+                    }
+                    else {
+                        _this.conn.close();
+                        console.error(errorText);
+                    }
+                }
+            }
+            console.log(evt.data);
             _this.handleMessage(evt.data);
         });
     }
+    Ws.prototype.handleAck = function (data) {
+        var typ = data[0];
+        switch (typ) {
+            case ackIDBinary:
+                var id = this.dec.decode(data.slice(1));
+                this.ID = id;
+                break;
+            case ackNotOKBinary:
+                var errorText = this.dec.decode(data.slice(1));
+                return errorText;
+            default:
+                return "";
+        }
+    };
     Ws.prototype.handleMessage = function (data) {
         // it's a native websocket message
         this.handleNativeMessage(data);
     };
     Ws.prototype.handleNativeMessage = function (data) {
-        console.log(data);
+        // console.log(data);
     };
     return Ws;
 }());

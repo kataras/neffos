@@ -13,6 +13,10 @@ const OnRoomLeft = "_OnRoomLeft";
 const OnAnyEvent = "_OnAnyEvent";
 const OnNativeMessage = "_OnNativeMessage";
 
+// see `handleAck`.
+const ackIDBinary = 2;// comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
+const ackNotOKBinary = 4; // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
+
 function IsSystemEvent(event: string): boolean {
     switch (event) {
         case OnNamespaceConnect:
@@ -80,7 +84,10 @@ class Ws {
     private dec: TextDecoder;
     private enc: TextEncoder;
 
+    private isAcknowledged: boolean;
+
     ID: string;
+
     // // listeners.
     // private errorListeners: (err:string)
 
@@ -128,11 +135,38 @@ class Ws {
 
         this.conn.onmessage = ((evt: MessageEvent) => {
             console.log("WebSocket On Message.");
-            console.log("ID: ", this.dec.decode(evt.data.slice(1)))
-            //  var bytearray = new Uint8Array(event.data);
+
+            if (evt.data instanceof ArrayBuffer) {
+                if (!this.isAcknowledged) {
+                    let errorText = this.handleAck(new Uint8Array(evt.data));
+                    if (errorText == undefined) {
+                        this.isAcknowledged = true
+                    } else {
+                        this.conn.close();
+                        console.error(errorText);
+                    }
+                }
+            }
+
+            console.log(evt.data);
 
             this.handleMessage(evt.data);
         });
+    }
+
+    private handleAck(data: Uint8Array): string {
+        let typ = data[0];
+        switch (typ) {
+            case ackIDBinary:
+                let id = this.dec.decode(data.slice(1));
+                this.ID = id;
+                break;
+            case ackNotOKBinary:
+                let errorText = this.dec.decode(data.slice(1));
+                return errorText;
+            default:
+                return "";
+        }
     }
 
     private handleMessage(data: Int8Array): void {
@@ -142,6 +176,6 @@ class Ws {
     }
 
     private handleNativeMessage(data: Int8Array): void {
-        console.log(data);
+        // console.log(data);
     }
 }
