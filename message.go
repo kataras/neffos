@@ -75,8 +75,8 @@ func (m *Message) isRoomLeft() bool {
 }
 
 const (
-	waitIsConfirmationBinary  = byte(0x5)
-	waitComesFromClientBinary = byte(0x6)
+	waitIsConfirmationPrefix  = '#'
+	waitComesFromClientPrefix = '$'
 )
 
 func (m *Message) isWait(isClientConn bool) bool {
@@ -84,12 +84,12 @@ func (m *Message) isWait(isClientConn bool) bool {
 		return false
 	}
 
-	if m.wait[0] == waitIsConfirmationBinary {
+	if m.wait[0] == waitIsConfirmationPrefix {
 		// true even if it's not client-client but it's a confirmation message.
 		return true
 	}
 
-	if m.wait[0] == waitComesFromClientBinary {
+	if m.wait[0] == waitComesFromClientPrefix {
 		if isClientConn {
 			return true
 		}
@@ -103,14 +103,14 @@ func genWait(isClientConn bool) string {
 	now := time.Now().UnixNano()
 	wait := strconv.FormatInt(now, 10)
 	if isClientConn {
-		wait = string(waitComesFromClientBinary) + wait
+		wait = string(waitIsConfirmationPrefix) + wait
 	}
 
 	return wait
 }
 
 func genWaitConfirmation(wait string) string {
-	return string(waitIsConfirmationBinary) + wait
+	return string(waitIsConfirmationPrefix) + wait
 }
 
 type (

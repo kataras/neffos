@@ -1,22 +1,20 @@
 // start of javascript-based client.
-// tsc --outDir ./_examples/browser client.ts
-if (!("TextDecoder" in window) || !("TextEncoder" in window)) {
-    throw new Error("this browser does not support Text Encoding/Decoding...");
-}
-var dec = new TextDecoder("utf-8");
-var enc = new TextEncoder();
-var OnNamespaceConnect = "_OnNamespaceConnect";
-var OnNamespaceConnected = "_OnNamespaceConnected";
-var OnNamespaceDisconnect = "_OnNamespaceDisconnect";
-var OnRoomJoin = "_OnRoomJoin";
-var OnRoomJoined = "_OnRoomJoined";
-var OnRoomLeave = "_OnRoomLeave";
-var OnRoomLeft = "_OnRoomLeft";
-var OnAnyEvent = "_OnAnyEvent";
-var OnNativeMessage = "_OnNativeMessage";
+// tsc --target es6 --outDir ./_examples/browser client.ts
+const OnNamespaceConnect = "_OnNamespaceConnect";
+const OnNamespaceConnected = "_OnNamespaceConnected";
+const OnNamespaceDisconnect = "_OnNamespaceDisconnect";
+const OnRoomJoin = "_OnRoomJoin";
+const OnRoomJoined = "_OnRoomJoined";
+const OnRoomLeave = "_OnRoomLeave";
+const OnRoomLeft = "_OnRoomLeft";
+const OnAnyEvent = "_OnAnyEvent";
+const OnNativeMessage = "_OnNativeMessage";
+const ackBinary = 'M'; // see `onopen`, comes from client to server at startup.
 // see `handleAck`.
-var ackIDBinary = 2; // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
-var ackNotOKBinary = 4; // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
+const ackIDBinary = 'A'; // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
+const ackNotOKBinary = 'H'; // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
+const waitIsConfirmationPrefix = '#';
+const waitComesFromClientPrefix = '$';
 function IsSystemEvent(event) {
     switch (event) {
         case OnNamespaceConnect:
@@ -31,35 +29,41 @@ function IsSystemEvent(event) {
             return false;
     }
 }
-var Message = /** @class */ (function () {
-    function Message() {
+class Message {
+    isConnect() {
+        return this.Event == OnNamespaceConnect || false;
     }
-    Message.prototype.isConnect = function () {
-        return this.Event == OnNamespaceConnect;
-    };
-    Message.prototype.isDisconnect = function () {
-        return this.Event == OnNamespaceDisconnect;
-    };
-    Message.prototype.isRoomJoin = function () {
-        return this.Event == OnRoomJoin;
-    };
-    Message.prototype.isRoomLeft = function () {
-        return this.Event == OnRoomLeft;
-    };
-    return Message;
-}());
-var messageSeparator = ';';
-var validMessageSepCount = 7;
-var trueString = "1";
-var falseString = "0";
+    isDisconnect() {
+        return this.Event == OnNamespaceDisconnect || false;
+    }
+    isRoomJoin() {
+        return this.Event == OnRoomJoin || false;
+    }
+    isRoomLeft() {
+        return this.Event == OnRoomLeft || false;
+    }
+    isWait() {
+        if (isEmpty(this.wait)) {
+            return false;
+        }
+        if (this.wait[0] == waitIsConfirmationPrefix) {
+            return true;
+        }
+        return this.wait[0] == waitComesFromClientPrefix || false;
+    }
+}
+const messageSeparator = ';';
+const validMessageSepCount = 7;
+const trueString = "1";
+const falseString = "0";
 function serializeMessage(msg) {
     if (msg.IsNative && isEmpty(msg.wait)) {
         return msg.Body;
     }
-    var isErrorString = falseString;
-    var isNoOpString = falseString;
-    var waitString = msg.wait || "";
-    var body = msg.Body || "";
+    let isErrorString = falseString;
+    let isNoOpString = falseString;
+    let waitString = msg.wait || "";
+    let body = msg.Body || "";
     if (msg.isError) {
         body = msg.Err;
         isErrorString = trueString;
@@ -90,7 +94,7 @@ function deserializeMessage(data, allowNativeMessages) {
         msg.isInvalid = true;
         return msg;
     }
-    var dts = data.split(messageSeparator, validMessageSepCount);
+    let dts = data.split(messageSeparator, validMessageSepCount);
     if (dts.length != validMessageSepCount) {
         if (!allowNativeMessages) {
             msg.isInvalid = true;
@@ -107,7 +111,7 @@ function deserializeMessage(data, allowNativeMessages) {
     msg.Event = dts[3];
     msg.isError = dts[4] == trueString || false;
     msg.isNoOp = dts[5] == trueString || false;
-    var body = dts[6];
+    let body = dts[6];
     if (!isEmpty(body)) {
         if (msg.isError) {
             msg.Err = body;
@@ -129,100 +133,154 @@ function isEmpty(s) {
     }
     return s.length == 0 || s == "";
 }
-var ErrInvalidPayload = "invalid payload";
+class NSConn {
+}
 // interface Events {
 //     "error": Event;
 //     "message": MessageEvent;
 //     "open": Event;
 // }
-var Ws = /** @class */ (function () {
+const ErrInvalidPayload = "invalid payload";
+class Ws {
     // // listeners.
     // private errorListeners: (err:string)
-    function Ws(endpoint, protocols) {
-        var _this = this;
+    constructor(endpoint, protocols) {
         if (!window["WebSocket"]) {
             return;
         }
         if (endpoint.indexOf("ws") == -1) {
             endpoint = "ws://" + endpoint;
         }
+        this.waitingMessages = new Map();
         this.conn = new WebSocket(endpoint, protocols);
         this.conn.binaryType = "arraybuffer";
-        this.conn.onerror = (function (evt) {
+        this.conn.onerror = ((evt) => {
             console.error("WebSocket error observed:", event);
         });
-        this.conn.onopen = (function (evt) {
+        this.conn.onopen = ((evt) => {
             console.log("WebSocket connected.");
-            var b = new Uint8Array(1);
-            b[0] = 1;
-            _this.conn.send(b.buffer);
+            // let b = new Uint8Array(1)
+            // b[0] = 1;
+            // this.conn.send(b.buffer);
+            this.conn.send(ackBinary);
             return null;
         });
-        this.conn.onclose = (function (evt) {
+        this.conn.onclose = ((evt) => {
             console.log("WebSocket disconnected.");
             return null;
         });
-        this.conn.onmessage = (function (evt) {
+        this.conn.onmessage = ((evt) => {
             console.log("WebSocket On Message.");
-            if (!_this.isAcknowledged) {
-                if (evt.data instanceof ArrayBuffer) {
-                    var errorText = _this.handleAck(new Uint8Array(evt.data));
-                    if (errorText == undefined) {
-                        _this.isAcknowledged = true;
-                        _this.handleQueue();
-                    }
-                    else {
-                        _this.conn.close();
-                        console.error(errorText);
-                    }
-                    return;
+            console.log(evt.data);
+            if (!this.isAcknowledged) {
+                // if (evt.data instanceof ArrayBuffer) {
+                // new Uint8Array(evt.data)
+                let errorText = this.handleAck(evt.data);
+                if (errorText == undefined) {
+                    this.isAcknowledged = true;
+                    this.handleQueue();
                 }
-                // let data = toWSData(evt.data)
-                _this.queue.push(evt.data);
+                else {
+                    this.conn.close();
+                    console.error(errorText);
+                }
                 return;
             }
-            // let data = toWSData(evt.data); 
-            console.log(evt.data);
-            var err = _this.handleMessage(evt.data);
+            let err = this.handleMessage(evt.data);
+            if (!isEmpty(err)) {
+                console.error(err); // TODO: remove this.
+            }
         });
     }
-    Ws.prototype.handleAck = function (data) {
-        var typ = data[0];
+    handleAck(data) {
+        let typ = data[0];
         switch (typ) {
             case ackIDBinary:
-                var id = dec.decode(data.slice(1));
+                // let id = dec.decode(data.slice(1));
+                let id = data.slice(1);
                 this.ID = id;
                 console.info("SET ID: ", id);
                 break;
             case ackNotOKBinary:
-                var errorText = dec.decode(data.slice(1));
+                // let errorText = dec.decode(data.slice(1));
+                let errorText = data.slice(1);
                 return errorText;
             default:
+                this.queue.push(data);
                 return "";
         }
-    };
-    Ws.prototype.handleQueue = function () {
-        var _this = this;
+    }
+    handleQueue() {
         if (this.queue == undefined || this.queue.length == 0) {
             return;
         }
-        this.queue.forEach(function (item, index) {
-            _this.queue.splice(index, 1);
-            _this.handleMessage(item);
+        this.queue.forEach((item, index) => {
+            this.queue.splice(index, 1);
+            this.handleMessage(item);
         });
-    };
-    Ws.prototype.handleMessage = function (data) {
-        var msg = deserializeMessage(data, this.allowNativeMessages);
+    }
+    handleMessage(data) {
+        let msg = deserializeMessage(data, this.allowNativeMessages);
         if (msg.isInvalid) {
             return ErrInvalidPayload;
         }
         console.info(msg);
         // TODO: ...
+        if (msg.isWait()) {
+            let cb = this.waitingMessages.get(msg.wait);
+            if (cb != undefined) {
+                cb(msg);
+                return;
+            }
+        }
+        switch (msg.Event) {
+            case OnNamespaceConnect:
+                break;
+            case OnNamespaceDisconnect:
+                break;
+            case OnRoomJoin:
+                break;
+            case OnRoomLeave:
+                break;
+            default:
+                // TODO: ...
+                // let err = call_the_event_here
+                let err = () => { };
+                if (err != undefined && err != null) {
+                    // write any error back to the server.
+                    let errorText;
+                    if (err instanceof Error) {
+                        errorText = err.message;
+                    }
+                    else if (err instanceof String) {
+                        errorText = err;
+                    }
+                    msg.Err = errorText;
+                    this.Write(msg);
+                    return errorText;
+                }
+        }
         // it's a native websocket message
         // this.handleNativeMessage(data);
-    };
-    Ws.prototype.handleNativeMessage = function (data) {
+    }
+    handleNativeMessage(data) {
         // console.log(data);
-    };
-    return Ws;
-}());
+    }
+    IsClosed() {
+        return this.conn.readyState == 3 || false;
+    }
+    Write(msg) {
+        if (this.IsClosed()) {
+            return false;
+        }
+        if (!msg.isConnect() && !msg.isDisconnect()) {
+            // TODO: checks...
+        }
+        let send = serializeMessage(msg);
+        console.info("writing: ", send);
+        this.write(send);
+    }
+    write(data) {
+        this.conn.send(data);
+    }
+}

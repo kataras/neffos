@@ -112,14 +112,14 @@ func (c *Conn) isAcknowledged() bool {
 }
 
 const (
-	ackBinary      = byte(0x1) // comes from client to server at startup. // []byte("ack")
-	ackIDBinary    = byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
-	ackOKBinary    = byte(0x3) // comes from client to server when id received and set-ed. // []byte("ack_ok")
-	ackNotOKBinary = byte(0x4) // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text. // []byte("ack_err")
+	ackBinary      = 'M' // byte(0x1) // comes from client to server at startup.
+	ackIDBinary    = 'A' // byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
+	ackOKBinary    = 'K' // byte(0x3) // comes from client to server when id received and set-ed.
+	ackNotOKBinary = 'H' // byte(0x4) // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 )
 
 func (c *Conn) sendClientACK() error {
-	ok := c.write([]byte{ackBinary}, true)
+	ok := c.write([]byte{ackBinary}, false)
 	if !ok {
 		c.Close()
 		return ErrWrite
@@ -171,14 +171,14 @@ func (c *Conn) handleACK(b []byte) bool {
 		err := c.readiness.wait()
 		if err != nil {
 			// it's not Ok, send error which client's Dial should return.
-			c.write(append([]byte{ackNotOKBinary}, []byte(err.Error())...), true)
+			c.write(append([]byte{ackNotOKBinary}, []byte(err.Error())...), false)
 			return false
 		}
 		atomic.StoreUint32(c.acknowledged, 1)
 		c.handleQueue()
 
 		// it's ok send ID.
-		return c.write(append([]byte{ackIDBinary}, []byte(c.id)...), true)
+		return c.write(append([]byte{ackIDBinary}, []byte(c.id)...), false)
 
 	// case ackOKBinary:
 	// 	// from client to server.
