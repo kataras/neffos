@@ -43,10 +43,8 @@ const ackBinary = 'M'; // see `onopen`, comes from client to server at startup.
 const ackIDBinary = 'A';// comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
 const ackNotOKBinary = 'H'; // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 
-
 const waitIsConfirmationPrefix = '#';
 const waitComesFromClientPrefix = '$';
-
 
 function IsSystemEvent(event: string): boolean {
     switch (event) {
@@ -64,7 +62,7 @@ function IsSystemEvent(event: string): boolean {
 }
 
 function isEmpty(s: string): boolean {
-    if (s == undefined) {
+    if (s === undefined) {
         return true
     }
 
@@ -223,15 +221,21 @@ class NSConn {
     // TODO: ...
 }
 
+
+
 type MessageHandlerFunc = (c: NSConn, msg: Message) => Error;
-type Events = Map<string, MessageHandlerFunc>;
+
+// type Namespaces = Map<string, Events>;
+// type Events = Map<string, MessageHandlerFunc>;
 
 
-// interface Events {
-//     "error": Event;
-//     "message": MessageEvent;
-//     "open": Event;
-// }
+interface Events {
+    [key: string]: MessageHandlerFunc;
+}
+
+interface Namespaces {
+    [key: string]: Events;
+}
 
 const ErrInvalidPayload = "invalid payload";
 
@@ -249,11 +253,12 @@ class Ws {
 
     private queue: WSData[];
     private waitingMessages: Map<string, waitingMessageFunc>;
+    private namespaces: Namespaces;
 
     // // listeners.
     // private errorListeners: (err:string)
 
-    constructor(endpoint: string, protocols?: string[]) {
+    constructor(endpoint: string, connHandler: Namespaces, protocols?: string[]) {
         if (!window["WebSocket"]) {
             return;
         }
@@ -261,6 +266,26 @@ class Ws {
         if (endpoint.indexOf("ws") == -1) {
             endpoint = "ws://" + endpoint;
         }
+
+        if (connHandler === undefined) {
+            return;
+        }
+
+        this.namespaces = connHandler;
+
+        // for (var key in connHandler) {
+        //     if (connHandler.hasOwnProperty(key)) {
+        //         console.log(key + " namespace has events of: ");
+        //         let events = connHandler[key];
+        //         for (var key in events) {
+        //             if (events.hasOwnProperty(key)) {
+        //                 console.log(key + " with callback: " + events[key]);
+        //             }
+        //         }
+        //     }
+        // }
+
+        console.log(this.namespaces);
 
         this.waitingMessages = new Map<string, waitingMessageFunc>();
 

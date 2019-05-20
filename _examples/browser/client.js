@@ -29,6 +29,12 @@ function IsSystemEvent(event) {
             return false;
     }
 }
+function isEmpty(s) {
+    if (s === undefined) {
+        return true;
+    }
+    return s.length == 0 || s == "";
+}
 class Message {
     isConnect() {
         return this.Event == OnNamespaceConnect || false;
@@ -127,30 +133,55 @@ function deserializeMessage(data, allowNativeMessages) {
     // msg.SetBinary = false;
     return msg;
 }
-function isEmpty(s) {
-    if (s == undefined) {
-        return true;
-    }
-    return s.length == 0 || s == "";
+function genWait() {
+    let now = window.performance.now();
+    return waitIsConfirmationPrefix + now.toString();
+}
+function genWaitConfirmation(wait) {
+    return waitIsConfirmationPrefix + wait;
 }
 class NSConn {
 }
-// interface Events {
-//     "error": Event;
-//     "message": MessageEvent;
-//     "open": Event;
-// }
 const ErrInvalidPayload = "invalid payload";
 class Ws {
     // // listeners.
     // private errorListeners: (err:string)
-    constructor(endpoint, protocols) {
+    constructor(endpoint, connHandler, protocols) {
         if (!window["WebSocket"]) {
             return;
         }
         if (endpoint.indexOf("ws") == -1) {
             endpoint = "ws://" + endpoint;
         }
+        if (connHandler === undefined) {
+            return;
+        }
+        // if (determineIfEvents(connHandler)) {
+        //     this.namespaces = new Map<string, Events>();
+        //     this.namespaces.set("", connHandler as Events);
+        // } else {
+        //     this.namespaces = connHandler;
+        // }
+        this.namespaces = connHandler;
+        // Object.keys(this.namespaces).forEach(function (key) {
+        //     console.log(key + " namespace has events of: ");
+        //     let events = this.namespaces[key];
+        //     Object.keys(events).forEach(function(key2){
+        //         console.log(key2+ " with callback: "+ events[key2]);
+        //     });
+        //   });
+        for (var key in connHandler) {
+            if (connHandler.hasOwnProperty(key)) {
+                console.log(key + " namespace has events of: ");
+                let events = connHandler[key];
+                for (var key in events) {
+                    if (events.hasOwnProperty(key)) {
+                        console.log(key + " with callback: " + events[key]);
+                    }
+                }
+            }
+        }
+        console.log(this.namespaces);
         this.waitingMessages = new Map();
         this.conn = new WebSocket(endpoint, protocols);
         this.conn.binaryType = "arraybuffer";

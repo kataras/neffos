@@ -18,7 +18,25 @@
   var input = document.getElementById("input");
   var output = document.getElementById("output");
 
-  var socket = new Ws(wsURL);
+  // var socket = new Ws(
+  //   wsURL,
+  //   new Map([
+  //     [
+  //       "chat",
+  //       function(c, msg) {
+  //         // ...
+  //       }
+  //     ]
+  //   ])
+  // );
+
+  var socket = new Ws(wsURL, {
+    default: {
+      chat: function(c, msg) {
+        console.log("on chat: " + msg.Body);
+      }
+    }
+  });
 
   function send() {
     addMessage("Me: " + input.value); // write ourselves
