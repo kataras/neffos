@@ -20,8 +20,14 @@
 
   var socket = new Ws(wsURL, {
     default: {
+      _OnNamespaceConnected: function(c, msg) {
+        console.info("connected to ", msg.Namespace);
+      },
+      _OnNamespaceDisconnect: function(c, msg) {
+        console.info("disconnected from ", msg.Namespace);
+      },
       chat: function(c, msg) {
-        console.log("on chat: " + msg.Body);
+        console.info("on chat: " + msg.Body);
       }
     }
   });

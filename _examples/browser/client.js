@@ -30,10 +30,20 @@ function IsSystemEvent(event) {
     }
 }
 function isEmpty(s) {
+    // if (s === undefined) {
+    //     return true
+    // }
+    // return s.length == 0 || s == "";
     if (s === undefined) {
         return true;
     }
-    return s.length == 0 || s == "";
+    if (s === null) {
+        return true;
+    }
+    if (typeof s === 'string' || s instanceof String) {
+        return s.length === 0 || s === "";
+    }
+    return false;
 }
 class Message {
     isConnect() {
@@ -143,7 +153,30 @@ function genWaitConfirmation(wait) {
 function genEmptyReplyToWait(wait) {
     return wait + messageSeparator.repeat(validMessageSepCount - 1);
 }
+class Room {
+}
 class NSConn {
+    // TODO: ...
+    constructor(conn, namespace, events) {
+        this.Conn = conn;
+        this.namespace = namespace;
+        this.events = events;
+    }
+    forceLeaveAll(isLocal) {
+        let leaveMsg = new Message();
+        leaveMsg.Namespace = this.namespace;
+        leaveMsg.Event = OnRoomLeave;
+        leaveMsg.IsForced = true;
+        leaveMsg.IsLocal = isLocal;
+        for (const room in this.rooms) {
+            leaveMsg.Room = room;
+            fireEvent(this.events, this, leaveMsg);
+            this.rooms.delete(room);
+            leaveMsg.Event = OnRoomLeft;
+            fireEvent(this.events, this, leaveMsg);
+            leaveMsg.Event = OnRoomLeave;
+        }
+    }
 }
 function fireEvent(events, ns, msg) {
     // let found = false;
@@ -267,7 +300,10 @@ class Ws {
             return ErrInvalidPayload;
         }
         console.info(msg);
-        // TODO: ...
+        if (msg.IsNative && this.allowNativeMessages) {
+            let ns = this.Namespace("");
+            return fireEvent(ns.events, ns, msg).message;
+        }
         if (msg.isWait()) {
             let cb = this.waitingMessages.get(msg.wait);
             if (cb != undefined) {
@@ -280,31 +316,29 @@ class Ws {
                 this.replyConnect(msg);
                 break;
             case OnNamespaceDisconnect:
+                this.replyDisconnect(msg);
                 break;
             case OnRoomJoin:
                 break;
             case OnRoomLeave:
                 break;
             default:
-                // TODO: ...
-                // let err = call_the_event_here
-                let err = () => { };
-                if (err != undefined && err != null) {
+                let ns = this.Namespace(msg.Namespace);
+                if (ns === undefined) {
+                    return ErrBadNamespace;
+                }
+                msg.IsLocal = false;
+                let err = fireEvent(ns.events, ns, msg);
+                if (!isEmpty(err)) {
                     // write any error back to the server.
-                    let errorText;
-                    if (err instanceof Error) {
-                        errorText = err.message;
-                    }
-                    else if (err instanceof String) {
-                        errorText = err;
-                    }
-                    msg.Err = errorText;
+                    msg.Err = err.message;
                     this.Write(msg);
-                    return errorText;
+                    return err.message;
                 }
         }
         // it's a native websocket message
         // this.handleNativeMessage(data);
+        return "";
     }
     handleNativeMessage(data) {
         // console.log(data);
@@ -327,7 +361,25 @@ class Ws {
             this.Write(msg);
             return;
         }
-        // TODO: create new ns, fire event(on connect), write empty reply for wait and fire on connected and return.
+        ns = new NSConn(this, msg.Namespace, events);
+        this.connectedNamespaces.set(msg.Namespace, ns);
+        this.writeEmptyReply(msg.wait);
+        msg.Event = OnNamespaceConnected;
+        fireEvent(ns.events, ns, msg);
+    }
+    replyDisconnect(msg) {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+        let ns = this.Namespace(msg.Namespace);
+        if (ns === undefined) {
+            this.writeEmptyReply(msg.wait);
+            return;
+        }
+        ns.forceLeaveAll(true);
+        this.connectedNamespaces.delete(msg.Namespace);
+        this.writeEmptyReply(msg.wait);
+        fireEvent(ns.events, ns, msg);
     }
     IsClosed() {
         return this.conn.readyState == 3 || false;
@@ -339,11 +391,10 @@ class Ws {
         if (!msg.isConnect() && !msg.isDisconnect()) {
             // TODO: checks...
         }
-        let send = serializeMessage(msg);
-        console.info("writing: ", send);
-        this.write(send);
+        this.write(serializeMessage(msg));
     }
     write(data) {
+        console.info("writing: ", data);
         this.conn.send(data);
     }
     writeEmptyReply(wait) {

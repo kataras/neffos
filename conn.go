@@ -232,7 +232,7 @@ func (c *Conn) handleMessage(b []byte) error {
 		return ErrInvalidPayload
 	}
 
-	if msg.IsNative {
+	if msg.IsNative && c.allowNativeMessages {
 		ns := c.Namespace("")
 		return ns.events.fireEvent(ns, msg)
 	}

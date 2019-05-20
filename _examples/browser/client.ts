@@ -61,12 +61,26 @@ function IsSystemEvent(event: string): boolean {
     }
 }
 
-function isEmpty(s: string): boolean {
+function isEmpty(s: any): boolean {
+    // if (s === undefined) {
+    //     return true
+    // }
+
+    // return s.length == 0 || s == "";
+
     if (s === undefined) {
         return true
     }
 
-    return s.length == 0 || s == "";
+    if (s === null) {
+        return true
+    }
+
+    if (typeof s === 'string' || s instanceof String) {
+        return s.length === 0 || s === "";
+    }
+
+    return false;
 }
 
 class Message {
@@ -221,10 +235,43 @@ function genEmptyReplyToWait(wait: string): string {
     return wait + messageSeparator.repeat(validMessageSepCount - 1);
 }
 
-class NSConn {
+class Room {
     // TODO: ...
 }
 
+class NSConn {
+    Conn: Ws;
+    namespace: string;
+    events: Events;
+    rooms: Map<string, Room>;
+    // TODO: ...
+
+    constructor(conn: Ws, namespace: string, events: Events) {
+        this.Conn = conn;
+        this.namespace = namespace;
+        this.events = events;
+    }
+
+    forceLeaveAll(isLocal: boolean) {
+        let leaveMsg = new Message();
+        leaveMsg.Namespace = this.namespace;
+        leaveMsg.Event = OnRoomLeave;
+        leaveMsg.IsForced = true;
+        leaveMsg.IsLocal = isLocal;
+
+        for (const room in this.rooms) {
+            leaveMsg.Room = room;
+            fireEvent(this.events, this, leaveMsg);
+
+            this.rooms.delete(room);
+
+            leaveMsg.Event = OnRoomLeft;
+            fireEvent(this.events, this, leaveMsg);
+
+            leaveMsg.Event = OnRoomLeave;
+        }
+    }
+}
 
 
 type MessageHandlerFunc = (c: NSConn, msg: Message) => Error;
@@ -406,7 +453,11 @@ class Ws {
 
         console.info(msg);
 
-        // TODO: ...
+
+        if (msg.IsNative && this.allowNativeMessages) {
+            let ns = this.Namespace("")
+            return fireEvent(ns.events, ns, msg).message;
+        }
 
         if (msg.isWait()) {
             let cb = this.waitingMessages.get(msg.wait);
@@ -421,6 +472,7 @@ class Ws {
                 this.replyConnect(msg);
                 break;
             case OnNamespaceDisconnect:
+                this.replyDisconnect(msg);
                 break;
             case OnRoomJoin:
                 break;
@@ -428,27 +480,23 @@ class Ws {
                 break;
             default:
 
-                // TODO: ...
-                // let err = call_the_event_here
-                let err = () => { };
-                if (err != undefined && err != null) {
-                    // write any error back to the server.
-                    let errorText;
-                    if (err instanceof Error) {
-                        errorText = err.message;
-                    } else if (err instanceof String) {
-                        errorText = err;
-                    }
-
-                    msg.Err = errorText;
-                    this.Write(msg);
-                    return errorText;
+                let ns = this.Namespace(msg.Namespace);
+                if (ns === undefined) {
+                    return ErrBadNamespace;
                 }
-
+                msg.IsLocal = false;
+                let err = fireEvent(ns.events, ns, msg);
+                if (!isEmpty(err)) {
+                    // write any error back to the server.
+                    msg.Err = err.message;
+                    this.Write(msg);
+                    return err.message;
+                }
         }
 
         // it's a native websocket message
         // this.handleNativeMessage(data);
+        return "";
     }
 
     private handleNativeMessage(data: WSData): void {
@@ -465,11 +513,13 @@ class Ws {
             return;
         }
 
+
         let ns = this.Namespace(msg.Namespace);
         if (ns !== undefined) {
             this.writeEmptyReply(msg.wait);
             return;
         }
+
 
         let events = getEvents(this.namespaces, msg.Namespace)
         if (events === undefined) {
@@ -478,7 +528,33 @@ class Ws {
             return;
         }
 
-        // TODO: create new ns, fire event(on connect), write empty reply for wait and fire on connected and return.
+        ns = new NSConn(this, msg.Namespace, events);
+
+        this.connectedNamespaces.set(msg.Namespace, ns);
+        this.writeEmptyReply(msg.wait);
+
+        msg.Event = OnNamespaceConnected;
+        fireEvent(ns.events, ns, msg);
+    }
+
+    private replyDisconnect(msg: Message): void {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+
+        let ns = this.Namespace(msg.Namespace);
+        if (ns === undefined) {
+            this.writeEmptyReply(msg.wait);
+            return;
+        }
+
+        ns.forceLeaveAll(true);
+
+        this.connectedNamespaces.delete(msg.Namespace);
+
+        this.writeEmptyReply(msg.wait);
+
+        fireEvent(ns.events, ns, msg);
     }
 
     IsClosed(): boolean {
@@ -494,12 +570,11 @@ class Ws {
             // TODO: checks...
         }
 
-        let send = serializeMessage(msg);
-        console.info("writing: ", send);
-        this.write(send);
+        this.write(serializeMessage(msg));
     }
 
     private write(data: any) {
+        console.info("writing: ", data);
         this.conn.send(data)
     }
 
