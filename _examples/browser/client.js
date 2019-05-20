@@ -1,5 +1,5 @@
 // start of javascript-based client.
-// tsc --target es6 --outDir ./_examples/browser client.ts
+// tsc --target es6 client.ts
 const OnNamespaceConnect = "_OnNamespaceConnect";
 const OnNamespaceConnected = "_OnNamespaceConnected";
 const OnNamespaceDisconnect = "_OnNamespaceDisconnect";
@@ -140,9 +140,44 @@ function genWait() {
 function genWaitConfirmation(wait) {
     return waitIsConfirmationPrefix + wait;
 }
+function genEmptyReplyToWait(wait) {
+    return wait + messageSeparator.repeat(validMessageSepCount - 1);
+}
 class NSConn {
 }
+function fireEvent(events, ns, msg) {
+    // let found = false;
+    // let hasOnAnyEvent = false;
+    // for (var key in events) {
+    //     if (key === OnAnyEvent) {
+    //         hasOnAnyEvent = true;
+    //     }
+    //     if (key !== msg.Event) {
+    //         continue;
+    //     }
+    //     found = true
+    //     let cb = events[key];
+    //     return cb(ns, msg)
+    // }
+    // if (!found && hasOnAnyEvent) {
+    //     return events[OnAnyEvent](ns, msg)
+    // }
+    if (events.hasOwnProperty(msg.Event)) {
+        return events[msg.Event](ns, msg);
+    }
+    if (events.hasOwnProperty(OnAnyEvent)) {
+        return events[OnAnyEvent](ns, msg);
+    }
+    return null;
+}
+function getEvents(namespaces, namespace) {
+    if (namespaces.hasOwnProperty(namespace)) {
+        return namespaces[namespace];
+    }
+    return null;
+}
 const ErrInvalidPayload = "invalid payload";
+const ErrBadNamespace = "bad namespace";
 class Ws {
     // // listeners.
     // private errorListeners: (err:string)
@@ -156,32 +191,8 @@ class Ws {
         if (connHandler === undefined) {
             return;
         }
-        // if (determineIfEvents(connHandler)) {
-        //     this.namespaces = new Map<string, Events>();
-        //     this.namespaces.set("", connHandler as Events);
-        // } else {
-        //     this.namespaces = connHandler;
-        // }
         this.namespaces = connHandler;
-        // Object.keys(this.namespaces).forEach(function (key) {
-        //     console.log(key + " namespace has events of: ");
-        //     let events = this.namespaces[key];
-        //     Object.keys(events).forEach(function(key2){
-        //         console.log(key2+ " with callback: "+ events[key2]);
-        //     });
-        //   });
-        for (var key in connHandler) {
-            if (connHandler.hasOwnProperty(key)) {
-                console.log(key + " namespace has events of: ");
-                let events = connHandler[key];
-                for (var key in events) {
-                    if (events.hasOwnProperty(key)) {
-                        console.log(key + " with callback: " + events[key]);
-                    }
-                }
-            }
-        }
-        console.log(this.namespaces);
+        this.connectedNamespaces = new Map();
         this.waitingMessages = new Map();
         this.conn = new WebSocket(endpoint, protocols);
         this.conn.binaryType = "arraybuffer";
@@ -266,6 +277,7 @@ class Ws {
         }
         switch (msg.Event) {
             case OnNamespaceConnect:
+                this.replyConnect(msg);
                 break;
             case OnNamespaceDisconnect:
                 break;
@@ -297,6 +309,26 @@ class Ws {
     handleNativeMessage(data) {
         // console.log(data);
     }
+    Namespace(namespace) {
+        return this.connectedNamespaces.get(namespace);
+    }
+    replyConnect(msg) {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+        let ns = this.Namespace(msg.Namespace);
+        if (ns !== undefined) {
+            this.writeEmptyReply(msg.wait);
+            return;
+        }
+        let events = getEvents(this.namespaces, msg.Namespace);
+        if (events === undefined) {
+            msg.Err = ErrBadNamespace;
+            this.Write(msg);
+            return;
+        }
+        // TODO: create new ns, fire event(on connect), write empty reply for wait and fire on connected and return.
+    }
     IsClosed() {
         return this.conn.readyState == 3 || false;
     }
@@ -313,5 +345,8 @@ class Ws {
     }
     write(data) {
         this.conn.send(data);
+    }
+    writeEmptyReply(wait) {
+        this.write(genEmptyReplyToWait(wait));
     }
 }

@@ -217,6 +217,10 @@ function genWaitConfirmation(wait: string): string {
     return waitIsConfirmationPrefix + wait;
 }
 
+function genEmptyReplyToWait(wait: string): string {
+    return wait + messageSeparator.repeat(validMessageSepCount - 1);
+}
+
 class NSConn {
     // TODO: ...
 }
@@ -233,11 +237,51 @@ interface Events {
     [key: string]: MessageHandlerFunc;
 }
 
+function fireEvent(events: Events, ns: NSConn, msg: Message): Error {
+    // let found = false;
+    // let hasOnAnyEvent = false;
+    // for (var key in events) {
+    //     if (key === OnAnyEvent) {
+    //         hasOnAnyEvent = true;
+    //     }
+
+    //     if (key !== msg.Event) {
+    //         continue;
+    //     }
+    //     found = true
+    //     let cb = events[key];
+    //     return cb(ns, msg)
+    // }
+
+    // if (!found && hasOnAnyEvent) {
+    //     return events[OnAnyEvent](ns, msg)
+    // }
+
+    if (events.hasOwnProperty(msg.Event)) {
+        return events[msg.Event](ns, msg);
+    }
+
+    if (events.hasOwnProperty(OnAnyEvent)) {
+        return events[OnAnyEvent](ns, msg);
+    }
+
+    return null;
+}
+
 interface Namespaces {
     [key: string]: Events;
 }
 
+function getEvents(namespaces: Namespaces, namespace: string): Events {
+    if (namespaces.hasOwnProperty(namespace)) {
+        return namespaces[namespace];
+    }
+
+    return null;
+}
+
 const ErrInvalidPayload = "invalid payload";
+const ErrBadNamespace = "bad namespace"
 
 type waitingMessageFunc = (msg: Message) => void;
 
@@ -254,6 +298,7 @@ class Ws {
     private queue: WSData[];
     private waitingMessages: Map<string, waitingMessageFunc>;
     private namespaces: Namespaces;
+    private connectedNamespaces: Map<string, NSConn>;
 
     // // listeners.
     // private errorListeners: (err:string)
@@ -272,20 +317,7 @@ class Ws {
         }
 
         this.namespaces = connHandler;
-
-        // for (var key in connHandler) {
-        //     if (connHandler.hasOwnProperty(key)) {
-        //         console.log(key + " namespace has events of: ");
-        //         let events = connHandler[key];
-        //         for (var key in events) {
-        //             if (events.hasOwnProperty(key)) {
-        //                 console.log(key + " with callback: " + events[key]);
-        //             }
-        //         }
-        //     }
-        // }
-
-        console.log(this.namespaces);
+        this.connectedNamespaces = new Map<string, NSConn>();
 
         this.waitingMessages = new Map<string, waitingMessageFunc>();
 
@@ -386,6 +418,7 @@ class Ws {
 
         switch (msg.Event) {
             case OnNamespaceConnect:
+                this.replyConnect(msg);
                 break;
             case OnNamespaceDisconnect:
                 break;
@@ -422,6 +455,32 @@ class Ws {
         // console.log(data);
     }
 
+    Namespace(namespace: string): NSConn {
+        return this.connectedNamespaces.get(namespace)
+    }
+
+
+    private replyConnect(msg: Message): void {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+
+        let ns = this.Namespace(msg.Namespace);
+        if (ns !== undefined) {
+            this.writeEmptyReply(msg.wait);
+            return;
+        }
+
+        let events = getEvents(this.namespaces, msg.Namespace)
+        if (events === undefined) {
+            msg.Err = ErrBadNamespace;
+            this.Write(msg);
+            return;
+        }
+
+        // TODO: create new ns, fire event(on connect), write empty reply for wait and fire on connected and return.
+    }
+
     IsClosed(): boolean {
         return this.conn.readyState == 3 || false;
     }
@@ -443,5 +502,8 @@ class Ws {
     private write(data: any) {
         this.conn.send(data)
     }
-}
 
+    private writeEmptyReply(wait: string): void {
+        this.write(genEmptyReplyToWait(wait));
+    }
+}
