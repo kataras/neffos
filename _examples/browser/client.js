@@ -176,6 +176,26 @@ class NSConn {
         this.namespace = namespace;
         this.events = events;
     }
+    Emit(event, body) {
+        let msg = new Message();
+        msg.Namespace = this.namespace;
+        msg.Event = event;
+        msg.Body = body;
+        return this.Conn.Write(msg);
+    }
+    Ask(event, body) {
+        let msg = new Message();
+        msg.Namespace = this.namespace;
+        msg.Event = event;
+        msg.Body = body;
+        return this.Conn.Ask(msg);
+    }
+    Disconnect() {
+        let disconnectMsg = new Message();
+        disconnectMsg.Namespace = this.namespace;
+        disconnectMsg.Event = OnNamespaceDisconnect;
+        return this.Conn.askDisconnect(disconnectMsg);
+    }
     forceLeaveAll(isLocal) {
         let leaveMsg = new Message();
         leaveMsg.Namespace = this.namespace;
@@ -184,15 +204,15 @@ class NSConn {
         leaveMsg.IsLocal = isLocal;
         for (const room in this.rooms) {
             leaveMsg.Room = room;
-            fireEvent(this.events, this, leaveMsg);
+            fireEvent(this, leaveMsg);
             this.rooms.delete(room);
             leaveMsg.Event = OnRoomLeft;
-            fireEvent(this.events, this, leaveMsg);
+            fireEvent(this, leaveMsg);
             leaveMsg.Event = OnRoomLeave;
         }
     }
 }
-function fireEvent(events, ns, msg) {
+function fireEvent(ns, msg) {
     // let found = false;
     // let hasOnAnyEvent = false;
     // for (var key in events) {
@@ -209,11 +229,11 @@ function fireEvent(events, ns, msg) {
     // if (!found && hasOnAnyEvent) {
     //     return events[OnAnyEvent](ns, msg)
     // }
-    if (events.hasOwnProperty(msg.Event)) {
-        return events[msg.Event](ns, msg);
+    if (ns.events.hasOwnProperty(msg.Event)) {
+        return ns.events[msg.Event](ns, msg);
     }
-    if (events.hasOwnProperty(OnAnyEvent)) {
-        return events[OnAnyEvent](ns, msg);
+    if (ns.events.hasOwnProperty(OnAnyEvent)) {
+        return ns.events[OnAnyEvent](ns, msg);
     }
     return null;
 }
@@ -352,7 +372,7 @@ class Ws {
         console.info(msg);
         if (msg.IsNative && this.allowNativeMessages) {
             let ns = this.Namespace("");
-            return fireEvent(ns.events, ns, msg);
+            return fireEvent(ns, msg);
         }
         if (msg.isWait()) {
             let cb = this.waitingMessages.get(msg.wait);
@@ -373,13 +393,13 @@ class Ws {
             case OnRoomLeave:
                 break;
             default:
-                this.checkWaitForNamespace(msg.Namespace);
+                // this.checkWaitForNamespace(msg.Namespace);
                 let ns = this.Namespace(msg.Namespace);
                 if (ns === undefined) {
                     return ErrBadNamespace;
                 }
                 msg.IsLocal = false;
-                let err = fireEvent(ns.events, ns, msg);
+                let err = fireEvent(ns, msg);
                 if (!isEmpty(err)) {
                     // write any error back to the server.
                     msg.Err = err.message;
@@ -417,7 +437,7 @@ class Ws {
         this.connectedNamespaces.set(msg.Namespace, ns);
         this.writeEmptyReply(msg.wait);
         msg.Event = OnNamespaceConnected;
-        fireEvent(ns.events, ns, msg);
+        fireEvent(ns, msg);
     }
     replyDisconnect(msg) {
         if (isEmpty(msg.wait) || msg.isNoOp) {
@@ -431,7 +451,7 @@ class Ws {
         ns.forceLeaveAll(true);
         this.connectedNamespaces.delete(msg.Namespace);
         this.writeEmptyReply(msg.wait);
-        fireEvent(ns.events, ns, msg);
+        fireEvent(ns, msg);
     }
     Ask(msg) {
         return new Promise((resolve, reject) => {
@@ -462,13 +482,12 @@ class Ws {
             this.isConnectingProcesseses.splice(idx, 1);
         }
     }
-    checkWaitForNamespace(namespace) {
-        return __awaiter(this, void 0, void 0, function* () {
-            for (; this.hasConnectProcess(namespace);) {
-                yield sleep(1000); // wait 1 second before the loop circle.
-            }
-        });
-    }
+    // no...
+    // private async checkWaitForNamespace(namespace: string) {
+    //     for (; this.hasConnectProcess(namespace);) {
+    //         await sleep(1000); // wait 1 second before the loop circle.
+    //     }
+    // }
     hasConnectProcess(namespace) {
         let idx = this.isConnectingProcesseses.findIndex((value, index, obj) => { return value === namespace || false; });
         return idx !== -1;
@@ -490,42 +509,57 @@ class Ws {
             connectMessage.IsLocal = true;
             this.isConnectingProcesseses.push(namespace);
             ns = new NSConn(this, namespace, events);
-            let err = fireEvent(events, ns, connectMessage);
+            let err = fireEvent(ns, connectMessage);
             if (!isEmpty(err)) {
                 this.removeConnectProcess(namespace);
                 return err;
             }
-            let replyOrErr = yield this.Ask(connectMessage);
-            if (replyOrErr instanceof Error) {
-                return replyOrErr;
+            try {
+                yield this.Ask(connectMessage);
+            }
+            catch (err) {
+                return err;
             }
             this.connectedNamespaces.set(namespace, ns);
             connectMessage.Event = OnNamespaceConnected;
-            fireEvent(events, ns, connectMessage);
+            fireEvent(ns, connectMessage);
             this.removeConnectProcess(namespace);
             return ns;
         });
     }
     askDisconnect(msg) {
-        return null;
+        return __awaiter(this, void 0, void 0, function* () {
+            let ns = this.Namespace(msg.Namespace);
+            if (ns === undefined) { // it's already connected.
+                return ErrBadNamespace;
+            }
+            try {
+                yield this.Ask(msg);
+            }
+            catch (err) {
+                return err;
+            }
+            ns.forceLeaveAll(true);
+            this.connectedNamespaces.delete(msg.Namespace);
+            msg.IsLocal = true;
+            return fireEvent(ns, msg);
+        });
     }
     IsClosed() {
         return this.conn.readyState == 3 || false;
     }
     Write(msg) {
-        return __awaiter(this, void 0, void 0, function* () {
-            if (this.IsClosed()) {
-                return false;
-            }
-            for (; this.conn.readyState === this.conn.CONNECTING;) {
-                yield sleep(250);
-            }
-            if (!msg.isConnect() && !msg.isDisconnect()) {
-                // TODO: checks...
-            }
-            this.write(serializeMessage(msg));
-            return true;
-        });
+        if (this.IsClosed()) {
+            return false;
+        }
+        // for (; this.conn.readyState === this.conn.CONNECTING;) {
+        //     await sleep(250);
+        // }
+        if (!msg.isConnect() && !msg.isDisconnect()) {
+            // TODO: checks...
+        }
+        this.write(serializeMessage(msg));
+        return true;
     }
     write(data) {
         console.info("writing: ", data);

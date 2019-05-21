@@ -2,7 +2,7 @@
 <input id="input" type="text" />
 
 <!-- when clicked then a websocket event will be sent to the server, at this example we registered the 'chat' -->
-<button onclick="send()">Send</button>
+<button id="sendBtn" disabled>Send</button>
 
 <!-- the messages will be shown here -->
 <pre id="output"></pre>
@@ -21,19 +21,33 @@
   async function runExample() {
     let ws = await Dial(wsURL, {
       default: {
-        _OnNamespaceConnected: function(c, msg) {
-          console.info("connected to ", msg.Namespace);
+        _OnNamespaceConnected: function(ns, msg) {
+          addMessage("connected to namespace: "+msg.Namespace);
         },
-        _OnNamespaceDisconnect: function(c, msg) {
-          console.info("disconnected from ", msg.Namespace);
+        _OnNamespaceDisconnect: function(ns, msg) {
+          addMessage("disconnected from namespace: "+msg.Namespace);
         },
-        chat: function(c, msg) {
-          console.info("on chat: " + msg.Body);
+        chat: function(ns, msg) {
+          addMessage(msg.Body);
         }
       }
     });
 
-    await ws.Connect("default");
+    try {
+      let ns = await ws.Connect("default");
+
+      let inputTxt = document.getElementById("input");
+      let sendBtn = document.getElementById("sendBtn");
+
+      sendBtn.disabled = false;
+      sendBtn.onclick = function() {
+        ns.Emit("chat", inputTxt.value);
+        addMessage("Me: " + input.value);
+        inputTxt.value = "";
+      };
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   runExample();
@@ -57,12 +71,6 @@
   //   .catch(function(err) {
   //     console.error("WebSocket error observed:", err);
   //   });
-
-  function send() {
-    addMessage("Me: " + input.value); // write ourselves
-    // TODO: send here.
-    input.value = ""; // clear the input
-  }
 
   function addMessage(msg) {
     output.innerHTML += msg + "\n";

@@ -260,6 +260,29 @@ class NSConn {
         this.events = events;
     }
 
+    Emit(event: string, body: WSData): boolean {
+        let msg = new Message();
+        msg.Namespace = this.namespace;
+        msg.Event = event;
+        msg.Body = body;
+        return this.Conn.Write(msg);
+    }
+
+    Ask(event: string, body: WSData): Promise<Message | Error> {
+        let msg = new Message();
+        msg.Namespace = this.namespace;
+        msg.Event = event;
+        msg.Body = body;
+        return this.Conn.Ask(msg);
+    }
+
+    Disconnect(): Promise<Error> {
+        let disconnectMsg = new Message();
+        disconnectMsg.Namespace = this.namespace;
+        disconnectMsg.Event = OnNamespaceDisconnect;
+        return this.Conn.askDisconnect(disconnectMsg);
+    }
+
     forceLeaveAll(isLocal: boolean) {
         let leaveMsg = new Message();
         leaveMsg.Namespace = this.namespace;
@@ -269,12 +292,12 @@ class NSConn {
 
         for (const room in this.rooms) {
             leaveMsg.Room = room;
-            fireEvent(this.events, this, leaveMsg);
+            fireEvent(this, leaveMsg);
 
             this.rooms.delete(room);
 
             leaveMsg.Event = OnRoomLeft;
-            fireEvent(this.events, this, leaveMsg);
+            fireEvent(this, leaveMsg);
 
             leaveMsg.Event = OnRoomLeave;
         }
@@ -292,7 +315,7 @@ interface Events {
     [key: string]: MessageHandlerFunc;
 }
 
-function fireEvent(events: Events, ns: NSConn, msg: Message): Error {
+function fireEvent(ns: NSConn, msg: Message): Error {
     // let found = false;
     // let hasOnAnyEvent = false;
     // for (var key in events) {
@@ -312,12 +335,12 @@ function fireEvent(events: Events, ns: NSConn, msg: Message): Error {
     //     return events[OnAnyEvent](ns, msg)
     // }
 
-    if (events.hasOwnProperty(msg.Event)) {
-        return events[msg.Event](ns, msg);
+    if (ns.events.hasOwnProperty(msg.Event)) {
+        return ns.events[msg.Event](ns, msg);
     }
 
-    if (events.hasOwnProperty(OnAnyEvent)) {
-        return events[OnAnyEvent](ns, msg);
+    if (ns.events.hasOwnProperty(OnAnyEvent)) {
+        return ns.events[OnAnyEvent](ns, msg);
     }
 
     return null;
@@ -501,7 +524,7 @@ class Ws {
 
         if (msg.IsNative && this.allowNativeMessages) {
             let ns = this.Namespace("")
-            return fireEvent(ns.events, ns, msg);
+            return fireEvent(ns, msg);
         }
 
         if (msg.isWait()) {
@@ -524,14 +547,14 @@ class Ws {
             case OnRoomLeave:
                 break;
             default:
-                this.checkWaitForNamespace(msg.Namespace);
+                // this.checkWaitForNamespace(msg.Namespace);
 
                 let ns = this.Namespace(msg.Namespace);
                 if (ns === undefined) {
                     return ErrBadNamespace;
                 }
                 msg.IsLocal = false;
-                let err = fireEvent(ns.events, ns, msg);
+                let err = fireEvent(ns, msg);
                 if (!isEmpty(err)) {
                     // write any error back to the server.
                     msg.Err = err.message;
@@ -578,7 +601,7 @@ class Ws {
         this.writeEmptyReply(msg.wait);
 
         msg.Event = OnNamespaceConnected;
-        fireEvent(ns.events, ns, msg);
+        fireEvent(ns, msg);
     }
 
     private replyDisconnect(msg: Message): void {
@@ -598,7 +621,7 @@ class Ws {
 
         this.writeEmptyReply(msg.wait);
 
-        fireEvent(ns.events, ns, msg);
+        fireEvent(ns, msg);
     }
 
     Ask(msg: Message): Promise<Message | Error> {
@@ -637,11 +660,12 @@ class Ws {
         }
     }
 
-    private async checkWaitForNamespace(namespace: string) {
-        for (; this.hasConnectProcess(namespace);) {
-            await sleep(1000); // wait 1 second before the loop circle.
-        }
-    }
+    // no...
+    // private async checkWaitForNamespace(namespace: string) {
+    //     for (; this.hasConnectProcess(namespace);) {
+    //         await sleep(1000); // wait 1 second before the loop circle.
+    //     }
+    // }
 
     private hasConnectProcess(namespace: string): boolean {
         let idx = this.isConnectingProcesseses.findIndex((value: string, index: number, obj) => { return value === namespace || false; });
@@ -668,43 +692,60 @@ class Ws {
         this.isConnectingProcesseses.push(namespace);
 
         ns = new NSConn(this, namespace, events);
-        let err = fireEvent(events, ns, connectMessage);
+        let err = fireEvent(ns, connectMessage);
         if (!isEmpty(err)) {
             this.removeConnectProcess(namespace);
             return err;
         }
 
-        let replyOrErr = await this.Ask(connectMessage);
-        if (replyOrErr instanceof Error) {
-            return replyOrErr as Error;
+        try {
+            await this.Ask(connectMessage);
+        } catch (err) {
+            return err;
         }
 
         this.connectedNamespaces.set(namespace, ns);
 
         connectMessage.Event = OnNamespaceConnected;
-        fireEvent(events, ns, connectMessage);
+        fireEvent(ns, connectMessage);
 
         this.removeConnectProcess(namespace);
 
         return ns;
     }
 
-    private askDisconnect(msg: Message): Error {
-        return null;
+    async askDisconnect(msg: Message): Promise<Error> {
+        let ns = this.Namespace(msg.Namespace);
+        if (ns === undefined) { // it's already connected.
+            return ErrBadNamespace;
+        }
+
+        try {
+            await this.Ask(msg);
+        } catch (err) {
+            return err
+        }
+
+        ns.forceLeaveAll(true);
+
+        this.connectedNamespaces.delete(msg.Namespace);
+
+        msg.IsLocal = true
+        return fireEvent(ns, msg);
     }
 
     IsClosed(): boolean {
         return this.conn.readyState == 3 || false;
     }
 
-    async Write(msg: Message): Promise<boolean> {
+    Write(msg: Message): boolean {
         if (this.IsClosed()) {
             return false;
         }
 
-        for (; this.conn.readyState === this.conn.CONNECTING;) {
-            await sleep(250);
-        }
+        // for (; this.conn.readyState === this.conn.CONNECTING;) {
+        //     await sleep(250);
+        // }
 
         if (!msg.isConnect() && !msg.isDisconnect()) {
             // TODO: checks...
