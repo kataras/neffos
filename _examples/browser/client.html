@@ -18,19 +18,45 @@
   var input = document.getElementById("input");
   var output = document.getElementById("output");
 
-  var socket = new Ws(wsURL, {
-    default: {
-      _OnNamespaceConnected: function(c, msg) {
-        console.info("connected to ", msg.Namespace);
-      },
-      _OnNamespaceDisconnect: function(c, msg) {
-        console.info("disconnected from ", msg.Namespace);
-      },
-      chat: function(c, msg) {
-        console.info("on chat: " + msg.Body);
+  async function runExample() {
+    let ws = await Dial(wsURL, {
+      default: {
+        _OnNamespaceConnected: function(c, msg) {
+          console.info("connected to ", msg.Namespace);
+        },
+        _OnNamespaceDisconnect: function(c, msg) {
+          console.info("disconnected from ", msg.Namespace);
+        },
+        chat: function(c, msg) {
+          console.info("on chat: " + msg.Body);
+        }
       }
-    }
-  });
+    });
+
+    await ws.Connect("default");
+  }
+
+  runExample();
+  // OR:
+  // Dial(wsURL, {
+  //   default: {
+  //     _OnNamespaceConnected: function(c, msg) {
+  //       console.info("connected to ", msg.Namespace);
+  //     },
+  //     _OnNamespaceDisconnect: function(c, msg) {
+  //       console.info("disconnected from ", msg.Namespace);
+  //     },
+  //     chat: function(c, msg) {
+  //       console.info("on chat: " + msg.Body);
+  //     }
+  //   }
+  // })
+  //   .then(function(socket) {
+  //     socket.Connect("default");
+  //   })
+  //   .catch(function(err) {
+  //     console.error("WebSocket error observed:", err);
+  //   });
 
   function send() {
     addMessage("Me: " + input.value); // write ourselves

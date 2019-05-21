@@ -75,7 +75,7 @@ var (
 	dissalowAll = false
 	// if not empty, tests broadcast on `Server#OnConnect` (expect this conn because it is not yet connected to any namespace locally).
 	notifyOthers                  = true
-	serverHandlesConnectNamespace = true
+	serverHandlesConnectNamespace = false
 )
 
 func server(upgrader ws.Upgrader) {

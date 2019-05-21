@@ -1,5 +1,13 @@
 // start of javascript-based client.
 // tsc --target es6 client.ts
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : new P(function (resolve) { resolve(result.value); }).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 const OnNamespaceConnect = "_OnNamespaceConnect";
 const OnNamespaceConnected = "_OnNamespaceConnected";
 const OnNamespaceDisconnect = "_OnNamespaceDisconnect";
@@ -43,7 +51,13 @@ function isEmpty(s) {
     if (typeof s === 'string' || s instanceof String) {
         return s.length === 0 || s === "";
     }
+    if (s instanceof Error) {
+        return isEmpty(s.message);
+    }
     return false;
+}
+function sleep(timeout) {
+    return new Promise(resolve => setTimeout(resolve, timeout));
 }
 class Message {
     isConnect() {
@@ -209,63 +223,99 @@ function getEvents(namespaces, namespace) {
     }
     return null;
 }
-const ErrInvalidPayload = "invalid payload";
-const ErrBadNamespace = "bad namespace";
-class Ws {
-    // // listeners.
-    // private errorListeners: (err:string)
-    constructor(endpoint, connHandler, protocols) {
+const ErrInvalidPayload = new Error("invalid payload");
+const ErrBadNamespace = new Error("bad namespace");
+const ErrClosed = new Error("use of closed connection");
+const ErrWrite = new Error("write closed");
+function Dial(endpoint, connHandler, protocols) {
+    if (endpoint.indexOf("ws") == -1) {
+        endpoint = "ws://" + endpoint;
+    }
+    return new Promise((resolve, reject) => {
         if (!window["WebSocket"]) {
-            return;
-        }
-        if (endpoint.indexOf("ws") == -1) {
-            endpoint = "ws://" + endpoint;
+            reject("WebSocket is not accessible through this browser.");
         }
         if (connHandler === undefined) {
-            return;
+            reject("connHandler is empty.");
         }
-        this.namespaces = connHandler;
-        this.connectedNamespaces = new Map();
-        this.waitingMessages = new Map();
-        this.conn = new WebSocket(endpoint, protocols);
-        this.conn.binaryType = "arraybuffer";
-        this.conn.onerror = ((evt) => {
-            console.error("WebSocket error observed:", event);
+        let conn = new WebSocket(endpoint, protocols);
+        let ws = new Ws(conn, connHandler, protocols);
+        conn.binaryType = "arraybuffer";
+        conn.onmessage = ((evt) => {
+            console.log("WebSocket On Message.");
+            console.log(evt.data);
+            let err = ws.handle(evt);
+            if (!isEmpty(err)) {
+                reject(err);
+                return;
+            }
+            if (ws.IsAcknowledged()) {
+                // console.log("is acked, set new message handler");
+                // conn.onmessage = ws.handle;
+                resolve(ws);
+            }
         });
-        this.conn.onopen = ((evt) => {
+        conn.onopen = ((evt) => {
             console.log("WebSocket connected.");
             // let b = new Uint8Array(1)
             // b[0] = 1;
             // this.conn.send(b.buffer);
-            this.conn.send(ackBinary);
-            return null;
+            conn.send(ackBinary);
         });
+        conn.onerror = ((err) => {
+            reject(err);
+        });
+    });
+}
+class Ws {
+    // // listeners.
+    // private errorListeners: (err:string)
+    constructor(conn, connHandler, protocols) {
+        this.conn = conn;
+        this.queue = new Array();
+        this.waitingMessages = new Map();
+        this.namespaces = connHandler;
+        this.connectedNamespaces = new Map();
+        this.isConnectingProcesseses = new Array();
+        // this.conn = new WebSocket(endpoint, protocols);
+        // this.conn.binaryType = "arraybuffer";
+        // this.conn.onerror = ((evt: Event) => {
+        //     console.error("WebSocket error observed:", event);
+        // });
         this.conn.onclose = ((evt) => {
             console.log("WebSocket disconnected.");
             return null;
         });
-        this.conn.onmessage = ((evt) => {
-            console.log("WebSocket On Message.");
-            console.log(evt.data);
-            if (!this.isAcknowledged) {
-                // if (evt.data instanceof ArrayBuffer) {
-                // new Uint8Array(evt.data)
-                let errorText = this.handleAck(evt.data);
-                if (errorText == undefined) {
-                    this.isAcknowledged = true;
-                    this.handleQueue();
-                }
-                else {
-                    this.conn.close();
-                    console.error(errorText);
-                }
-                return;
+        // this.conn.onmessage = ((evt: MessageEvent) => {
+        //     console.log("WebSocket On Message.");
+        //     console.log(evt.data);
+        //     let err = this.handle(evt.data);
+        //     if (!isEmpty(err)) {
+        //         console.error(err) // TODO: remove this.
+        //     }
+        // });
+    }
+    IsAcknowledged() {
+        return this.isAcknowledged || false;
+    }
+    handle(evt) {
+        console.log("WebSocket Handle: ");
+        console.log(evt.data);
+        if (!this.isAcknowledged) {
+            // if (evt.data instanceof ArrayBuffer) {
+            // new Uint8Array(evt.data)
+            let err = this.handleAck(evt.data);
+            if (err == undefined) {
+                console.log("SET ACK = TRUE");
+                this.isAcknowledged = true;
+                this.handleQueue();
             }
-            let err = this.handleMessage(evt.data);
-            if (!isEmpty(err)) {
-                console.error(err); // TODO: remove this.
+            else {
+                this.conn.close();
             }
-        });
+            return err;
+        }
+        return this.handleMessage(evt.data);
     }
     handleAck(data) {
         let typ = data[0];
@@ -279,10 +329,10 @@ class Ws {
             case ackNotOKBinary:
                 // let errorText = dec.decode(data.slice(1));
                 let errorText = data.slice(1);
-                return errorText;
+                return new Error(errorText);
             default:
                 this.queue.push(data);
-                return "";
+                return null;
         }
     }
     handleQueue() {
@@ -302,7 +352,7 @@ class Ws {
         console.info(msg);
         if (msg.IsNative && this.allowNativeMessages) {
             let ns = this.Namespace("");
-            return fireEvent(ns.events, ns, msg).message;
+            return fireEvent(ns.events, ns, msg);
         }
         if (msg.isWait()) {
             let cb = this.waitingMessages.get(msg.wait);
@@ -323,6 +373,7 @@ class Ws {
             case OnRoomLeave:
                 break;
             default:
+                this.checkWaitForNamespace(msg.Namespace);
                 let ns = this.Namespace(msg.Namespace);
                 if (ns === undefined) {
                     return ErrBadNamespace;
@@ -333,15 +384,16 @@ class Ws {
                     // write any error back to the server.
                     msg.Err = err.message;
                     this.Write(msg);
-                    return err.message;
+                    return err;
                 }
         }
         // it's a native websocket message
         // this.handleNativeMessage(data);
-        return "";
+        return null;
     }
-    handleNativeMessage(data) {
-        // console.log(data);
+    Connect(namespace) {
+        // for (; !this.isAcknowledged;) { await sleep(1000); }
+        return this.askConnect(namespace);
     }
     Namespace(namespace) {
         return this.connectedNamespaces.get(namespace);
@@ -357,7 +409,7 @@ class Ws {
         }
         let events = getEvents(this.namespaces, msg.Namespace);
         if (events === undefined) {
-            msg.Err = ErrBadNamespace;
+            msg.Err = ErrBadNamespace.message;
             this.Write(msg);
             return;
         }
@@ -381,17 +433,99 @@ class Ws {
         this.writeEmptyReply(msg.wait);
         fireEvent(ns.events, ns, msg);
     }
+    Ask(msg) {
+        return new Promise((resolve, reject) => {
+            if (this.IsClosed()) {
+                reject(ErrClosed);
+                return;
+            }
+            msg.wait = genWait();
+            this.waitingMessages.set(msg.wait, ((receive) => {
+                if (receive.isError) {
+                    reject(new Error(receive.Err));
+                    return;
+                }
+                resolve(receive);
+            }));
+            if (!this.Write(msg)) {
+                reject(ErrWrite);
+                return;
+            }
+        });
+    }
+    addConnectProcess(namespace) {
+        this.isConnectingProcesseses.push(namespace);
+    }
+    removeConnectProcess(namespace) {
+        let idx = this.isConnectingProcesseses.findIndex((value, index, obj) => { return value === namespace || false; });
+        if (idx !== -1) {
+            this.isConnectingProcesseses.splice(idx, 1);
+        }
+    }
+    checkWaitForNamespace(namespace) {
+        return __awaiter(this, void 0, void 0, function* () {
+            for (; this.hasConnectProcess(namespace);) {
+                yield sleep(1000); // wait 1 second before the loop circle.
+            }
+        });
+    }
+    hasConnectProcess(namespace) {
+        let idx = this.isConnectingProcesseses.findIndex((value, index, obj) => { return value === namespace || false; });
+        return idx !== -1;
+    }
+    askConnect(namespace) {
+        return __awaiter(this, void 0, void 0, function* () {
+            let ns = this.Namespace(namespace);
+            if (ns !== undefined) { // it's already connected.
+                return ns;
+            }
+            let events = getEvents(this.namespaces, namespace);
+            if (events === undefined) {
+                return ErrBadNamespace;
+            }
+            this.addConnectProcess(namespace);
+            let connectMessage = new Message();
+            connectMessage.Namespace = namespace;
+            connectMessage.Event = OnNamespaceConnect;
+            connectMessage.IsLocal = true;
+            this.isConnectingProcesseses.push(namespace);
+            ns = new NSConn(this, namespace, events);
+            let err = fireEvent(events, ns, connectMessage);
+            if (!isEmpty(err)) {
+                this.removeConnectProcess(namespace);
+                return err;
+            }
+            let replyOrErr = yield this.Ask(connectMessage);
+            if (replyOrErr instanceof Error) {
+                return replyOrErr;
+            }
+            this.connectedNamespaces.set(namespace, ns);
+            connectMessage.Event = OnNamespaceConnected;
+            fireEvent(events, ns, connectMessage);
+            this.removeConnectProcess(namespace);
+            return ns;
+        });
+    }
+    askDisconnect(msg) {
+        return null;
+    }
     IsClosed() {
         return this.conn.readyState == 3 || false;
     }
     Write(msg) {
-        if (this.IsClosed()) {
-            return false;
-        }
-        if (!msg.isConnect() && !msg.isDisconnect()) {
-            // TODO: checks...
-        }
-        this.write(serializeMessage(msg));
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.IsClosed()) {
+                return false;
+            }
+            for (; this.conn.readyState === this.conn.CONNECTING;) {
+                yield sleep(250);
+            }
+            if (!msg.isConnect() && !msg.isDisconnect()) {
+                // TODO: checks...
+            }
+            this.write(serializeMessage(msg));
+            return true;
+        });
     }
     write(data) {
         console.info("writing: ", data);
