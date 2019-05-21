@@ -157,7 +157,6 @@ function serializeMessage(msg: Message): WSData {
 
     let isErrorString = falseString;
     let isNoOpString = falseString;
-    let waitString = msg.wait || "";
     let body = msg.Body || "";
 
     if (msg.isError) {
@@ -169,12 +168,11 @@ function serializeMessage(msg: Message): WSData {
         isNoOpString = trueString
     }
 
-
     return [
-        msg.wait,
+        msg.wait || "",
         msg.Namespace,
-        msg.Room,
-        msg.Event,
+        msg.Room || "",
+        msg.Event || "",
         isErrorString,
         isNoOpString,
         body].join(messageSeparator);
@@ -220,6 +218,8 @@ function deserializeMessage(data: WSData, allowNativeMessages: boolean): Message
         } else {
             msg.Body = body;
         }
+    } else {
+        msg.Body = "";
     }
 
     msg.isInvalid = false;
@@ -244,20 +244,44 @@ function genEmptyReplyToWait(wait: string): string {
 }
 
 class Room {
-    // TODO: ...
+    nsConn: NSConn;
+    name: string;
+
+
+    constructor(ns: NSConn, roomName: string) {
+        this.nsConn = ns;
+        this.name = roomName;
+    }
+
+    Emit(event: string, body: WSData): boolean {
+        let msg = new Message();
+        msg.Namespace = this.nsConn.namespace;
+        msg.Room = this.name;
+        msg.Event = event;
+        msg.Body = body;
+        return this.nsConn.conn.Write(msg);
+    }
+
+    Leave(): Promise<Error> {
+        let msg = new Message();
+        msg.Namespace = this.nsConn.namespace;
+        msg.Room = this.name;
+        msg.Event = OnRoomLeave;
+        return this.nsConn.askRoomLeave(msg);
+    }
 }
 
 class NSConn {
-    Conn: Ws;
+    conn: Conn;
     namespace: string;
     events: Events;
     rooms: Map<string, Room>;
-    // TODO: ...
 
-    constructor(conn: Ws, namespace: string, events: Events) {
-        this.Conn = conn;
+    constructor(conn: Conn, namespace: string, events: Events) {
+        this.conn = conn;
         this.namespace = namespace;
         this.events = events;
+        this.rooms = new Map<string, Room>();
     }
 
     Emit(event: string, body: WSData): boolean {
@@ -265,7 +289,7 @@ class NSConn {
         msg.Namespace = this.namespace;
         msg.Event = event;
         msg.Body = body;
-        return this.Conn.Write(msg);
+        return this.conn.Write(msg);
     }
 
     Ask(event: string, body: WSData): Promise<Message | Error> {
@@ -273,14 +297,41 @@ class NSConn {
         msg.Namespace = this.namespace;
         msg.Event = event;
         msg.Body = body;
-        return this.Conn.Ask(msg);
+        return this.conn.Ask(msg);
     }
 
-    Disconnect(): Promise<Error> {
-        let disconnectMsg = new Message();
-        disconnectMsg.Namespace = this.namespace;
-        disconnectMsg.Event = OnNamespaceDisconnect;
-        return this.Conn.askDisconnect(disconnectMsg);
+    JoinRoom(roomName: string): Promise<Room | Error> {
+        return this.askRoomJoin(roomName);
+    }
+
+    Room(roomName: string): Room {
+        return this.rooms.get(roomName);
+    }
+
+    Rooms(): Room[] {
+        let rooms = new Array<Room>(this.rooms.size);
+        this.rooms.forEach((room) => {
+            rooms.push(room);
+        })
+        return rooms;
+    }
+
+    async LeaveAll(): Promise<Error> {
+        let leaveMsg = new Message();
+        leaveMsg.Namespace = this.namespace;
+        leaveMsg.Event = OnRoomLeft;
+        leaveMsg.IsLocal = true;
+
+        this.rooms.forEach(async (value, roomName) => {
+            leaveMsg.Room = roomName;
+            try {
+                await this.askRoomLeave(leaveMsg);
+            } catch (err) {
+                return err
+            }
+        })
+
+        return null;
     }
 
     forceLeaveAll(isLocal: boolean) {
@@ -290,17 +341,120 @@ class NSConn {
         leaveMsg.IsForced = true;
         leaveMsg.IsLocal = isLocal;
 
-        for (const room in this.rooms) {
-            leaveMsg.Room = room;
+        this.rooms.forEach((value, roomName) => {
+            leaveMsg.Room = roomName;
             fireEvent(this, leaveMsg);
 
-            this.rooms.delete(room);
+            this.rooms.delete(roomName);
 
             leaveMsg.Event = OnRoomLeft;
             fireEvent(this, leaveMsg);
 
             leaveMsg.Event = OnRoomLeave;
+        });
+    }
+
+    Disconnect(): Promise<Error> {
+        let disconnectMsg = new Message();
+        disconnectMsg.Namespace = this.namespace;
+        disconnectMsg.Event = OnNamespaceDisconnect;
+        return this.conn.askDisconnect(disconnectMsg);
+    }
+
+
+    async askRoomJoin(roomName: string): Promise<Room | Error> {
+        let room = this.rooms.get(roomName);
+        if (room !== undefined) {
+            return room;
         }
+
+        let joinMsg = new Message();
+        joinMsg.Namespace = this.namespace;
+        joinMsg.Room = roomName;
+        joinMsg.Event = OnRoomJoin;
+        joinMsg.IsLocal = true;
+
+        try {
+            await this.conn.Ask(joinMsg);
+        } catch (err) {
+            return err;
+        }
+
+        let err = fireEvent(this, joinMsg);
+        if (!isEmpty(err)) {
+            return err;
+        }
+
+        room = new Room(this, roomName);
+        this.rooms.set(roomName, room);
+
+        joinMsg.Event = OnRoomJoined;
+        fireEvent(this, joinMsg);
+        return room;
+    }
+
+    async askRoomLeave(msg: Message): Promise<Error> {
+        if (!this.rooms.has(msg.Room)) {
+            return ErrBadRoom;
+        }
+
+        try {
+            await this.conn.Ask(msg)
+        } catch (err) {
+            return err;
+        }
+
+        let err = fireEvent(this, msg);
+        if (!isEmpty(err)) {
+            return err;
+        }
+
+        this.rooms.delete(msg.Room);
+
+        msg.Event = OnRoomLeft;
+        fireEvent(this, msg);
+        return null;
+    }
+
+    replyRoomJoin(msg: Message): void {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+
+        if (!this.rooms.has(msg.Room)) {
+            let err = fireEvent(this, msg);
+            if (!isEmpty(err)) {
+                msg.Err = err.message;
+                this.conn.Write(msg);
+                return;
+            }
+
+            this.rooms.set(msg.Room, new Room(this, msg.Room));
+
+            msg.Event = OnRoomJoined;
+            fireEvent(this, msg);
+        }
+
+        this.conn.writeEmptyReply(msg.wait);
+    }
+
+    replyRoomLeave(msg: Message): void {
+        if (isEmpty(msg.wait) || msg.isNoOp) {
+            return;
+        }
+
+        if (!this.rooms.has(msg.Room)) {
+            this.conn.writeEmptyReply(msg.wait);
+            return;
+        }
+
+        fireEvent(this, msg);
+
+        this.rooms.delete(msg.Room);
+        this.conn.writeEmptyReply(msg.wait);
+
+        msg.Event = OnRoomLeft;
+        fireEvent(this, msg);
     }
 }
 
@@ -316,25 +470,6 @@ interface Events {
 }
 
 function fireEvent(ns: NSConn, msg: Message): Error {
-    // let found = false;
-    // let hasOnAnyEvent = false;
-    // for (var key in events) {
-    //     if (key === OnAnyEvent) {
-    //         hasOnAnyEvent = true;
-    //     }
-
-    //     if (key !== msg.Event) {
-    //         continue;
-    //     }
-    //     found = true
-    //     let cb = events[key];
-    //     return cb(ns, msg)
-    // }
-
-    // if (!found && hasOnAnyEvent) {
-    //     return events[OnAnyEvent](ns, msg)
-    // }
-
     if (ns.events.hasOwnProperty(msg.Event)) {
         return ns.events[msg.Event](ns, msg);
     }
@@ -360,12 +495,13 @@ function getEvents(namespaces: Namespaces, namespace: string): Events {
 
 const ErrInvalidPayload = new Error("invalid payload");
 const ErrBadNamespace = new Error("bad namespace");
+const ErrBadRoom = new Error("bad room");
 const ErrClosed = new Error("use of closed connection");
 const ErrWrite = new Error("write closed");
 
 type waitingMessageFunc = (msg: Message) => void;
 
-function Dial(endpoint: string, connHandler: Namespaces, protocols?: string[]): Promise<Ws> {
+function Dial(endpoint: string, connHandler: Namespaces, protocols?: string[]): Promise<Conn> {
     if (endpoint.indexOf("ws") == -1) {
         endpoint = "ws://" + endpoint;
     }
@@ -379,38 +515,39 @@ function Dial(endpoint: string, connHandler: Namespaces, protocols?: string[]): 
             reject("connHandler is empty.");
         }
 
-        let conn = new WebSocket(endpoint, protocols);
-        let ws = new Ws(conn, connHandler, protocols);
-        conn.binaryType = "arraybuffer";
-        conn.onmessage = ((evt: MessageEvent) => {
+        let ws = new WebSocket(endpoint, protocols);
+        let conn = new Conn(ws, connHandler, protocols);
+        ws.binaryType = "arraybuffer";
+        ws.onmessage = ((evt: MessageEvent) => {
             console.log("WebSocket On Message.");
             console.log(evt.data);
-            let err = ws.handle(evt);
+            let err = conn.handle(evt);
             if (!isEmpty(err)) {
                 reject(err);
                 return;
             }
 
-            if (ws.IsAcknowledged()) {
+            if (conn.IsAcknowledged()) {
                 // console.log("is acked, set new message handler");
                 // conn.onmessage = ws.handle;
-                resolve(ws);
+                resolve(conn);
             }
         });
-        conn.onopen = ((evt: Event) => {
+        ws.onopen = ((evt: Event) => {
             console.log("WebSocket connected.");
             // let b = new Uint8Array(1)
             // b[0] = 1;
             // this.conn.send(b.buffer);
-            conn.send(ackBinary);
+            ws.send(ackBinary);
         });
-        conn.onerror = ((err: Event) => {
+        ws.onerror = ((err: Event) => {
+            conn.Close();
             reject(err);
         });
     });
 }
 
-class Ws {
+class Conn {
     private conn: WebSocket;
     private dec: TextDecoder;
     private enc: TextEncoder;
@@ -419,6 +556,7 @@ class Ws {
     private allowNativeMessages: boolean; // TODO: when events done fill it on constructor.
 
     ID: string;
+    closed: boolean;
 
     private queue: WSData[];
     private waitingMessages: Map<string, waitingMessageFunc>;
@@ -435,7 +573,7 @@ class Ws {
         this.namespaces = connHandler;
         this.connectedNamespaces = new Map<string, NSConn>();
         this.isConnectingProcesseses = new Array<string>();
-
+        this.closed = false;
         // this.conn = new WebSocket(endpoint, protocols);
         // this.conn.binaryType = "arraybuffer";
 
@@ -445,6 +583,7 @@ class Ws {
 
         this.conn.onclose = ((evt: Event): any => {
             console.log("WebSocket disconnected.");
+            this.Close();
             return null;
         });
 
@@ -535,6 +674,8 @@ class Ws {
             }
         }
 
+        const ns = this.Namespace(msg.Namespace);
+
         switch (msg.Event) {
             case OnNamespaceConnect:
                 this.replyConnect(msg);
@@ -543,13 +684,17 @@ class Ws {
                 this.replyDisconnect(msg);
                 break;
             case OnRoomJoin:
-                break;
+                if (ns !== undefined) {
+                    ns.replyRoomJoin(msg);
+                    break;
+                }
             case OnRoomLeave:
-                break;
+                if (ns !== undefined) {
+                    ns.replyRoomLeave(msg);
+                    break;
+                }
             default:
                 // this.checkWaitForNamespace(msg.Namespace);
-
-                let ns = this.Namespace(msg.Namespace);
                 if (ns === undefined) {
                     return ErrBadNamespace;
                 }
@@ -735,20 +880,32 @@ class Ws {
     }
 
     IsClosed(): boolean {
-        return this.conn.readyState == 3 || false;
+        return this.closed || this.conn.readyState == this.conn.CLOSED || false;
     }
 
     Write(msg: Message): boolean {
         if (this.IsClosed()) {
+            console.log("is closed");
             return false;
         }
 
-        // for (; this.conn.readyState === this.conn.CONNECTING;) {
-        //     await sleep(250);
-        // }
-
         if (!msg.isConnect() && !msg.isDisconnect()) {
-            // TODO: checks...
+            // namespace pre-write check.
+            let ns = this.Namespace(msg.Namespace);
+
+            if (ns === undefined) {
+                console.error("namespace does not exist", msg.Namespace);
+                return false;
+            }
+
+            // room per-write check.
+            if (!isEmpty(msg.Room) && !msg.isRoomJoin() && !msg.isRoomLeft()) {
+                if (!ns.rooms.has(msg.Room)) {
+                    console.error("room does not exist", msg.Room)
+                    // tried to send to a not joined room.
+                    return false;
+                }
+            }
         }
 
         this.write(serializeMessage(msg));
@@ -761,7 +918,34 @@ class Ws {
         this.conn.send(data)
     }
 
-    private writeEmptyReply(wait: string): void {
+    writeEmptyReply(wait: string): void {
         this.write(genEmptyReplyToWait(wait));
+    }
+
+    Close(): void {
+        if (this.closed) {
+            return;
+        }
+
+        let disconnectMsg = new Message();
+        disconnectMsg.Event = OnNamespaceDisconnect;
+        disconnectMsg.IsForced = true;
+        disconnectMsg.IsLocal = true;
+
+        this.connectedNamespaces.forEach((ns) => {
+            ns.forceLeaveAll(true);
+
+            disconnectMsg.Namespace = ns.namespace;
+            fireEvent(ns, disconnectMsg);
+            this.connectedNamespaces.delete(ns.namespace);
+        })
+
+        this.waitingMessages.clear();
+
+        if (this.conn.readyState === this.conn.OPEN) {
+            this.conn.close();
+        }
+
+        this.closed = true;
     }
 }

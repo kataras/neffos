@@ -136,19 +136,19 @@ func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, erro
 		return room, nil
 	}
 
-	joinMessage := Message{
+	joinMsg := Message{
 		Namespace: ns.namespace,
 		Room:      roomName,
 		Event:     OnRoomJoin,
 		IsLocal:   true,
 	}
 
-	_, err := ns.Conn.Ask(ctx, joinMessage)
+	_, err := ns.Conn.Ask(ctx, joinMsg)
 	if err != nil {
 		return nil, err
 	}
 
-	err = ns.events.fireEvent(ns, joinMessage)
+	err = ns.events.fireEvent(ns, joinMsg)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +157,8 @@ func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, erro
 	ns.rooms[roomName] = newRoom(ns, roomName)
 	ns.roomsMutex.Unlock()
 
-	joinMessage.Event = OnRoomJoined
-	ns.events.fireEvent(ns, joinMessage)
+	joinMsg.Event = OnRoomJoined
+	ns.events.fireEvent(ns, joinMsg)
 	return room, nil
 }
 
@@ -196,12 +196,12 @@ func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) erro
 	if lock {
 		ns.roomsMutex.RLock()
 	}
-	room := ns.rooms[msg.Room]
+	_, ok := ns.rooms[msg.Room]
 	if lock {
 		ns.roomsMutex.RUnlock()
 	}
 
-	if room == nil {
+	if !ok {
 		return ErrBadRoom
 	}
 
