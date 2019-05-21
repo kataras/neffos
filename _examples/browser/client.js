@@ -230,7 +230,7 @@ class NSConn {
             leaveMsg.Namespace = this.namespace;
             leaveMsg.Event = OnRoomLeft;
             leaveMsg.IsLocal = true;
-            for (const roomName in this.rooms) {
+            this.rooms.forEach((value, roomName) => __awaiter(this, void 0, void 0, function* () {
                 leaveMsg.Room = roomName;
                 try {
                     yield this.askRoomLeave(leaveMsg);
@@ -238,7 +238,7 @@ class NSConn {
                 catch (err) {
                     return err;
                 }
-            }
+            }));
             return null;
         });
     }
@@ -410,6 +410,9 @@ class Conn {
     // private errorListeners: (err:string)
     constructor(conn, connHandler, protocols) {
         this.conn = conn;
+        this.isAcknowledged = false;
+        let hasEmptyNS = connHandler.hasOwnProperty("");
+        this.allowNativeMessages = hasEmptyNS && connHandler[""].hasOwnProperty(OnNativeMessage);
         this.queue = new Array();
         this.waitingMessages = new Map();
         this.namespaces = connHandler;
@@ -436,7 +439,7 @@ class Conn {
         // });
     }
     IsAcknowledged() {
-        return this.isAcknowledged || false;
+        return this.isAcknowledged;
     }
     handle(evt) {
         console.log("WebSocket Handle: ");

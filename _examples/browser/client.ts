@@ -549,8 +549,6 @@ function Dial(endpoint: string, connHandler: Namespaces, protocols?: string[]): 
 
 class Conn {
     private conn: WebSocket;
-    private dec: TextDecoder;
-    private enc: TextEncoder;
 
     private isAcknowledged: boolean;
     private allowNativeMessages: boolean; // TODO: when events done fill it on constructor.
@@ -568,6 +566,9 @@ class Conn {
 
     constructor(conn: WebSocket, connHandler: Namespaces, protocols?: string[]) {
         this.conn = conn;
+        this.isAcknowledged = false;
+        let hasEmptyNS = connHandler.hasOwnProperty("");
+        this.allowNativeMessages = hasEmptyNS && connHandler[""].hasOwnProperty(OnNativeMessage);
         this.queue = new Array<string>();
         this.waitingMessages = new Map<string, waitingMessageFunc>();
         this.namespaces = connHandler;
@@ -598,7 +599,7 @@ class Conn {
     }
 
     IsAcknowledged(): boolean {
-        return this.isAcknowledged || false;
+        return this.isAcknowledged;
     }
 
     handle(evt: MessageEvent): Error {
