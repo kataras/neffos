@@ -45,7 +45,7 @@ type WithTimeout struct {
 }
 
 func (t WithTimeout) getNamespaces() Namespaces {
-	return joinConnHandlers(t.Namespaces, t.Events).getNamespaces()
+	return JoinConnHandlers(t.Namespaces, t.Events).getNamespaces()
 }
 
 func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Duration) {
@@ -57,14 +57,31 @@ func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Du
 	return
 }
 
-func joinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
+func JoinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 	namespaces := Namespaces{}
 
 	for _, h := range connHandlers {
 		nss := h.getNamespaces()
 		if len(nss) > 0 {
 			for namespace, events := range nss {
-				namespaces[namespace] = events
+				if events == nil {
+					continue
+				}
+				clonedEvents := make(Events, len(events))
+				for evt, cb := range events {
+					clonedEvents[evt] = cb
+				}
+
+				if curEvents, exists := namespaces[namespace]; exists {
+					// fill missing events.
+					for evt, cb := range clonedEvents {
+						curEvents[evt] = cb
+					}
+
+				} else {
+					namespaces[namespace] = clonedEvents
+				}
+
 			}
 		}
 	}

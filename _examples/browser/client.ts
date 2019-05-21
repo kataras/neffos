@@ -37,7 +37,6 @@ const OnRoomLeft = "_OnRoomLeft";
 const OnAnyEvent = "_OnAnyEvent";
 const OnNativeMessage = "_OnNativeMessage";
 
-
 const ackBinary = 'M'; // see `onopen`, comes from client to server at startup.
 // see `handleAck`.
 const ackIDBinary = 'A';// comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.

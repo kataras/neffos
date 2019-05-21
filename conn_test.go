@@ -2,6 +2,7 @@ package ws_test
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -13,16 +14,43 @@ func TestConnect(t *testing.T) {
 	// test valid and not valid namespace connection.
 
 	var (
-		namespace    = "default"
-		onlyOnServer = "only_on_server"
-		onlyOnClient = "only_on_client"
-		emptyEvents  = ws.Events{}
+		namespace                      = "default"
+		onlyOnServer                   = "only_on_server"
+		onlyOnClient                   = "only_on_client"
+		namespaceThatShouldErrOnServer = "no_access_by_server"
+		namespaceThatShouldErrOnClient = "no_access_by_client"
+		emptyEvents                    = ws.Events{}
 	)
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{"": emptyEvents, namespace: emptyEvents, onlyOnServer: emptyEvents})
+	teardownServer := runTestServer("localhost:8080", ws.Namespaces{
+		"":           emptyEvents,
+		namespace:    emptyEvents,
+		onlyOnServer: emptyEvents,
+		namespaceThatShouldErrOnServer: ws.Events{
+			ws.OnNamespaceConnect: func(c *ws.NSConn, msg ws.Message) error {
+				return ws.ErrBadNamespace
+			},
+		},
+		namespaceThatShouldErrOnClient: emptyEvents,
+	})
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{"": emptyEvents, namespace: emptyEvents, onlyOnClient: emptyEvents},
+	err := runTestClient("localhost:8080", ws.Namespaces{
+		"":           emptyEvents,
+		namespace:    emptyEvents,
+		onlyOnClient: emptyEvents,
+		namespaceThatShouldErrOnServer: ws.Events{
+			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+				t.Fatalf("%s namespace shouldn't be accessible to the client to connect", namespaceThatShouldErrOnServer)
+				return nil
+			},
+		},
+		namespaceThatShouldErrOnClient: ws.Events{
+			ws.OnNamespaceConnect: func(c *ws.NSConn, msg ws.Message) error {
+				return ws.ErrBadNamespace
+			},
+		},
+	},
 		func(dialer string, client *ws.Client) {
 			defer client.Close()
 
@@ -46,6 +74,16 @@ func TestConnect(t *testing.T) {
 			c, err = client.Connect(nil, onlyOnClient)
 			if err == nil || c != nil {
 				t.Fatalf("%s namespace connect should fail, namespace defined on client but not exists at server-side.", onlyOnClient)
+			}
+
+			c, err = client.Connect(nil, namespaceThatShouldErrOnServer)
+			if err != ws.ErrBadNamespace {
+				t.Fatalf("%s namespace connect should give a remote error by the server of the ws.ErrBadNamespace exactly (it's a typed error which its text is converted to error when deserialized) but got: %v", namespaceThatShouldErrOnServer, err)
+			}
+
+			c, err = client.Connect(nil, namespaceThatShouldErrOnClient)
+			if err != ws.ErrBadNamespace {
+				t.Fatalf("%s namespace connect should give a local event's error by the client of the ws.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
 		})
@@ -168,14 +206,17 @@ func TestOnAnyEvent(t *testing.T) {
 	}
 }
 
-func TestOnNativeMessage(t *testing.T) {
+func TestOnNativeMessageAndMessageError(t *testing.T) {
 	var (
-		wg            sync.WaitGroup
-		namespace     = "" // empty namespace and OnNativeMessage event defined to allow native websocket messages to come through.
-		nativeMessage = []byte("this is a native/raw websocket message")
-		events        = ws.Events{
+		wg                             sync.WaitGroup
+		namespace                      = "" // empty namespace and OnNativeMessage event defined to allow native websocket messages to come through.
+		eventThatWillGiveErrorByServer = "event_error_server"
+		eventErrorText                 = "this event will give error by server"
+		nativeMessage                  = []byte("this is a native/raw websocket message")
+		events                         = ws.Events{
 			ws.OnNativeMessage: func(c *ws.NSConn, msg ws.Message) error {
 				defer wg.Done()
+
 				expectedMessage := ws.Message{
 					Event:    ws.OnNativeMessage,
 					Body:     nativeMessage,
@@ -191,25 +232,53 @@ func TestOnNativeMessage(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: events})
+	serverHandler := ws.JoinConnHandlers(ws.Namespaces{namespace: events},
+		ws.Events{
+			eventThatWillGiveErrorByServer: func(c *ws.NSConn, msg ws.Message) error {
+				return fmt.Errorf(eventErrorText)
+			},
+		})
+	teardownServer := runTestServer("localhost:8080", serverHandler)
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{namespace: events},
-		func(dialer string, client *ws.Client) {
-			defer client.Close()
+	clientHandler := ws.JoinConnHandlers(ws.Namespaces{namespace: events},
+		ws.Events{
+			eventThatWillGiveErrorByServer: func(c *ws.NSConn, msg ws.Message) error {
+				defer wg.Done()
+				if !c.Conn.IsClient() {
+					t.Fatalf("this should only be executed by client-side, if not then the JoinConnHandlers didn't work as expected")
+				}
 
-			c, err := client.Connect(nil, namespace)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Ask is not available on native websocket messages of course.
-			wg.Add(1)
-			c.Conn.Write(ws.Message{
-				Body:     nativeMessage,
-				IsNative: true,
-			})
+				if msg.Err == nil {
+					t.Fatalf("expected an error from event: %s", eventThatWillGiveErrorByServer)
+				}
+				if expected, got := eventErrorText, msg.Err.Error(); expected != got {
+					t.Fatalf("expected an error from event: %s to match: '%s' but got: '%s'", eventThatWillGiveErrorByServer, expected, got)
+				}
+				return nil
+			},
 		})
+
+	err := runTestClient("localhost:8080", clientHandler, func(dialer string, client *ws.Client) {
+		defer client.Close()
+
+		c, err := client.Connect(nil, namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Ask is not available on native websocket messages of course.
+		wg.Add(1)
+		c.Conn.Write(ws.Message{
+			Body:     nativeMessage,
+			IsNative: true,
+		})
+
+		wg.Add(1)
+		c.Emit(eventThatWillGiveErrorByServer, []byte("doesn't matter"))
+
+		wg.Wait()
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
