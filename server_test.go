@@ -1,18 +1,18 @@
-package ws_test
+package neffos_test
 
 import (
 	"net/http"
 	"time"
 
-	"github.com/kataras/ws"
+	"github.com/kataras/neffos"
 
-	gobwas "github.com/kataras/ws/gobwas"
-	gorilla "github.com/kataras/ws/gorilla"
+	gobwas "github.com/kataras/neffos/gobwas"
+	gorilla "github.com/kataras/neffos/gorilla"
 )
 
-func runTestServer(addr string, connHandler ws.ConnHandler) func() error {
-	gobwasServer := ws.New(gobwas.DefaultUpgrader, connHandler)
-	gorillaServer := ws.New(gorilla.DefaultUpgrader, connHandler)
+func runTestServer(addr string, connHandler neffos.ConnHandler) func() error {
+	gobwasServer := neffos.New(gobwas.DefaultUpgrader, connHandler)
+	gorillaServer := neffos.New(gorilla.DefaultUpgrader, connHandler)
 
 	mux := http.NewServeMux()
 	mux.Handle("/gobwas", gobwasServer)

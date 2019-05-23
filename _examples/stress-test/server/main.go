@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kataras/ws"
-	"github.com/kataras/ws/gobwas"
-	"github.com/kataras/ws/gorilla"
+	"github.com/kataras/neffos"
+	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/gorilla"
 )
 
 const (
@@ -51,11 +51,11 @@ func main() {
 		}
 	}
 
-	srv := ws.New(upgrader, ws.WithTimeout{
+	srv := neffos.New(upgrader, neffos.WithTimeout{
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
-		Events: ws.Events{
-			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+		Events: neffos.Events{
+			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				if msg.Err != nil {
 					//	if verbose {
 					log.Println(msg.Err)
@@ -64,7 +64,7 @@ func main() {
 				atomic.AddUint64(totalNamespaceConnected, 1)
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
+			neffos.OnNamespaceDisconnect: func(c *neffos.NSConn, msg neffos.Message) error {
 				// if !c.isAcknowledged() {
 				// 	log.Printf("[%s] on namespace[%s] disconnecting without even acknowledged first.", c.ID(), msg.Namespace)
 				// }
@@ -76,7 +76,7 @@ func main() {
 
 				return nil
 			},
-			"chat": func(c *ws.NSConn, msg ws.Message) error {
+			"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 				if broadcast {
 					c.Conn.Server().Broadcast(c.Conn, msg)
 				} else {
@@ -157,7 +157,7 @@ func main() {
 		}
 	}()
 
-	srv.OnConnect = func(c *ws.Conn) error {
+	srv.OnConnect = func(c *neffos.Conn) error {
 		n := atomic.AddUint64(&totalConnected, 1)
 		if n == 1 {
 			started = true
@@ -180,7 +180,7 @@ func main() {
 	// 	return
 	// }
 
-	//	srv.OnError("", func(c *ws.Conn, err error) { handleErr(c, err) })
+	//	srv.OnError("", func(c *neffos.Conn, err error) { handleErr(c, err) })
 	//	srv.OnDisconnect = handleDisconnect
 
 	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
@@ -192,15 +192,15 @@ var (
 	totalDisconnected uint64
 )
 
-func handleDisconnect(c *ws.Conn) {
+func handleDisconnect(c *neffos.Conn) {
 	newC := atomic.AddUint64(&totalDisconnected, 1)
 	if verbose {
 		log.Printf("[%d] client [%s] disconnected!\n", newC, c.ID())
 	}
 }
 
-func handleErr(c *ws.Conn, err error) {
-	if !ws.IsDisconnectError(err) {
+func handleErr(c *neffos.Conn, err error) {
+	if !neffos.IsDisconnectError(err) {
 		log.Printf("client [%s] errorred: %v\n", c.ID(), err)
 	}
 }

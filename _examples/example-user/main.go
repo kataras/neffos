@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kataras/ws"
-	"github.com/kataras/ws/gobwas"
-	"github.com/kataras/ws/gorilla"
+	"github.com/kataras/neffos"
+	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/gorilla"
 )
 
 const (
@@ -29,7 +29,7 @@ type Users struct {
 }
 
 // returns true if new conn.
-func (u *Users) conn(c *ws.NSConn) (*userConn, bool) {
+func (u *Users) conn(c *neffos.NSConn) (*userConn, bool) {
 	user := c.Conn.ID()
 	u.mu.RLock()
 	entry, ok := u.entries[user]
@@ -37,7 +37,7 @@ func (u *Users) conn(c *ws.NSConn) (*userConn, bool) {
 
 	if !ok {
 		entry = &userConn{
-			conns: make(map[*ws.NSConn]struct{}),
+			conns: make(map[*neffos.NSConn]struct{}),
 		}
 
 		u.mu.Lock()
@@ -49,7 +49,7 @@ func (u *Users) conn(c *ws.NSConn) (*userConn, bool) {
 	return entry, !ok
 }
 
-func (u *Users) get(c *ws.NSConn) *userConn {
+func (u *Users) get(c *neffos.NSConn) *userConn {
 	u.mu.RLock()
 	entry, ok := u.entries[c.Conn.ID()]
 	u.mu.RUnlock()
@@ -69,11 +69,11 @@ func (u *Users) remove(user string) {
 
 type userConn struct {
 	mu    sync.RWMutex
-	conns map[*ws.NSConn]struct{}
+	conns map[*neffos.NSConn]struct{}
 }
 
 // returns true for new conn.
-func (u *userConn) addConn(c *ws.NSConn) bool {
+func (u *userConn) addConn(c *neffos.NSConn) bool {
 	u.mu.RLock()
 	_, ok := u.conns[c]
 	u.mu.RUnlock()
@@ -87,7 +87,7 @@ func (u *userConn) addConn(c *ws.NSConn) bool {
 	return false
 }
 
-func (u *userConn) deleteConn(c *ws.NSConn) (wasLast bool) {
+func (u *userConn) deleteConn(c *neffos.NSConn) (wasLast bool) {
 	u.mu.Lock()
 	delete(u.conns, c)
 	wasLast = len(u.conns) == 0
@@ -133,12 +133,12 @@ var users = &Users{
 	entries: make(map[string]*userConn),
 }
 
-var handler = ws.WithTimeout{
+var handler = neffos.WithTimeout{
 	ReadTimeout:  timeout,
 	WriteTimeout: timeout,
-	Namespaces: ws.Namespaces{
-		"default": ws.Events{
-			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+	Namespaces: neffos.Namespaces{
+		"default": neffos.Events{
+			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				_, isNew := users.conn(c)
 				if isNew || c.Conn.IsClient() {
 					log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
@@ -150,7 +150,7 @@ var handler = ws.WithTimeout{
 
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
+			neffos.OnNamespaceDisconnect: func(c *neffos.NSConn, msg neffos.Message) error {
 				if msg.Err != nil {
 					log.Printf("This client can't disconnect yet, server does not allow that action, reason: %v", msg.Err)
 					return nil
@@ -174,7 +174,7 @@ var handler = ws.WithTimeout{
 
 				return nil
 			},
-			"chat": func(c *ws.NSConn, msg ws.Message) error {
+			"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 				if !c.Conn.IsClient() {
 					// this is possible too:
 					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
@@ -232,13 +232,13 @@ func main() {
 	}
 }
 
-func server(upgrader ws.Upgrader) {
-	srv := ws.New(upgrader, handler)
+func server(upgrader neffos.Upgrader) {
+	srv := neffos.New(upgrader, handler)
 	srv.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
 		return r.RemoteAddr[:strings.IndexByte(r.RemoteAddr, ':')]
 	}
 
-	srv.OnConnect = func(c *ws.Conn) error {
+	srv.OnConnect = func(c *neffos.Conn) error {
 		log.Printf("[%s] connected to server.", c.ID())
 		// time.Sleep(3 * time.Second)
 		// c.Connect(nil, namespace) // auto-connect to a specific namespace.
@@ -246,7 +246,7 @@ func server(upgrader ws.Upgrader) {
 		// println("client connected")
 		return nil
 	}
-	srv.OnDisconnect = func(c *ws.Conn) {
+	srv.OnDisconnect = func(c *neffos.Conn) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
 	srv.OnUpgradeError = func(err error) {
@@ -269,29 +269,29 @@ func server(upgrader ws.Upgrader) {
 			// for _, conn := range srv.GetConnectionsByNamespace(namespace) {
 			// 	conn.Disconnect()
 			// }
-			// srv.Broadcast(nil, ws.Message{
+			// srv.Broadcast(nil, neffos.Message{
 			// 	Namespace: namespace,
-			// 	Event:     ws.OnNamespaceDisconnect,
+			// 	Event:     neffos.OnNamespaceDisconnect,
 			// })
-			srv.Do(func(c *ws.Conn) {
+			srv.Do(func(c *neffos.Conn) {
 				// c.Close()
 				c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
-			// srv.Do(func(c *ws.Conn) {
+			// srv.Do(func(c *neffos.Conn) {
 			// 	c.Write(namespace, "chat", text)
 			// })
-			srv.Broadcast(nil, ws.Message{Namespace: namespace, Event: "chat", Body: text})
+			srv.Broadcast(nil, neffos.Message{Namespace: namespace, Event: "chat", Body: text})
 		}
 		fmt.Fprint(os.Stdout, ">> ")
 	}
 }
 
-func client(dialer ws.Dialer) {
+func client(dialer neffos.Dialer) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(timeout))
 	defer cancel()
 
-	client, err := ws.Dial(dialer, ctx, endpoint, handler)
+	client, err := neffos.Dial(dialer, ctx, endpoint, handler)
 	if err != nil {
 		panic(err)
 	}

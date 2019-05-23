@@ -1,9 +1,8 @@
-package ws
+package neffos
 
 import (
 	"context"
 	"strings"
-	// "time"
 )
 
 type Client struct {

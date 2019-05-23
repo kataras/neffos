@@ -10,9 +10,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/kataras/ws"
-	"github.com/kataras/ws/gobwas"
-	"github.com/kataras/ws/gorilla"
+	"github.com/kataras/neffos"
+	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/gorilla"
 )
 
 const (
@@ -21,12 +21,12 @@ const (
 	timeout   = 0 // 30 * time.Second
 )
 
-var handler = ws.WithTimeout{
+var handler = neffos.WithTimeout{
 	ReadTimeout:  timeout,
 	WriteTimeout: timeout,
-	Namespaces: ws.Namespaces{
-		"default": ws.Events{
-			ws.OnNamespaceConnect: func(c *ws.NSConn, msg ws.Message) error {
+	Namespaces: neffos.Namespaces{
+		"default": neffos.Events{
+			neffos.OnNamespaceConnect: func(c *neffos.NSConn, msg neffos.Message) error {
 				if msg.Err != nil {
 					log.Printf("This client can't connect because of: %v", msg.Err)
 					return nil
@@ -40,7 +40,7 @@ var handler = ws.WithTimeout{
 
 				return err
 			},
-			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				if !c.Conn.IsClient() {
 					c.Emit("chat", []byte("welcome to server's namespace"))
 				}
@@ -49,7 +49,7 @@ var handler = ws.WithTimeout{
 
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
+			neffos.OnNamespaceDisconnect: func(c *neffos.NSConn, msg neffos.Message) error {
 				if msg.Err != nil {
 					log.Printf("This client can't disconnect yet, server does not allow that action, reason: %v", msg.Err)
 					return nil
@@ -72,7 +72,7 @@ var handler = ws.WithTimeout{
 
 				return err
 			},
-			"chat": func(c *ws.NSConn, msg ws.Message) error {
+			"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 				if !c.Conn.IsClient() {
 					// this is possible too:
 					// if bytes.Equal(msg.Body, []byte("force disconnect")) {
@@ -136,10 +136,10 @@ var (
 	serverHandlesConnectNamespace = true
 )
 
-func server(upgrader ws.Upgrader) {
-	srv := ws.New(upgrader, handler)
+func server(upgrader neffos.Upgrader) {
+	srv := neffos.New(upgrader, handler)
 
-	srv.OnConnect = func(c *ws.Conn) error {
+	srv.OnConnect = func(c *neffos.Conn) error {
 		if dissalowAll {
 			return fmt.Errorf("you are not allowed to connect here for some reason")
 		}
@@ -156,7 +156,7 @@ func server(upgrader ws.Upgrader) {
 		}
 
 		if notifyOthers {
-			c.Server().Broadcast(c, ws.Message{
+			c.Server().Broadcast(c, neffos.Message{
 				Namespace: namespace,
 				Event:     "chat",
 				Body:      []byte(fmt.Sprintf("Client [%s] connected too.", c.ID())),
@@ -166,7 +166,7 @@ func server(upgrader ws.Upgrader) {
 		return nil
 	}
 
-	srv.OnDisconnect = func(c *ws.Conn) {
+	srv.OnDisconnect = func(c *neffos.Conn) {
 		log.Printf("[%s] disconnected from the server.", c.ID())
 	}
 
@@ -187,15 +187,15 @@ func server(upgrader ws.Upgrader) {
 
 		text := scanner.Bytes()
 		if bytes.Equal(text, []byte("force disconnect")) {
-			srv.Do(func(c *ws.Conn) {
+			srv.Do(func(c *neffos.Conn) {
 				c.DisconnectAll(nil)
 				//	c.Namespace(namespace).Disconnect(nil)
 			})
 		} else {
-			// srv.Do(func(c ws.Conn) {
+			// srv.Do(func(c neffos.Conn) {
 			// 	c.Write(namespace, "chat", text)
 			// })
-			srv.Broadcast(nil, ws.Message{Namespace: namespace, Event: "chat", Body: text})
+			srv.Broadcast(nil, neffos.Message{Namespace: namespace, Event: "chat", Body: text})
 		}
 		fmt.Fprint(os.Stdout, ">> ")
 	}
@@ -203,18 +203,18 @@ func server(upgrader ws.Upgrader) {
 
 const dialAndConnectTimeout = 5 * time.Second
 
-func client(dialer ws.Dialer) {
+func client(dialer neffos.Dialer) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
 	defer cancel()
 
-	client, err := ws.Dial(dialer, ctx, endpoint, handler)
+	client, err := neffos.Dial(dialer, ctx, endpoint, handler)
 	if err != nil {
 		panic(err)
 	}
 
 	defer client.Close()
 
-	var c *ws.NSConn
+	var c *neffos.NSConn
 
 	if serverHandlesConnectNamespace {
 		c, err = client.WaitServerConnect(ctx, namespace)

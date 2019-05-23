@@ -1,4 +1,4 @@
-package ws_test
+package neffos_test
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kataras/ws"
+	"github.com/kataras/neffos"
 )
 
 func TestConnect(t *testing.T) {
@@ -19,39 +19,39 @@ func TestConnect(t *testing.T) {
 		onlyOnClient                   = "only_on_client"
 		namespaceThatShouldErrOnServer = "no_access_by_server"
 		namespaceThatShouldErrOnClient = "no_access_by_client"
-		emptyEvents                    = ws.Events{}
+		emptyEvents                    = neffos.Events{}
 	)
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{
+	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{
 		"":           emptyEvents,
 		namespace:    emptyEvents,
 		onlyOnServer: emptyEvents,
-		namespaceThatShouldErrOnServer: ws.Events{
-			ws.OnNamespaceConnect: func(c *ws.NSConn, msg ws.Message) error {
-				return ws.ErrBadNamespace
+		namespaceThatShouldErrOnServer: neffos.Events{
+			neffos.OnNamespaceConnect: func(c *neffos.NSConn, msg neffos.Message) error {
+				return neffos.ErrBadNamespace
 			},
 		},
 		namespaceThatShouldErrOnClient: emptyEvents,
 	})
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{
+	err := runTestClient("localhost:8080", neffos.Namespaces{
 		"":           emptyEvents,
 		namespace:    emptyEvents,
 		onlyOnClient: emptyEvents,
-		namespaceThatShouldErrOnServer: ws.Events{
-			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+		namespaceThatShouldErrOnServer: neffos.Events{
+			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				t.Fatalf("%s namespace shouldn't be accessible to the client to connect", namespaceThatShouldErrOnServer)
 				return nil
 			},
 		},
-		namespaceThatShouldErrOnClient: ws.Events{
-			ws.OnNamespaceConnect: func(c *ws.NSConn, msg ws.Message) error {
-				return ws.ErrBadNamespace
+		namespaceThatShouldErrOnClient: neffos.Events{
+			neffos.OnNamespaceConnect: func(c *neffos.NSConn, msg neffos.Message) error {
+				return neffos.ErrBadNamespace
 			},
 		},
 	},
-		func(dialer string, client *ws.Client) {
+		func(dialer string, client *neffos.Client) {
 			defer client.Close()
 
 			// should success, empty namespace naming is allowed and it's defined on both server and client-side.
@@ -77,13 +77,13 @@ func TestConnect(t *testing.T) {
 			}
 
 			c, err = client.Connect(nil, namespaceThatShouldErrOnServer)
-			if err != ws.ErrBadNamespace {
-				t.Fatalf("%s namespace connect should give a remote error by the server of the ws.ErrBadNamespace exactly (it's a typed error which its text is converted to error when deserialized) but got: %v", namespaceThatShouldErrOnServer, err)
+			if err != neffos.ErrBadNamespace {
+				t.Fatalf("%s namespace connect should give a remote error by the server of the neffos.ErrBadNamespace exactly (it's a typed error which its text is converted to error when deserialized) but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
 			c, err = client.Connect(nil, namespaceThatShouldErrOnClient)
-			if err != ws.ErrBadNamespace {
-				t.Fatalf("%s namespace connect should give a local event's error by the client of the ws.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
+			if err != neffos.ErrBadNamespace {
+				t.Fatalf("%s namespace connect should give a local event's error by the client of the neffos.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
 		})
@@ -99,7 +99,7 @@ func TestAsk(t *testing.T) {
 		pongMessage = []byte("PONG MESSAGE")
 	)
 
-	testMessage := func(dialer string, i int, msg ws.Message) {
+	testMessage := func(dialer string, i int, msg neffos.Message) {
 		if msg.Namespace != namespace {
 			t.Fatalf("[%s] [%d] expected namespace to be %s but got %s instead", dialer, i, namespace, msg.Namespace)
 		}
@@ -113,14 +113,14 @@ func TestAsk(t *testing.T) {
 		}
 	}
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		pingEvent: func(c *ws.NSConn, msg ws.Message) error {
+	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+		pingEvent: func(c *neffos.NSConn, msg neffos.Message) error {
 			// c.Emit("event", pongMessage)
-			return ws.Reply(pongMessage) // changes only body; ns,event remains.
+			return neffos.Reply(pongMessage) // changes only body; ns,event remains.
 		}}})
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{namespace: ws.Events{}}, func(dialer string, client *ws.Client) {
+	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: neffos.Events{}}, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(nil, namespace)
@@ -149,13 +149,13 @@ func TestAsk(t *testing.T) {
 func TestOnAnyEvent(t *testing.T) {
 	var (
 		namespace       = "default"
-		expectedMessage = ws.Message{
+		expectedMessage = neffos.Message{
 			Namespace: namespace,
 			Event:     "an_event",
 			Body:      []byte("a_body"),
 		}
 		wg          sync.WaitGroup // a pure check for client's `Emit` to fire (`Ask` don't need this).
-		testMessage = func(msg ws.Message) {
+		testMessage = func(msg neffos.Message) {
 			// if !reflect.DeepEqual(msg, expectedMessage) { no because of Ask.wait.
 			if msg.Namespace != expectedMessage.Namespace ||
 				msg.Event != expectedMessage.Event ||
@@ -166,24 +166,24 @@ func TestOnAnyEvent(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		ws.OnAnyEvent: func(c *ws.NSConn, msg ws.Message) error {
-			if ws.IsSystemEvent(msg.Event) { // skip connect/disconnect messages.
+	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+		neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
+			if neffos.IsSystemEvent(msg.Event) { // skip connect/disconnect messages.
 				return nil
 			}
 
-			return ws.Reply(msg.Body)
+			return neffos.Reply(msg.Body)
 		}}})
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{namespace: ws.Events{
-		expectedMessage.Event: func(c *ws.NSConn, msg ws.Message) error {
+	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+		expectedMessage.Event: func(c *neffos.NSConn, msg neffos.Message) error {
 			defer wg.Done()
 			testMessage(msg)
 
 			return nil
 		},
-	}}, func(dialer string, client *ws.Client) {
+	}}, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(nil, namespace)
@@ -213,12 +213,12 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 		eventThatWillGiveErrorByServer = "event_error_server"
 		eventErrorText                 = "this event will give error by server"
 		nativeMessage                  = []byte("this is a native/raw websocket message")
-		events                         = ws.Events{
-			ws.OnNativeMessage: func(c *ws.NSConn, msg ws.Message) error {
+		events                         = neffos.Events{
+			neffos.OnNativeMessage: func(c *neffos.NSConn, msg neffos.Message) error {
 				defer wg.Done()
 
-				expectedMessage := ws.Message{
-					Event:    ws.OnNativeMessage,
+				expectedMessage := neffos.Message{
+					Event:    neffos.OnNativeMessage,
 					Body:     nativeMessage,
 					IsNative: true,
 				}
@@ -232,18 +232,18 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 		}
 	)
 
-	serverHandler := ws.JoinConnHandlers(ws.Namespaces{namespace: events},
-		ws.Events{
-			eventThatWillGiveErrorByServer: func(c *ws.NSConn, msg ws.Message) error {
+	serverHandler := neffos.JoinConnHandlers(neffos.Namespaces{namespace: events},
+		neffos.Events{
+			eventThatWillGiveErrorByServer: func(c *neffos.NSConn, msg neffos.Message) error {
 				return fmt.Errorf(eventErrorText)
 			},
 		})
 	teardownServer := runTestServer("localhost:8080", serverHandler)
 	defer teardownServer()
 
-	clientHandler := ws.JoinConnHandlers(ws.Namespaces{namespace: events},
-		ws.Events{
-			eventThatWillGiveErrorByServer: func(c *ws.NSConn, msg ws.Message) error {
+	clientHandler := neffos.JoinConnHandlers(neffos.Namespaces{namespace: events},
+		neffos.Events{
+			eventThatWillGiveErrorByServer: func(c *neffos.NSConn, msg neffos.Message) error {
 				defer wg.Done()
 				if !c.Conn.IsClient() {
 					t.Fatalf("this should only be executed by client-side, if not then the JoinConnHandlers didn't work as expected")
@@ -259,7 +259,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 			},
 		})
 
-	err := runTestClient("localhost:8080", clientHandler, func(dialer string, client *ws.Client) {
+	err := runTestClient("localhost:8080", clientHandler, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(nil, namespace)
@@ -269,7 +269,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 
 		// Ask is not available on native websocket messages of course.
 		wg.Add(1)
-		c.Conn.Write(ws.Message{
+		c.Conn.Write(neffos.Message{
 			Body:     nativeMessage,
 			IsNative: true,
 		})
@@ -292,7 +292,7 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 		event1           = "event1"
 		event2           = "event2"
 		event3           = "event3"
-		expectedMessages = map[string]ws.Message{
+		expectedMessages = map[string]neffos.Message{
 			event1: {
 				Namespace: namespace,
 				Event:     event1,
@@ -309,9 +309,9 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 				Body:      []byte("body3"),
 			},
 		}
-		events = ws.Events{
-			ws.OnAnyEvent: func(c *ws.NSConn, msg ws.Message) error {
-				if ws.IsSystemEvent(msg.Event) {
+		events = neffos.Events{
+			neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
+				if neffos.IsSystemEvent(msg.Event) {
 					return nil
 				}
 
@@ -326,7 +326,7 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 					defer wg.Done()
 				} else {
 					// send back to the client the message as it's.
-					return ws.Reply(msg.Body)
+					return neffos.Reply(msg.Body)
 				}
 
 				return nil
@@ -334,11 +334,11 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", ws.Namespaces{namespace: events})
+	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: events})
 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", ws.Namespaces{namespace: events},
-		func(dialer string, client *ws.Client) {
+	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: events},
+		func(dialer string, client *neffos.Client) {
 			defer client.Close()
 
 			c, err := client.Connect(nil, namespace)

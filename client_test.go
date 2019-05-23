@@ -1,20 +1,20 @@
-package ws_test
+package neffos_test
 
 import (
 	"fmt"
 
-	"github.com/kataras/ws"
+	"github.com/kataras/neffos"
 
-	gobwas "github.com/kataras/ws/gobwas"
-	gorilla "github.com/kataras/ws/gorilla"
+	gobwas "github.com/kataras/neffos/gobwas"
+	gorilla "github.com/kataras/neffos/gorilla"
 )
 
-func runTestClient(addr string, connHandler ws.ConnHandler, testFn func(string, *ws.Client)) error {
-	gobwasClient, err := ws.Dial(gobwas.DefaultDialer, nil, fmt.Sprintf("ws://%s/gobwas", addr), connHandler)
+func runTestClient(addr string, connHandler neffos.ConnHandler, testFn func(string, *neffos.Client)) error {
+	gobwasClient, err := neffos.Dial(gobwas.DefaultDialer, nil, fmt.Sprintf("ws://%s/gobwas", addr), connHandler)
 	if err != nil {
 		return err
 	}
-	gorillaClient, err := ws.Dial(gorilla.DefaultDialer, nil, fmt.Sprintf("ws://%s/gorilla", addr), connHandler)
+	gorillaClient, err := neffos.Dial(gorilla.DefaultDialer, nil, fmt.Sprintf("ws://%s/gorilla", addr), connHandler)
 	if err != nil {
 		return err
 	}

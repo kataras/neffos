@@ -4,15 +4,15 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/kataras/ws"
+	"github.com/kataras/neffos"
 
 	gorilla "github.com/gorilla/websocket"
 )
 
 var DefaultDialer = Dialer(gorilla.DefaultDialer, make(http.Header))
 
-func Dialer(dialer *gorilla.Dialer, requestHeader http.Header) ws.Dialer {
-	return func(ctx context.Context, url string) (ws.Socket, error) {
+func Dialer(dialer *gorilla.Dialer, requestHeader http.Header) neffos.Dialer {
+	return func(ctx context.Context, url string) (neffos.Socket, error) {
 		underline, _, err := dialer.DialContext(ctx, url, requestHeader)
 		if err != nil {
 			return nil, err

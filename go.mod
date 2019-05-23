@@ -1,4 +1,4 @@
-module github.com/kataras/ws
+module github.com/kataras/neffos
 
 go 1.12
 

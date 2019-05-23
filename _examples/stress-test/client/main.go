@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kataras/ws"
-	"github.com/kataras/ws/gobwas"
-	"github.com/kataras/ws/gorilla"
+	"github.com/kataras/neffos"
+	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/gorilla"
 
 	"golang.org/x/sync/semaphore"
 )
@@ -41,22 +41,22 @@ var totalConnectedNamespace = new(uint64)
 var (
 	sem = semaphore.NewWeighted(maxConcurrentClients)
 
-	handler = ws.WithTimeout{
+	handler = neffos.WithTimeout{
 		ReadTimeout:  60 * time.Second, // alive,
 		WriteTimeout: 60 * time.Second, // alive,
-		Events: ws.Events{
-			ws.OnNamespaceConnected: func(c *ws.NSConn, msg ws.Message) error {
+		Events: neffos.Events{
+			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				atomic.AddUint64(totalConnectedNamespace, 1)
 				return nil
 			},
-			ws.OnNamespaceDisconnect: func(c *ws.NSConn, msg ws.Message) error {
+			neffos.OnNamespaceDisconnect: func(c *neffos.NSConn, msg neffos.Message) error {
 				if maxConcurrentClients > 0 {
 					sem.Release(1)
 				}
 
 				return nil
 			},
-			"chat": func(c *ws.NSConn, msg ws.Message) error {
+			"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 				if verbose {
 					log.Println(string(msg.Body))
 				}
@@ -240,7 +240,7 @@ var counter uint32
 
 var smallPayload = []byte("the affection")
 
-func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
+func connect(wg *sync.WaitGroup, dialer neffos.Dialer, alive time.Duration) {
 	defer wg.Done()
 
 	// t := atomic.AddUint32(&counter, 1)
@@ -249,7 +249,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancel()
 
-	client, err := ws.Dial(dialer, ctx, url, handler)
+	client, err := neffos.Dial(dialer, ctx, url, handler)
 
 	if err != nil {
 		// log.Printf("connection failure: %v\n", err)
@@ -268,7 +268,7 @@ func connect(wg *sync.WaitGroup, dialer ws.Dialer, alive time.Duration) {
 	ctxConnect, cancelConnect := context.WithDeadline(context.Background(), time.Now().Add(25*time.Second))
 	defer cancelConnect()
 
-	var c *ws.NSConn
+	var c *neffos.NSConn
 
 	if clientHandleNamespaceConnect {
 		c, err = client.Connect(ctxConnect, "")
