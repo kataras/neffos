@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// The Message is the structure which describes the incoming and outcoming data.
+// Emitter's "body" argument is the `Message.Body` field.
+// Emitter's return non-nil error is the `Message.Err` field.
+// If native message sent then the `Message.Body` is filled with the body and
+// when incoming native message then the `Message.Event` is the `OnNativeMessage`,
+// native messages are allowed only when an empty namespace("") and its `OnNativeMessage` callback are present.
+//
+// The the raw data received/sent structured following this order:
 // <wait()>;
 // <namespace>;
 // <room>;
@@ -14,14 +22,24 @@ import (
 // <isError(0-1)>;
 // <isNoOp(0-1)>;
 // <body||error_message>
+//
+// Internal `serializeMessage` and `deserializeMessage` functions
+// do the job on `Conn#Write`, `NSConn#Emit` and `Room#Emit` calls.
 type Message struct {
 	wait string
 
+	// The Namespace that this message sent to/received from.
 	Namespace string
-	Room      string
-	Event     string
-	Body      []byte
-	Err       error
+	// The Room that this message sent to/received from.
+	Room string
+	// The Event that this message sent to/received from.
+	Event string
+	// The actual body of the incoming/outcoming data.
+	Body []byte
+	// The Err contains any message's error, if any.
+	// Note that server-side and client-side connections can return an error instead of a message from each event callbacks,
+	// except the clients's force Disconnect which its local event doesn't matter when disconnected manually.
+	Err error
 
 	// if true then `Err` is filled by the error message and
 	// the last segment of incoming/outcoming serialized message is the error message instead of the body.
@@ -114,7 +132,9 @@ func genWaitConfirmation(wait string) string {
 }
 
 type (
+	// MessageEncrypt type kept for future use when serializing a message.
 	MessageEncrypt func(out []byte) []byte
+	// MessageDecrypt type kept for future use when deserializing a message.
 	MessageDecrypt func(in []byte) []byte
 )
 
@@ -209,7 +229,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 
 const validMessageSepCount = 7
 
-func deserializeInput(b []byte, allowNativeMessages bool) (
+func deserializeInput(b []byte, allowNativeMessages bool) ( // go-lint: ignore line
 	wait,
 	namespace,
 	room,
