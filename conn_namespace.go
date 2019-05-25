@@ -5,6 +5,10 @@ import (
 	"sync"
 )
 
+// NSConn describes a connected connection to a specific namespace,
+// it emits with the `Message.Namespace` filled and it can join to multiple rooms.
+// A single `Conn` can be connected to one or more namespaces,
+// each connected namespace is described by this structure.
 type NSConn struct {
 	Conn *Conn
 	// Static from server, client can select which to use or not.
@@ -30,6 +34,8 @@ func newNSConn(c *Conn, namespace string, events Events) *NSConn {
 	}
 }
 
+// Emit method sends a message to the remote side
+// with its `Message.Namespace` filled to this specific namespace.
 func (ns *NSConn) Emit(event string, body []byte) bool {
 	if ns == nil { // if for any reason Namespace() called without be available.
 		return false
@@ -38,6 +44,7 @@ func (ns *NSConn) Emit(event string, body []byte) bool {
 	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body})
 }
 
+// Ask method writes a message to the remote side and blocks until a response or an error received.
 func (ns *NSConn) Ask(ctx context.Context, event string, body []byte) (Message, error) {
 	if ns == nil {
 		return Message{}, ErrWrite
@@ -46,6 +53,8 @@ func (ns *NSConn) Ask(ctx context.Context, event string, body []byte) (Message, 
 	return ns.Conn.Ask(ctx, Message{Namespace: ns.namespace, Event: event, Body: body})
 }
 
+// JoinRoom method can be used to join a connection to a specific room, rooms are dynamic.
+// Returns the joined `Room`.
 func (ns *NSConn) JoinRoom(ctx context.Context, roomName string) (*Room, error) {
 	if ns == nil {
 		return nil, ErrWrite
@@ -54,6 +63,7 @@ func (ns *NSConn) JoinRoom(ctx context.Context, roomName string) (*Room, error) 
 	return ns.askRoomJoin(ctx, roomName)
 }
 
+// Room method returns a joined `Room`.
 func (ns *NSConn) Room(roomName string) *Room {
 	if ns == nil {
 		return nil
@@ -80,6 +90,8 @@ func (ns *NSConn) Rooms() []*Room {
 	return rooms
 }
 
+// LeaveAll method sends a remote and local leave room signal `OnRoomLeave` to and for all rooms
+// and fires the `OnRoomLeft` event if succeed.
 func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	if ns == nil {
 		return nil
@@ -117,6 +129,7 @@ func (ns *NSConn) forceLeaveAll(isLocal bool) {
 	}
 }
 
+// Disconnect method sends a disconnect signal to the remote side and fires the local `OnNamespaceDisconnect` event.
 func (ns *NSConn) Disconnect(ctx context.Context) error {
 	if ns == nil {
 		return nil
