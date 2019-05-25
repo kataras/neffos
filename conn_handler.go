@@ -4,6 +4,9 @@ import (
 	"time"
 )
 
+// ConnHandler is the interface which
+// `Events`, `Namespaces` and `WithTimeout` are implement.
+// It's exported just to be used on the `Dial`(client) and `New` (server) functions.
 type ConnHandler interface {
 	getNamespaces() Namespaces
 }

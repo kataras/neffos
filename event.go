@@ -8,17 +8,34 @@ import (
 	"strings"
 )
 
+// MessageHandlerFunc is the definition type of the events' callback.
+// Its error can be written to the other side on specific events,
+// i.e on `OnNamespaceConnect` it will abort a remote namespace connection.
+// See examples for more.
 type MessageHandlerFunc func(*NSConn, Message) error
 
 var (
-	OnNamespaceConnect    = "_OnNamespaceConnect"
-	OnNamespaceConnected  = "_OnNamespaceConnected"
+	// OnNamespaceConnect is the event name which its callback is fired right before namespace connect,
+	// if non-nil error then the remote connection's `Conn.Connect` will fail and send that error text.
+	// Connection is not ready to emit data to the namespace.
+	OnNamespaceConnect = "_OnNamespaceConnect"
+	// OnNamespaceConnected is the event name which its callback is fired after namespace successfully connected.
+	// Connection is ready to emit data back to the namespace.
+	OnNamespaceConnected = "_OnNamespaceConnected"
+	// OnNamespaceDisconnect is the event name which its callback is fired when
+	// remote namespace disconnection or local namespace disconnection is happening.
+	// For server-side connections the reply matters, so if error returned then the client-side cannot disconnect yet,
+	// for client-side the return value does not matter.
 	OnNamespaceDisconnect = "_OnNamespaceDisconnect" // if allowed to connect then it's allowed to disconnect as well.
-	OnRoomJoin            = "_OnRoomJoin"            // able to check if allowed to join.
-	OnRoomJoined          = "_OnRoomJoined"          // able to broadcast messages to room.
-	OnRoomLeave           = "_OnRoomLeave"           // able to broadcast bye-bye messages to room.
-	OnRoomLeft            = "_OnRoomLeft"            // if allowed to join to a room, then its allowed to leave from it.
-
+	// OnRoomJoin is the event name which its callback is fired right before room join.
+	OnRoomJoin = "_OnRoomJoin" // able to check if allowed to join.
+	// OnRoomJoined is the event name which its callback is fired after the connection has successfully joined to a room.
+	OnRoomJoined = "_OnRoomJoined" // able to broadcast messages to room.
+	// OnRoomLeave is the event name which its callback is fired right before room leave.
+	OnRoomLeave = "_OnRoomLeave" // able to broadcast bye-bye messages to room.
+	// OnRoomLeft is the event name which its callback is fired after the connection has successfully left from a room.
+	OnRoomLeft = "_OnRoomLeft" // if allowed to join to a room, then its allowed to leave from it.
+	// OnAnyEvent is the event name which its callback is fired when incoming message's event is not declared to the ConnHandler(`Events` or `Namespaces`).
 	OnAnyEvent = "_OnAnyEvent" // when event no match.
 	// OnNativeMessage is fired on incoming native/raw websocket messages.
 	// If this event defined then an incoming message can pass the check (it's an invalid message format)
@@ -27,6 +44,9 @@ var (
 	OnNativeMessage = "_OnNativeMessage"
 )
 
+// IsSystemEvent reports whether the "event" is a system event,
+// OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect,
+// OnRoomJoin, OnRoomJoined, OnRoomLeave and OnRoomLeft.
 func IsSystemEvent(event string) bool {
 	switch event {
 	case OnNamespaceConnect, OnNamespaceConnected, OnNamespaceDisconnect,
@@ -37,6 +57,7 @@ func IsSystemEvent(event string) bool {
 	}
 }
 
+// CloseError can be used to send and close a remote connection in the event callback's return statement.
 type CloseError struct {
 	error
 	Code int
@@ -127,6 +148,9 @@ func isReply(err error) ([]byte, bool) {
 	return nil, false
 }
 
+// Reply is a special type of custom error which sends a message back to the other side
+// with the exact same incoming Message's Namespace (and Room if specified)
+// except its body which would be the given "body".
 func Reply(body []byte) error {
 	return reply{body}
 }
