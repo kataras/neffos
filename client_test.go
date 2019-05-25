@@ -10,11 +10,11 @@ import (
 )
 
 func runTestClient(addr string, connHandler neffos.ConnHandler, testFn func(string, *neffos.Client)) error {
-	gobwasClient, err := neffos.Dial(gobwas.DefaultDialer, nil, fmt.Sprintf("ws://%s/gobwas", addr), connHandler)
+	gobwasClient, err := neffos.Dial(nil, gobwas.DefaultDialer, fmt.Sprintf("ws://%s/gobwas", addr), connHandler)
 	if err != nil {
 		return err
 	}
-	gorillaClient, err := neffos.Dial(gorilla.DefaultDialer, nil, fmt.Sprintf("ws://%s/gorilla", addr), connHandler)
+	gorillaClient, err := neffos.Dial(nil, gorilla.DefaultDialer, fmt.Sprintf("ws://%s/gorilla", addr), connHandler)
 	if err != nil {
 		return err
 	}

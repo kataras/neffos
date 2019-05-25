@@ -249,7 +249,7 @@ func connect(wg *sync.WaitGroup, dialer neffos.Dialer, alive time.Duration) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancel()
 
-	client, err := neffos.Dial(dialer, ctx, url, handler)
+	client, err := neffos.Dial(ctx, dialer, url, handler)
 
 	if err != nil {
 		// log.Printf("connection failure: %v\n", err)

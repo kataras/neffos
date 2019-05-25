@@ -291,7 +291,7 @@ func client(dialer neffos.Dialer) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(timeout))
 	defer cancel()
 
-	client, err := neffos.Dial(dialer, ctx, endpoint, handler)
+	client, err := neffos.Dial(ctx, dialer, endpoint, handler)
 	if err != nil {
 		panic(err)
 	}

@@ -12,6 +12,8 @@ import (
 	"github.com/iris-contrib/go.uuid"
 )
 
+// Upgrader is the definition type of a protocol upgrader, gorilla or gobwas or custom.
+// It is the first parameter of the `New` function which constructs a neffos server.
 type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
 
 // IDGenerator is the type of function that it is used
@@ -29,6 +31,14 @@ var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) st
 	return id.String()
 }
 
+// Server is the neffos server.
+// Keeps the `IDGenerator` which can be customized, by default it's the `DefaultIDGenerator`  which
+// generates connections unique identifiers using the uuid/v4.
+//
+// Callers can optionally register callbacks for connection, disconnection and errored.
+// Its most important methods are `ServeHTTP` which is used to register the server on a specific endpoint
+// and `Broadcast` and `Close`.
+// Use the `New` function to create a new server, server starts automatically, no further action is required.
 type Server struct {
 	upgrader    Upgrader
 	IDGenerator IDGenerator
@@ -50,11 +60,25 @@ type Server struct {
 
 	closed uint32
 
+	// OnUpgradeError can be optionally registered to catch upgrade errors.
 	OnUpgradeError func(err error)
-	OnConnect      func(c *Conn) error
-	OnDisconnect   func(c *Conn)
+	// OnConnect can be optionally registered to be notified for any new neffos client connection,
+	// it can be used to force-connect a client to a specific namespace(s) or to send data immediately or
+	// even to cancel a client connection and dissalow its connection when its return error value is not nil.
+	// Don't confuse it with the `OnNamespaceConnect`, this callback is for the entire client side connection.
+	OnConnect func(c *Conn) error
+	// OnDisconnect can be optionally registered to notify about a connection's disconnect.
+	// Don't confuse it with the `OnNamespaceDisconnect`, this callback is for the entire client side connection.
+	OnDisconnect func(c *Conn)
 }
 
+// New constructs and returns a new neffos server.
+// Listens to incoming connections automatically, no further action is required from the caller.
+// The second parameter is the "connHandler", it can be
+// filled as `Namespaces`, `Events` or `WithTimeout`, same namespaces and events can be used on the client-side as well,
+// Use the `Conn#IsClient` on any event callback to determinate if it's a client-side connection or a server-side one.
+//
+// See examples for more.
 func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 
@@ -108,6 +132,7 @@ func (s *Server) start() {
 	}
 }
 
+// Close terminates the server and all of its connections, client connections are getting notified.
 func (s *Server) Close() {
 	if atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
 		s.Do(func(c *Conn) {
@@ -116,6 +141,8 @@ func (s *Server) Close() {
 	}
 }
 
+// ServeHTTP completes the `http.Handler` interface, it should be passed on a http server's router
+// to serve this neffos server on a specific endpoint.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if atomic.LoadUint32(&s.closed) > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -235,14 +262,23 @@ func (s *Server) waitMessage(c *Conn) bool {
 	return true
 }
 
+// GetTotalConnections returns the total amount of the connected connections to the server, it's fast
+// and can be used as frequently as needed.
 func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
+// Do loops through all connected connections and fires the "fn", with this method
+// callers can do whatever they want on a connection outside of a event's callback,
+// but make sure that these operations are not taking long time to complete because it delays the
+// new incoming connections.
 func (s *Server) Do(fn func(*Conn)) {
 	s.actions <- fn
 }
 
+// Broadcast method is fast and does not block any new incoming connection,
+// it can be used as frequently as needed. Use the "msg"'s Namespace, or/and Event or/and Room to broadcast
+// to a specific type of connection collectives.
 func (s *Server) Broadcast(from *Conn, msg Message) {
 	if from != nil {
 		msg.from = from.ID()
@@ -259,7 +295,12 @@ func (s *Server) Broadcast(from *Conn, msg Message) {
 	s.broadcaster.broadcast(msg)
 }
 
-// not thread safe.
+// GetConnectionsByNamespace can be used as an alternative way to retrieve
+// all connected connections to a specific "namespace" on a specific time point.
+// Do not use this function frequently, it is not designed to be fast or cheap, use it for debugging or logging every 'x' time.
+// Users should work with the event's callbacks alone, the usability is enough for all type of operations. See `Do` too.
+//
+// Not thread safe.
 func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn {
 	conns := make(map[string]*NSConn)
 
@@ -274,7 +315,11 @@ func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn 
 	return conns
 }
 
-// not thread safe.
+// GetConnections can be used as an alternative way to retrieve
+// all connected connections to the server on a specific time point.
+// Do not use this function frequently, it is not designed to be fast or cheap, use it for debugging or logging every 'x' time.
+//
+// Not thread safe.
 func (s *Server) GetConnections() map[string]*Conn {
 	conns := make(map[string]*Conn)
 
@@ -288,7 +333,10 @@ func (s *Server) GetConnections() map[string]*Conn {
 }
 
 var (
+	// ErrBadNamespace may return from a `Conn#Connect` method when the remote side does not declare the given namespace.
 	ErrBadNamespace = errors.New("bad namespace")
-	ErrBadRoom      = errors.New("bad room")
-	ErrWrite        = errors.New("write closed")
+	// ErrBadRoom may return from a `Room#Leave` method when trying to leave from a not joined room.
+	ErrBadRoom = errors.New("bad room")
+	// ErrWrite may return from any connection's method when the underline connection is closed (unexpectedly).
+	ErrWrite = errors.New("write closed")
 )

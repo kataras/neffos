@@ -10,4 +10,6 @@ The `neffos` package is "hybrid/isomorphic", same code can be used for both serv
 
 ## Typescript/Javascript Client
 
-`neffos.js` client can run through any modern **browser** and **nodejs**. The client package lives on its own repository for front-end developers: <https://github.com/kataras/neffos.js>.
+The client package lives on its own repository for front-end developers: <https://github.com/kataras/neffos.js>.
+
+`neffos.js` client can run through any modern **browser** and **nodejs**. 

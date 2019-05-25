@@ -172,7 +172,7 @@ func main() {
 	}
 
 	srv.OnUpgradeError = func(err error) {
-		log.Printf("ERROR: [%s] %v\n", err)
+		log.Printf("Upgrade error: %v\n", err)
 	}
 
 	// if c.Err() != nil {
