@@ -11,7 +11,6 @@ The only requirement is the Go Programming Language
 	$ go get -u github.com/kataras/neffos
 
 Go Client
-
 	Built'n with this package.
 	Types like `Conn`, `NSConn`, `Room` and `ConnHandler[Events, Namespaces, WithTimeout]` are used by both sides(`New` for server, `Dial` for client).
 	The neffos package is "hybrid/isomorphic", same code can be used for both server-side and client-side connections.
@@ -21,7 +20,6 @@ Typescript/Javascript Client
 	The neffos.js client can run through any modern **browser** and **nodejs**.
 
 Examples
-
    https://github.com/kataras/neffos/tree/master/_examples
 */
 
