@@ -12,6 +12,8 @@ import (
 	"github.com/gobwas/ws/wsutil"
 )
 
+// Socket completes the `neffos.Socket` interface,
+// it describes the underline websocket connection.
 type Socket struct {
 	UnderlyingConn net.Conn
 	request        *http.Request
@@ -52,16 +54,18 @@ func newSocket(underline net.Conn, request *http.Request, client bool) *Socket {
 	}
 }
 
+// NetConn returns the underline net connection.
 func (s *Socket) NetConn() net.Conn {
 	return s.UnderlyingConn
 }
 
+// Request returns the http request value.
 func (s *Socket) Request() *http.Request {
 	return s.request
 }
 
-// Returns io.EOF on remote close.
-func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
+// ReadData reads binary or text messages from the remote connection.
+func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -116,12 +120,14 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 	// }
 }
 
-func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
-	return s.write(body, gobwas.OpText, timeout)
-}
-
+// WriteBinary sends a binary message to the remote connection.
 func (s *Socket) WriteBinary(body []byte, timeout time.Duration) error {
 	return s.write(body, gobwas.OpBinary, timeout)
+}
+
+// WriteText sends a text message to the remote connection.
+func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
+	return s.write(body, gobwas.OpText, timeout)
 }
 
 func (s *Socket) write(body []byte, op gobwas.OpCode, timeout time.Duration) error {

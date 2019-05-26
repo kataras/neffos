@@ -17,8 +17,8 @@ type (
 		NetConn() net.Conn
 		// Request returns the http request value.
 		Request() *http.Request
-		// ReadText reads binary or text messages from the remote connection.
-		ReadText(timeout time.Duration) (body []byte, err error)
+		// ReadData reads binary or text messages from the remote connection.
+		ReadData(timeout time.Duration) (body []byte, err error)
 		// WriteBinary sends a binary message to the remote connection.
 		WriteBinary(body []byte, timeout time.Duration) error
 		// WriteText sends a text message to the remote connection.
@@ -159,7 +159,7 @@ func (c *Conn) startReader() {
 	// CLIENT is ready when ACK done
 	// SERVER is ready when ACK is done AND `Server#OnConnected` returns with nil error.
 	for {
-		b, err := c.socket.ReadText(c.readTimeout)
+		b, err := c.socket.ReadData(c.readTimeout)
 		if err != nil {
 			c.readiness.unwait(err)
 			return

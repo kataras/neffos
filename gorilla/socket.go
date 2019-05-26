@@ -9,6 +9,8 @@ import (
 	gorilla "github.com/gorilla/websocket"
 )
 
+// Socket completes the `neffos.Socket` interface,
+// it describes the underline websocket connection.
 type Socket struct {
 	UnderlyingConn *gorilla.Conn
 	request        *http.Request
@@ -26,15 +28,18 @@ func newSocket(underline *gorilla.Conn, request *http.Request, client bool) *Soc
 	}
 }
 
+// NetConn returns the underline net connection.
 func (s *Socket) NetConn() net.Conn {
 	return s.UnderlyingConn.UnderlyingConn()
 }
 
+// Request returns the http request value.
 func (s *Socket) Request() *http.Request {
 	return s.request
 }
 
-func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
+// ReadData reads binary or text messages from the remote connection.
+func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -54,12 +59,14 @@ func (s *Socket) ReadText(timeout time.Duration) ([]byte, error) {
 	}
 }
 
-func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
-	return s.write(body, gorilla.TextMessage, timeout)
-}
-
+// WriteBinary sends a binary message to the remote connection.
 func (s *Socket) WriteBinary(body []byte, timeout time.Duration) error {
 	return s.write(body, gorilla.BinaryMessage, timeout)
+}
+
+// WriteText sends a text message to the remote connection.
+func (s *Socket) WriteText(body []byte, timeout time.Duration) error {
+	return s.write(body, gorilla.TextMessage, timeout)
 }
 
 func (s *Socket) write(body []byte, opCode int, timeout time.Duration) error {
