@@ -1,11 +1,10 @@
-# neffos: a lightweight real-time framework written in Go
-
 <p align="center">
-    <img src="gh_logo.png" />
+    <img src="gh_logo.svg" />
 </p>
 
-[![build status](https://img.shields.io/travis/kataras/neffos/master.svg?style=for-the-badge)](https://travis-ci.org/kataras/neffos) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/neffos) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://godoc.org/github.com/kataras/neffos) [![view examples](https://img.shields.io/badge/learn%20by-examples-0077b3.svg?style=for-the-badge)](https://github.com/kataras/neffos/tree/master/_examples) [![built for iris](https://img.shields.io/badge/built%20for-iris-2196f3.svg?style=for-the-badge)](https://github.com/kataras/iris) [![frontend pkg](https://img.shields.io/badge/get%20-browser-BDB76B.svg?style=for-the-badge)](https://github.com/kataras/neffos.js)
+[![build status](https://img.shields.io/travis/kataras/neffos/master.svg?style=for-the-badge)](https://travis-ci.org/kataras/neffos) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/neffos) [![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://godoc.org/github.com/kataras/neffos) [![view examples](https://img.shields.io/badge/learn%20by-examples-0077b3.svg?style=for-the-badge)](https://github.com/kataras/neffos/tree/master/_examples) [![chat](https://img.shields.io/gitter/room/neffos-framework/community.svg?color=blue&logo=gitter&style=for-the-badge)](https://gitter.im/neffos-framework/community) [![frontend pkg](https://img.shields.io/badge/get%20-browser-BDB76B.svg?style=for-the-badge)](https://github.com/kataras/neffos.js)
 
+----
 
 ## Installation
 
