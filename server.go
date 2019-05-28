@@ -276,12 +276,36 @@ func (s *Server) Do(fn func(*Conn)) {
 	s.actions <- fn
 }
 
+type stringerValue struct{ v string }
+
+func (s stringerValue) String() string { return s.v }
+
+// Exclude can be passed on `Server#Broadcast` when
+// caller does not have access to the `Conn`, `NSConn` or a `Room` value but
+// has access to a string variable which is a connection's ID instead.
+//
+// Example Code:
+// nsConn.Conn.Server().Broadcast(
+//	neffos.Exclude("connection_id_here"),
+//  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
+func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
+
 // Broadcast method is fast and does not block any new incoming connection,
 // it can be used as frequently as needed. Use the "msg"'s Namespace, or/and Event or/and Room to broadcast
 // to a specific type of connection collectives.
-func (s *Server) Broadcast(from *Conn, msg Message) {
-	if from != nil {
-		msg.from = from.ID()
+//
+// If first "exceptSender" parameter is not nil then the message "msg" will be
+// broadcasted to all connected clients except the given connection's ID,
+// any value that completes the `fmt.Stringer` interface is valid. Keep note that
+// `Conn`, `NSConn`, `Room` and `Exclude(connID) global function` are valid values.
+//
+// Example Code:
+// nsConn.Conn.Server().Broadcast(
+//	nsConn OR nil,
+//  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
+func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
+	if exceptSender != nil {
+		msg.from = exceptSender.String()
 	}
 
 	// s.broadcast <- msg

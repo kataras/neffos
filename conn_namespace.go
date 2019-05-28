@@ -34,6 +34,13 @@ func newNSConn(c *Conn, namespace string, events Events) *NSConn {
 	}
 }
 
+// String method simply returns the Conn's ID().
+// Useful method to this connected to a namespace connection to be passed on `Server#Broadcast` method
+// to exclude itself from the broadcasted message's receivers.
+func (ns *NSConn) String() string {
+	return ns.Conn.String()
+}
+
 // Emit method sends a message to the remote side
 // with its `Message.Namespace` filled to this specific namespace.
 func (ns *NSConn) Emit(event string, body []byte) bool {

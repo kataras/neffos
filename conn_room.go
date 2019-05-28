@@ -20,6 +20,14 @@ func newRoom(ns *NSConn, roomName string) *Room {
 	}
 }
 
+// String method simply returns the Conn's ID().
+// To get the room's name simply use the `Room.Name` struct field instead.
+// Useful method to this room to be passed on `Server#Broadcast` method
+// to exclude itself from the broadcasted message's receivers.
+func (r *Room) String() string {
+	return r.NSConn.String()
+}
+
 // Emit method sends a message to the remote side with its `Message.Room` filled to this specific room
 // and `Message.Namespace` to the underline `NSConn`'s namespace.
 func (r *Room) Emit(event string, body []byte) bool {

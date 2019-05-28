@@ -100,7 +100,9 @@ func (c *Conn) ID() string {
 	return c.id
 }
 
-// String method simply returns the ID(). Useful for fmt usage.
+// String method simply returns the ID(). Useful for fmt usage and
+// to a connection to be passed on `Server#Broadcast` method
+// to exclude itself from the broadcasted message's receivers.
 func (c *Conn) String() string {
 	return c.ID()
 }
@@ -341,6 +343,13 @@ func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 
 	return c.askConnect(ctx, namespace)
 }
+
+// const defaultNS = ""
+
+// func (c *Conn) DefaultNamespace() *NSConn {
+// 	ns, _ := c.Connect(nil, defaultNS)
+// 	return ns
+// }
 
 // WaitConnect method can be used instead of the `Connect` if the other side force-calls `Connect` to this connection
 // and this side wants to "waits" for that signal.
