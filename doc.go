@@ -3,7 +3,7 @@ Source code and other details for the project are available at GitHub:
    https://github.com/kataras/neffos
 
 Current Version
-	0.1.3
+	0.1.6
 
 Installation
 

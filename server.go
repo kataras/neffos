@@ -141,12 +141,17 @@ func (s *Server) Close() {
 	}
 }
 
-// ServeHTTP completes the `http.Handler` interface, it should be passed on a http server's router
-// to serve this neffos server on a specific endpoint.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+var (
+	errServerClosed  = errors.New("server closed")
+	errInvalidMethod = errors.New("no valid request method")
+)
+
+// Upgrade handles the connection, same as `ServeHTTP` but it can accept
+// a socket wrapper and it does return the connection or any errors.
+func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper func(Socket) Socket) (*Conn, error) {
 	if atomic.LoadUint32(&s.closed) > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return nil, errServerClosed
 	}
 
 	if r.Method != http.MethodGet {
@@ -158,7 +163,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprintln(w, http.StatusText(http.StatusMethodNotAllowed))
-		return
+		return nil, errInvalidMethod
 	}
 
 	socket, err := s.upgrader(w, r)
@@ -166,7 +171,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if s.OnUpgradeError != nil {
 			s.OnUpgradeError(err)
 		}
-		return
+		return nil, err
+	}
+
+	if socketWrapper != nil {
+		socket = socketWrapper(socket)
 	}
 
 	c := newConn(socket, s.namespaces)
@@ -174,7 +183,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
-
 	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
 	// DONE: found, see `waitMessage`.
 	// go func(c *conn) {
@@ -236,12 +244,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			//println("OnConnect error: " + err.Error())
 			c.readiness.unwait(err)
 			// c.Close()
-			return
+			return nil, err
 		}
 	}
 
 	//println("OnConnect does not exist or no error, fire unwait")
 	c.readiness.unwait(nil)
+
+	return c, nil
+}
+
+// ServeHTTP completes the `http.Handler` interface, it should be passed on a http server's router
+// to serve this neffos server on a specific endpoint.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.Upgrade(w, r, nil)
 }
 
 func (s *Server) waitMessage(c *Conn) bool {
