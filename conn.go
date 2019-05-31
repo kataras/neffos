@@ -745,8 +745,6 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 // After this method call the `Conn` is not usable anymore, a new `Dial` call is required.
 func (c *Conn) Close() {
 	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
-		close(c.closeCh)
-
 		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
 		c.connectedNamespacesMutex.Lock()
 		for namespace, ns := range c.connectedNamespaces {
@@ -773,6 +771,7 @@ func (c *Conn) Close() {
 			}
 		}()
 
+		close(c.closeCh)
 		c.socket.NetConn().Close()
 	}
 }

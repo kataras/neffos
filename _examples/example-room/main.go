@@ -154,11 +154,11 @@ func server(upgrader neffos.Upgrader) {
 			srv.Do(func(c *neffos.Conn) {
 				// c.Close()
 				c.Namespace(namespace).Disconnect(nil)
-			})
+			}, false)
 		} else {
 			// srv.Do(func(c neffos.Conn) {
 			// 	c.Write(namespace, "chat", text)
-			// })
+			// }, false)
 			srv.Broadcast(nil, neffos.Message{Namespace: namespace, Event: "chat", Body: text})
 		}
 		fmt.Fprint(os.Stdout, ">> ")

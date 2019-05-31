@@ -55,7 +55,7 @@ type Server struct {
 	connections map[*Conn]struct{}
 	connect     chan *Conn
 	disconnect  chan *Conn
-	actions     chan func(*Conn)
+	actions     chan action
 	broadcaster *broadcaster
 
 	closed uint32
@@ -90,7 +90,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		connections:  make(map[*Conn]struct{}),
 		connect:      make(chan *Conn, 1),
 		disconnect:   make(chan *Conn),
-		actions:      make(chan func(*Conn)),
+		actions:      make(chan action),
 		broadcaster:  newBroadcaster(),
 		IDGenerator:  DefaultIDGenerator,
 	}
@@ -124,9 +124,13 @@ func (s *Server) start() {
 					s.OnDisconnect(c)
 				}
 			}
-		case fn := <-s.actions:
+		case act := <-s.actions:
 			for c := range s.connections {
-				fn(c)
+				act.call(c)
+			}
+
+			if act.done != nil {
+				act.done <- struct{}{}
 			}
 		}
 	}
@@ -137,7 +141,7 @@ func (s *Server) Close() {
 	if atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
 		s.Do(func(c *Conn) {
 			c.Close()
-		})
+		}, false)
 	}
 }
 
@@ -284,12 +288,27 @@ func (s *Server) GetTotalConnections() uint64 {
 	return atomic.LoadUint64(&s.count)
 }
 
+type action struct {
+	call func(*Conn)
+	done chan struct{}
+}
+
 // Do loops through all connected connections and fires the "fn", with this method
 // callers can do whatever they want on a connection outside of a event's callback,
 // but make sure that these operations are not taking long time to complete because it delays the
 // new incoming connections.
-func (s *Server) Do(fn func(*Conn)) {
-	s.actions <- fn
+func (s *Server) Do(fn func(*Conn), async bool) {
+	act := action{call: fn}
+	if !async {
+		act.done = make(chan struct{})
+		// go func() { s.actions <- act }()
+		// <-act.done
+	}
+
+	s.actions <- act
+	if !async {
+		<-act.done
+	}
 }
 
 type stringerValue struct{ v string }

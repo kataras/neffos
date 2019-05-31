@@ -18,7 +18,8 @@ type Client struct {
 
 	// NotifyClose can be optionally registered to notify about the client's disconnect.
 	// This callback is for the entire client side connection,
-	// don't confuse it with the `OnNamespaceDisconnect` event.
+	// the channel is notified after namespace disconnected and any room left events.
+	// Don't confuse it with the `OnNamespaceDisconnect` event.
 	// Usage:
 	// <- client.NotifyClose // blocks until local `Close` or remote close of connection.
 	NotifyClose <-chan struct{}
