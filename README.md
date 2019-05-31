@@ -22,6 +22,38 @@ The client package lives on its own repository for front-end developers: <https:
 
 `neffos.js` client can run through any modern **browser** and **nodejs**.
 
+<!-- TODO: >
+## Quick start
+ 
+```sh
+# assume the following code in example.go file
+$ cat example.go
+```
+
+```go
+package main
+
+import (
+    "github.com/kataras/neffos"
+    "github.com/kataras/neffos/gobwas"
+
+)
+
+func main() {
+
+}
+```
+
+```
+# run example.go and visit http://localhost:8080 on browser
+$ go run example.go
+```
+-->
+
+## Documentation
+
+Detailed documentation can be found at [godocs](https://godoc.org/github.com/kataras/neffos).
+
 
 ## License
 

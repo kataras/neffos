@@ -12,7 +12,16 @@ import (
 type Client struct {
 	conn *Conn
 
+	// ID comes from server, local changes are not reflected,
+	// use the `Server#IDGenerator` if you want to set a custom logic for ID set.
 	ID string
+
+	// NotifyClose can be optionally registered to notify about the client's disconnect.
+	// This callback is for the entire client side connection,
+	// don't confuse it with the `OnNamespaceDisconnect` event.
+	// Usage:
+	// <- client.NotifyClose // blocks until local `Close` or remote close of connection.
+	NotifyClose <-chan struct{}
 }
 
 // Close method terminates the client-side connection.
@@ -85,5 +94,5 @@ func Dial(ctx context.Context, dial Dialer, url string, connHandler ConnHandler)
 		return nil, err
 	}
 
-	return &Client{conn: c, ID: c.id}, nil
+	return &Client{conn: c, ID: c.id, NotifyClose: c.closeCh}, nil
 }

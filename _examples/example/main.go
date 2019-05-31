@@ -250,5 +250,4 @@ func client(dialer neffos.Dialer) {
 
 		fmt.Fprint(os.Stdout, ">> ")
 	}
-
 }
