@@ -173,8 +173,9 @@ func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, erro
 		return nil, err
 	}
 
+	room = newRoom(ns, roomName)
 	ns.roomsMutex.Lock()
-	ns.rooms[roomName] = newRoom(ns, roomName)
+	ns.rooms[roomName] = room
 	ns.roomsMutex.Unlock()
 
 	joinMsg.Event = OnRoomJoined
