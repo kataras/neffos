@@ -14,6 +14,8 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
+//
+// Generate proto for Go:
 // protoc --go_out=. user_message.proto
 // go build
 //
@@ -28,8 +30,20 @@ import (
 // At short, the `Message.Body` is the raw data client/server send,
 // users of this library can use any format to unmarshal on read and marshal to send;
 // protocolbuffers, encoding/json, encoding/xml and etc.
+//
+//
+// Browser support:
+// https://github.com/protocolbuffers/protobuf/tree/master/js#commonjs-imports
+// https://github.com/protobufjs/protobuf.js#nodejs (with browserify, we use that in ./browser example)
+// https://github.com/protobufjs/protobuf.js#browsers (alternative)
+//
+// Generate proto for JavaScript:
+// protoc --js_out=import_style=commonjs,binary:./browser user_message.proto
+// See `./browser/app.js` for more.
+//
 const (
-	endpoint  = "localhost:8080"
+	addr      = "localhost:8080"
+	endpoint  = "/echo"
 	namespace = "default"
 )
 
@@ -102,8 +116,11 @@ func startServer() {
 		log.Printf("[%s] disconnected from the server.", c)
 	}
 
-	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", endpoint)
-	log.Fatal(http.ListenAndServe(endpoint, server))
+	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", addr)
+	// log.Fatal(http.ListenAndServe(addr, server))
+	http.Handle("/", http.FileServer(http.Dir("./browser")))
+	http.Handle(endpoint, server)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func startClient() {
