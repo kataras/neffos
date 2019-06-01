@@ -113,4 +113,22 @@ func TestMessageSerialization(t *testing.T) {
 	if !reflect.DeepEqual(expectedNativeMessage, msg) {
 		t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedNativeMessage, msg)
 	}
+
+	// test escape/unescape.
+	msg = Message{
+		Namespace: "contains;semi",
+		Room:      ";this;for sure;",
+		Event:     "thatdoesnot",
+	}
+	expectedSerialized := []byte(";contains@#$!semicolon$@#!semi;@#$!semicolon$@#!this@#$!semicolon$@#!for sure@#$!semicolon$@#!;thatdoesnot;0;0;")
+	gotSerialized := serializeMessage(nil, msg)
+
+	if !bytes.Equal(expectedSerialized, gotSerialized) {
+		t.Fatalf("expected escaped serialized to be: %s but got: %s", string(expectedSerialized), string(gotSerialized))
+	}
+
+	msgGot := deserializeMessage(nil, gotSerialized, false)
+	if !reflect.DeepEqual(msg, msgGot) {
+		t.Fatalf("expected a unescaped message to be:\n%#+v\n\tbut got:\n%#+v", msg, msgGot)
+	}
 }

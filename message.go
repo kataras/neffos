@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -48,7 +49,8 @@ type Message struct {
 
 	isInvalid bool
 
-	from string // the CONN ID, filled automatically.
+	// the CONN ID, filled automatically if `Server#Broadcast` first parameter of sender connection's ID is not empty, not exposed to the subscribers (rest of the clients).
+	from string
 
 	// True when event came from local (i.e client if running client) on force disconnection,
 	// i.e OnNamespaceDisconnect and OnRoomLeave when closing a conn.
@@ -142,14 +144,37 @@ var (
 	trueByte  = []byte{'1'}
 	falseByte = []byte{'0'}
 
-	messageSeparator = []byte{';'}
+	messageSeparatorString = ";"
+	messageSeparator       = []byte(messageSeparatorString)
+	messageSeparatorRune   = rune(messageSeparator[0])
+	// we use this because has zero chance to be part of end-developer's Message.Namespace, Room, Event, To and Err fields,
+	// semicolon has higher probability to exists on those values. See `escape` and `unescape`.
+	messageFieldSeparatorReplacement = "@#$!semicolon$@#!"
 )
+
+// called on `serializeMessage` to all message's fields except the body (and error).
+func escape(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	return strings.Replace(s, messageSeparatorString, messageFieldSeparatorReplacement, -1)
+}
+
+// called on `deserializeMessage` to all message's fields except the body (and error).
+func unescape(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	return strings.Replace(s, messageFieldSeparatorReplacement, messageSeparatorString, -1)
+}
 
 func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 	if msg.IsNative && msg.wait == "" {
 		out = msg.Body
 	} else {
-		out = serializeOutput(msg.wait, msg.Namespace, msg.Room, msg.Event, msg.Body, msg.Err, msg.isNoOp)
+		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
 	}
 
 	if encrypt != nil {
@@ -210,9 +235,9 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages)
 	return Message{
 		wait,
-		namespace,
-		room,
-		event,
+		unescape(namespace),
+		unescape(room),
+		unescape(event),
 		body,
 		err,
 		err != nil,
