@@ -54,6 +54,12 @@ $ go run example.go
 
 Detailed documentation can be found at [godocs](https://godoc.org/github.com/kataras/neffos).
 
+<!--
+<pre>
+</pre>
+-->
+
+[![](ascii_outline.png)](ascii_outline.txt)
 
 ## License
 
