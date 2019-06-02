@@ -85,7 +85,7 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 				t.Fatalf("expected true")
 			}
 			wg.Wait()
-		})
+		})()
 	if err != nil {
 		t.Fatal(err)
 	}

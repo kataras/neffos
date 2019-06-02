@@ -273,13 +273,17 @@ func (s *Server) waitMessage(c *Conn) bool {
 		return false
 	}
 
-	if msg.from != c.ID() {
-		if !c.Write(msg) && c.IsClosed() {
-			return false
-		}
+	// don't send to its own if set-ed.
+	if msg.from == c.ID() {
+		return true
 	}
 
-	return true
+	// if "To" field is given then send to a specific connection.
+	if msg.To != "" && msg.To != c.ID() {
+		return true
+	}
+
+	return c.Write(msg) && !c.IsClosed()
 }
 
 // GetTotalConnections returns the total amount of the connected connections to the server, it's fast

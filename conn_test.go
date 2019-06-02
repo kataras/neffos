@@ -86,7 +86,7 @@ func TestConnect(t *testing.T) {
 				t.Fatalf("%s namespace connect should give a local event's error by the client of the neffos.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
-		})
+		})()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestAsk(t *testing.T) {
 			t.Fatal(err)
 		}
 		testMessage(dialer, -1, msg)
-	})
+	})()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestOnAnyEvent(t *testing.T) {
 			t.Fatal(err)
 		}
 		testMessage(msg)
-	})
+	})()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 		c.Emit(eventThatWillGiveErrorByServer, []byte("doesn't matter"))
 
 		wg.Wait()
-	})
+	})()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestSimultaneouslyEventsRoutines(t *testing.T) {
 			}
 
 			wg.Wait()
-		})
+		})()
 	if err != nil {
 		t.Fatal(err)
 	}

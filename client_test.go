@@ -9,14 +9,18 @@ import (
 	gorilla "github.com/kataras/neffos/gorilla"
 )
 
-func runTestClient(addr string, connHandler neffos.ConnHandler, testFn func(string, *neffos.Client)) error {
+func runTestClient(addr string, connHandler neffos.ConnHandler, testFn func(string, *neffos.Client)) func() error {
 	gobwasClient, err := neffos.Dial(nil, gobwas.DefaultDialer, fmt.Sprintf("ws://%s/gobwas", addr), connHandler)
 	if err != nil {
-		return err
+		return func() error {
+			return err
+		}
 	}
 	gorillaClient, err := neffos.Dial(nil, gorilla.DefaultDialer, fmt.Sprintf("ws://%s/gorilla", addr), connHandler)
 	if err != nil {
-		return err
+		return func() error {
+			return err
+		}
 	}
 
 	// teardown.
@@ -25,9 +29,8 @@ func runTestClient(addr string, connHandler neffos.ConnHandler, testFn func(stri
 		gorillaClient.Close()
 		return nil
 	}
-	defer teardown()
 
 	testFn("gobwas", gobwasClient)
 	testFn("gorilla", gorillaClient)
-	return nil
+	return teardown
 }

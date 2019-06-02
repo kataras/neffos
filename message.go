@@ -52,6 +52,13 @@ type Message struct {
 	// the CONN ID, filled automatically if `Server#Broadcast` first parameter of sender connection's ID is not empty, not exposed to the subscribers (rest of the clients).
 	from string
 
+	// To is the connection ID of the receiver, used only when `Server#Broadcast` is called, indeed when we only need to send a message to a single connection.
+	// The Namespace, Room are still respected at all.
+	//
+	// However, sending messages to a group of connections is done by the `Room` field for groups inside a namespace or just `Namespace` field as usual.
+	// This field is not filled on sending/receiving.
+	To string
+
 	// True when event came from local (i.e client if running client) on force disconnection,
 	// i.e OnNamespaceDisconnect and OnRoomLeave when closing a conn.
 	// This field is not filled on sending/receiving.
@@ -242,6 +249,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 		err != nil,
 		isNoOp,
 		isInvalid,
+		"",
 		"",
 		false,
 		false,
