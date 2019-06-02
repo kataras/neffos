@@ -146,10 +146,9 @@ var (
 
 	messageSeparatorString = ";"
 	messageSeparator       = []byte(messageSeparatorString)
-	messageSeparatorRune   = rune(messageSeparator[0])
 	// we use this because has zero chance to be part of end-developer's Message.Namespace, Room, Event, To and Err fields,
 	// semicolon has higher probability to exists on those values. See `escape` and `unescape`.
-	messageFieldSeparatorReplacement = "@#$!semicolon$@#!"
+	messageFieldSeparatorReplacement = "@%!semicolon@%!"
 )
 
 // called on `serializeMessage` to all message's fields except the body (and error).
@@ -270,6 +269,7 @@ func deserializeInput(b []byte, allowNativeMessages bool) ( // go-lint: ignore l
 		return
 	}
 
+	// Note: Go's SplitN returns the remainder in[6] but JavasSript's string.split behaves differently.
 	dts := bytes.SplitN(b, messageSeparator, validMessageSepCount)
 	if len(dts) != validMessageSepCount {
 		if !allowNativeMessages {
