@@ -120,7 +120,9 @@ func TestMessageSerialization(t *testing.T) {
 		Room:      ";this;for sure;",
 		Event:     "thatdoesnot",
 	}
-	expectedSerialized := []byte(";contains@#$!semicolon$@#!semi;@#$!semicolon$@#!this@#$!semicolon$@#!for sure@#$!semicolon$@#!;thatdoesnot;0;0;")
+	expectedSerialized := []byte(fmt.Sprintf(";contains%ssemi;%sthis%sfor sure%s;thatdoesnot;0;0;",
+		messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement))
+
 	gotSerialized := serializeMessage(nil, msg)
 
 	if !bytes.Equal(expectedSerialized, gotSerialized) {
