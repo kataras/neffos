@@ -283,7 +283,13 @@ func (s *Server) waitMessage(c *Conn) bool {
 		return true
 	}
 
-	return c.Write(msg) && !c.IsClosed()
+	// c.Write may fail if the message is not supposed to end to this client
+	// but the connection should be still open in order to continue.
+	if !c.Write(msg) && c.IsClosed() {
+		return false
+	}
+
+	return true
 }
 
 // GetTotalConnections returns the total amount of the connected connections to the server, it's fast

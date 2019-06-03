@@ -2,6 +2,7 @@ package neffos
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -99,6 +100,70 @@ func (m *Message) isRoomJoin() bool {
 
 func (m *Message) isRoomLeft() bool {
 	return m.Event == OnRoomLeft
+}
+
+type (
+	// MessageObjectMarshaler is an optional interface that "objects"
+	// can implement to customize their byte representation, see `Object` package-level function.
+	MessageObjectMarshaler interface {
+		Marshal() ([]byte, error)
+	}
+
+	// MessageObjectUnmarshaler is an optional interface that "objects"
+	// can implement to customize their structure, see `Message.Object` method.
+	MessageObjectUnmarshaler interface {
+		Unmarshal(body []byte) error
+	}
+)
+
+var (
+	// DefaultMarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
+	// It's used when the `Object.v` parameter is not a `MessageObjectMarshaler`.
+	DefaultMarshaler = json.Marshal
+	// DefaultUnmarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
+	// It's used when the `Message.Object.outPtr` parameter is not a `MessageObjectUnmarshaler`.
+	DefaultUnmarshaler = json.Unmarshal
+)
+
+// Object marshals the "v" value and returns a Message's Body.
+// If the "v" value is `MessageObjectMarshaler` then it returns the result of its `Marshal` method,
+// otherwise the DefaultMarshaler will be used instead.
+// Errors are pushed to the result, use the object's Marshal method to catch those when necessary.
+func Object(v interface{}) []byte {
+	if v == nil {
+		panic("nil assigment")
+	}
+
+	var (
+		body []byte
+		err  error
+	)
+
+	if marshaler, ok := v.(MessageObjectMarshaler); ok {
+		body, err = marshaler.Marshal()
+	} else {
+		body, err = DefaultMarshaler(v)
+	}
+
+	if err != nil {
+		return []byte(err.Error())
+	}
+	return body
+}
+
+// Object unmarshals this Message's body to the "outPtr".
+// The "outPtr" must be a pointer to a value that can customize its decoded value
+// by implementing the `MessageObjectUnmarshaler`, otherwise the `DefaultUnmarshaler` will be used instead.
+func (m *Message) Object(outPtr interface{}) error {
+	if outPtr == nil {
+		panic("nil assigment")
+	}
+
+	if unmarshaler, ok := outPtr.(MessageObjectUnmarshaler); ok {
+		return unmarshaler.Unmarshal(m.Body)
+	}
+
+	return DefaultUnmarshaler(m.Body, outPtr)
 }
 
 const (
