@@ -118,18 +118,18 @@ type (
 
 var (
 	// DefaultMarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
-	// It's used when the `Object.v` parameter is not a `MessageObjectMarshaler`.
+	// It's used when the `Marshal.v` parameter is not a `MessageObjectMarshaler`.
 	DefaultMarshaler = json.Marshal
 	// DefaultUnmarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
-	// It's used when the `Message.Object.outPtr` parameter is not a `MessageObjectUnmarshaler`.
+	// It's used when the `Message.Unmarshal.outPtr` parameter is not a `MessageObjectUnmarshaler`.
 	DefaultUnmarshaler = json.Unmarshal
 )
 
-// Object marshals the "v" value and returns a Message's Body.
+// Marshal marshals the "v" value and returns a Message's Body.
 // If the "v" value is `MessageObjectMarshaler` then it returns the result of its `Marshal` method,
 // otherwise the DefaultMarshaler will be used instead.
 // Errors are pushed to the result, use the object's Marshal method to catch those when necessary.
-func Object(v interface{}) []byte {
+func Marshal(v interface{}) []byte {
 	if v == nil {
 		panic("nil assigment")
 	}
@@ -151,10 +151,10 @@ func Object(v interface{}) []byte {
 	return body
 }
 
-// Object unmarshals this Message's body to the "outPtr".
+// Unmarshal unmarshals this Message's body to the "outPtr".
 // The "outPtr" must be a pointer to a value that can customize its decoded value
 // by implementing the `MessageObjectUnmarshaler`, otherwise the `DefaultUnmarshaler` will be used instead.
-func (m *Message) Object(outPtr interface{}) error {
+func (m *Message) Unmarshal(outPtr interface{}) error {
 	if outPtr == nil {
 		panic("nil assigment")
 	}
