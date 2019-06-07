@@ -14,7 +14,7 @@ $ go get -u github.com/kataras/neffos
 
 Built'n with this package. Types like `Conn`, `NSConn`, `Room` and `ConnHandler[Events, Namespaces, WithTimeout]` are used by both sides(`New` for server, `Dial` for client).
 
-The `neffos` package is "hybrid/isomorphic", same code can be used for both server-side and client-side connections. See [_examples](_examples) for more.
+The `neffos` package is "hybrid/isomorphic", same code can be used for both server-side and client-side connections.
 
 ## Typescript/Javascript Client
 
@@ -50,16 +50,98 @@ $ go run example.go
 ```
 -->
 
-## Documentation
+## Getting Started
 
-Detailed documentation can be found at [godocs](https://godoc.org/github.com/kataras/neffos).
+```go
+package server
 
-<!--
-<pre>
-</pre>
--->
+import (
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/kataras/neffos"
+    "github.com/kataras/neffos/gorilla"
+)
+
+func onNamespaceConnect(c *neffos.NSConn, msg neffos.Message) error {
+    log.Printf("[%s] connecting to [%s]. To disallow return a non-nil error.",
+        c.Conn.ID(), msg.Namespace)
+    return nil
+}
+
+func onNamespaceConnected(c *neffos.NSConn, msg neffos.Message) error {
+    log.Printf("[%s] connected to [%s].", c.Conn.ID(), msg.Namespace)
+    return nil
+}
+
+func onNamespaceDisconnect(c *neffos.NSConn, msg neffos.Message) error {
+    log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
+    return nil
+}
+
+func onNotice(c *neffos.NSConn, msg neffos.Message) error {
+    send := append([]byte("got"), msg.Body...)
+    c.Emit("reply", send)
+    return nil
+}
+
+func onWhatTimeIsIt(c *neffos.NSConn, msg neffos.Message) error {
+    now := time.Now().Format(time.RFC3339)
+    // `neffos.Reply` can be optionally used when publish the
+    // same message but setting a different body,
+    // mostly useful on acknowledgements requests(`Conn.Ask`)
+    // when client(or server) is blocking until response received.
+    return neffos.Reply([]byte(now))
+}
+
+func onChat(c *neffos.NSConn, msg neffos.Message) error {
+    c.Conn.Server().Broadcast(c, msg)
+    return nil
+}
+
+func main() {
+    var events = neffos.Namespaces{
+        "default": neffos.Events{
+            neffos.OnNamespaceConnect:    onNamespaceConnect,
+            neffos.OnNamespaceConnected:  onNamespaceConnected,
+            neffos.OnNamespaceDisconnect: onNamespaceDisconnect,
+
+            "notice":       onNotice,
+            "whatTimeIsIt": onWhatTimeIsIt,
+            "chat":         onChat,
+        },
+    }
+
+    server := neffos.New(gorilla.DefaultUpgrader, events)
+    server.OnConnect = func(c *neffos.Conn) error {
+        log.Printf(`[%s] connected to the server.
+        Return a non-nil error to dismiss the client with an error.`, c.ID())
+        return nil
+    }
+    server.OnDisconnect = func(c *neffos.Conn) {
+        log.Printf("[%s] disconnected from the server.", c.ID())
+    }
+    server.OnUpgradeError = func(err error) {
+        log.Printf("error: %v", err)
+    }
+
+    http.Handle("/echo", server)
+    http.Handle("/", http.FileServer(http.Dir("./public")))
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+```
+
+```sh
+$ go run server.go
+```
+
+Comprehensive **examples** can be found at [_examples](_examples).
 
 [![](ascii_outline.png)](ascii_outline.txt)
+
+Detailed documentation can be found at [godocs](https://godoc.org/github.com/kataras/neffos).
 
 ## License
 
