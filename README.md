@@ -81,7 +81,7 @@ func onNamespaceDisconnect(c *neffos.NSConn, msg neffos.Message) error {
 }
 
 func onNotice(c *neffos.NSConn, msg neffos.Message) error {
-    send := append([]byte("got"), msg.Body...)
+    send := append([]byte("got "), msg.Body...)
     c.Emit("reply", send)
     return nil
 }
