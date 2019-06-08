@@ -22,34 +22,6 @@ The client package lives on its own repository for front-end developers: <https:
 
 `neffos.js` client can run through any modern **browser** and **nodejs**.
 
-<!-- TODO: >
-## Quick start
- 
-```sh
-# assume the following code in example.go file
-$ cat example.go
-```
-
-```go
-package main
-
-import (
-    "github.com/kataras/neffos"
-    "github.com/kataras/neffos/gobwas"
-
-)
-
-func main() {
-
-}
-```
-
-```
-# run example.go and visit http://localhost:8080 on browser
-$ go run example.go
-```
--->
-
 ## Getting Started
 
 ```go
@@ -139,7 +111,167 @@ $ go run server.go
 
 Comprehensive **examples** can be found at [_examples](_examples).
 
+## Documentation
+
 [![](ascii_outline.png)](ascii_outline.txt)
+
+All features are always in-sync between server and client side connections, each side gets notified of mutations.
+
+End-developers can implement deadlines to actions like `Conn#Connect`, `Conn#Ask`, `NSConn#Disconnect`, `NSConn#Ask`, `NSConn#JoinRoom`, `Room#Leave` and etc.
+Methods that have to do with remote side response accept a `context.Context` as their first argument.
+
+### Dialing
+
+1. Client connection is initialized through the `neffos.Dial` (or `neffos.dial` on javascript side) method.
+2. Server can dismiss with an error any incoming client through its `server.OnConnect -> return err != nil` callback.
+
+
+### Send data to events
+
+1. `Emit` sends data to a specific event back to the client.
+2. A client can NOT communicate directly to the rest of the clients.
+3. Server is the only one which is able to send messages to one or more clients. 
+4. To send data to all clients use the `Conn.Server().Broadcast` method. If its first argument is not nil then it sends data to all except that one connection ID.
+
+### Send data and block until response from CLIENT to SERVER
+
+#### Client-side
+<!-- 
+```javascript
+msg := new neffos.Message();
+msg.Namespace = "default";
+msg.Event = "myEvent";
+msg.Body: myData;
+
+response := await conn.ask(msg);
+```
+
+> `conn = await neffos.dial(...)`.
+
+**OR** -->
+
+```go
+nsConn.Ask(ctx, "myEvent", myData)
+```
+
+> `nsConn` comes from `conn.Connect(...)` or through an event's callback.
+
+<details>
+<summary>javascript equivalent</summary>
+
+```javascript
+response := await nsConn.ask("myEvent", myData); 
+```
+
+> `nsConn` comes from `conn.connect(...)` or through an event's callback.
+</details>
+
+#### Server-side
+
+```go
+neffos.Events{
+    "myEvent": func(nsConn *neffos.NSConn, msg neffos.Message) error {
+        return neffos.Reply([]byte("server data")) // send data back to the client.
+    },
+    // [...]
+}
+```
+
+### Send data and block until response from SERVER to CLIENT
+
+#### Client-side
+
+```go
+neffos.Events{
+    "myEvent": func(nsConn *neffos.NSConn, msg neffos.Message) error {
+        send := append(msg.Body, []byte("_append client data?")...)
+        return neffos.Reply(send)
+        // or
+        // nsConn.Emit("myEvent", send)
+        // or
+        // msg.Body = send
+        // nsConn.Conn.Write(msg)
+    },
+}
+```
+
+<details>
+<summary>javascript equivalent</summary>
+
+```javascript
+{
+    myEvent: function(nsConn, msg) {
+        msg.Body += "_append client data?";
+        nsConn.conn.write(msg);
+    },
+}
+```
+</details>
+
+#### Server-side
+
+```go
+response, err := nsConn.Ask(ctx, "myEvent", myData);
+```
+
+> `response.Body == myData + "_append client data?"`
+
+### Namespaces
+
+1. Each connection can be connected to one or more namespaces.
+2. Namespaces should be static and should be declared in both server and client-side(clients can ignore some of the server's namespaces if not willing to connect to them).
+3. Client should connect to a namespace, even if its name is empty `""`.
+4. Client and server are notified of each namespace connection and disconnection through their `OnNamespaceConnect, OnNamespaceConnected` and `OnNamespaceDisconnect` events.
+5. Client can ask server to connect to a namespace.
+6. Server can ask client to connect to a namespace.
+7. Server and client can accept or decline the client or server's connection to a namespace through their `OnNamespaceConnect -. return err != nil`.
+8. Client can ask server to disconnect from a namespace.
+9. Server can forcely disconnect a client from a namespace.
+
+```go
+// blocks until connect in both sides.
+nsConn, err := conn.Connect(ctx, "namespace") 
+```
+
+```go
+nsConn.Emit("event", body)
+// nsConn.Conn.Write(neffos.Message{
+//     Namespace: "namespace",
+//     Body: body,
+// })
+```
+
+```go
+nsConn.Disconnect(ctx)
+```
+
+### Rooms
+
+1. Each connection connected to a namespace can join to one or more rooms.
+2. Rooms are dynamic.
+3. `Server#Broadcast(Message {Namespace: ..., Room: ...})` sends data to all clients connected to a specific `Namespace:Room`.
+4. Client and server can ask remote side to join to a room, get notified by `OnRoomJoin` and `OnRoomJoined`.
+5. Client and server can ask remote side to leave from a room, get notified by `OnRoomLeave` and `OnRoomLeft`.
+6. Client and server can disallow remote request for room join through their `OnRoomJoin -> return err != nil`. 
+7. Client an server can disallow remote request for room leave through their `OnRoomLeave -> return err != nil`.
+
+```go
+// blocks until join in both sides.
+room, err := nsConn.JoinRoom(ctx, "room")
+```
+
+```go
+room.Emit("event", body)
+// room.NSConn.Conn.Write(neffos.Message{
+//     Namespace: "namespace",
+//     Room: "room",
+//     Body: body,
+// })
+```
+
+```go
+room.Leave(ctx)
+```
 
 Detailed documentation can be found at [godocs](https://godoc.org/github.com/kataras/neffos).
 
