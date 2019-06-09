@@ -151,8 +151,10 @@ response := await conn.ask(msg);
 **OR** -->
 
 ```go
-nsConn.Ask(ctx, "myEvent", myData)
+response, err := nsConn.Ask(ctx, "myEvent", myData)
 ```
+
+> `response.Body == []byte( "server data" )`
 
 > `nsConn` comes from `conn.Connect(...)` or through an event's callback.
 
@@ -164,6 +166,7 @@ response := await nsConn.ask("myEvent", myData);
 ```
 
 > `nsConn` comes from `conn.connect(...)` or through an event's callback.
+
 </details>
 
 #### Server-side
@@ -214,7 +217,7 @@ neffos.Events{
 response, err := nsConn.Ask(ctx, "myEvent", myData);
 ```
 
-> `response.Body == myData + "_append client data?"`
+> `response.Body == []byte( myData + "_append client data?"` )
 
 ### Namespaces
 
