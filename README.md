@@ -227,7 +227,7 @@ response, err := nsConn.Ask(ctx, "myEvent", myData);
 4. Client and server are notified of each namespace connection and disconnection through their `OnNamespaceConnect, OnNamespaceConnected` and `OnNamespaceDisconnect` events.
 5. Client can ask server to connect to a namespace.
 6. Server can ask client to connect to a namespace.
-7. Server and client can accept or decline the client or server's connection to a namespace through their `OnNamespaceConnect -. return err != nil`.
+7. Server and client can accept or decline the client or server's connection to a namespace through their `OnNamespaceConnect -> return err != nil`.
 8. Client can ask server to disconnect from a namespace.
 9. Server can forcely disconnect a client from a namespace.
 
@@ -240,7 +240,8 @@ nsConn, err := conn.Connect(ctx, "namespace")
 nsConn.Emit("event", body)
 // nsConn.Conn.Write(neffos.Message{
 //     Namespace: "namespace",
-//     Body: body,
+//     Event:     "event",
+//     Body:      body,
 // })
 ```
 
@@ -256,7 +257,7 @@ nsConn.Disconnect(ctx)
 4. Client and server can ask remote side to join to a room, get notified by `OnRoomJoin` and `OnRoomJoined`.
 5. Client and server can ask remote side to leave from a room, get notified by `OnRoomLeave` and `OnRoomLeft`.
 6. Client and server can disallow remote request for room join through their `OnRoomJoin -> return err != nil`. 
-7. Client an server can disallow remote request for room leave through their `OnRoomLeave -> return err != nil`.
+7. Client and server can disallow remote request for room leave through their `OnRoomLeave -> return err != nil`.
 
 ```go
 // blocks until join in both sides.
@@ -267,8 +268,9 @@ room, err := nsConn.JoinRoom(ctx, "room")
 room.Emit("event", body)
 // room.NSConn.Conn.Write(neffos.Message{
 //     Namespace: "namespace",
-//     Room: "room",
-//     Body: body,
+//     Room:      "room",
+//     Event:     "event",
+//     Body:      body,
 // })
 ```
 
