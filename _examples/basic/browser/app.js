@@ -21,7 +21,6 @@ class UserMessage {
     }
 }
 
-var username = prompt("Please specify a username: ");
 
 function handleNamespaceConnectedConn(nsConn) {
     let inputTxt = document.getElementById("input");
@@ -31,7 +30,7 @@ function handleNamespaceConnectedConn(nsConn) {
     sendBtn.onclick = function () {
         const input = inputTxt.value;
         inputTxt.value = "";
-        const userMsg = new UserMessage(username, input);
+        const userMsg = new UserMessage(nsConn.conn.ID, input);
         nsConn.emit("chat", neffos.marshal(userMsg));
         addMessage("Me: " + input);
     };
@@ -41,8 +40,8 @@ async function runExample() {
     // You can omit the "default" and simply define only Events, the namespace will be an empty string"",
     // however if you decide to make any changes on this example make sure the changes are reflecting inside the ../server.go file as well.
     try {
-        const options = new neffos.Options();
-        options.header("X-Username", username);
+        var username = prompt("Please specify a username: ");
+
         const conn = await neffos.dial(wsURL, {
             default: { // "default" namespace.
                 _OnNamespaceConnected: function (nsConn, msg) {
@@ -57,7 +56,7 @@ async function runExample() {
                     addMessage(userMsg.from + ": " + userMsg.text);
                 }
             }
-        }, options);
+        }, { headers: { 'X-Username': username } });
 
         conn.connect("default");
 
