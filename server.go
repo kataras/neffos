@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -150,6 +151,38 @@ var (
 	errInvalidMethod = errors.New("no valid request method")
 )
 
+// URLParamAsHeaderPrefix is the prefix that server parses the url parameters as request headers.
+// The client's `URLParamAsHeaderPrefix` must match.
+// Note that this is mostly useful for javascript browser-side clients, nodejs and go client support custom headers by default.
+// No action required from end-developer, exported only for chance to a custom parsing.
+const URLParamAsHeaderPrefix = "X-Websocket-Header-"
+
+func tryParseURLParamsToHeaders(r *http.Request) {
+	q := r.URL.Query()
+	for k, values := range q {
+		if len(k) <= len(URLParamAsHeaderPrefix) {
+			continue
+		}
+
+		k = http.CanonicalHeaderKey(k) // canonical, so no X-WebSocket thing.
+
+		idx := strings.Index(k, URLParamAsHeaderPrefix)
+		if idx != 0 { // must be prefix.
+			continue
+		}
+
+		if r.Header == nil {
+			r.Header = make(http.Header)
+		}
+
+		k = k[len(URLParamAsHeaderPrefix):]
+
+		for _, v := range values {
+			r.Header.Add(k, v)
+		}
+	}
+}
+
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
 // a socket wrapper and it does return the connection or any errors.
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper func(Socket) Socket) (*Conn, error) {
@@ -169,6 +202,8 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 		fmt.Fprintln(w, http.StatusText(http.StatusMethodNotAllowed))
 		return nil, errInvalidMethod
 	}
+
+	tryParseURLParamsToHeaders(r)
 
 	socket, err := s.upgrader(w, r)
 	if err != nil {
