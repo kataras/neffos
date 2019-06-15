@@ -72,7 +72,7 @@ func main() {
         panic(err)
     }
 
-    nsConn.Emit("chat", "Hello from Go client side!")
+    nsConn.Emit("chat", []byte("Hello from Go client side!"))
     // [...]
 }
 ```
