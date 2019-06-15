@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// NSConn describes a connected connection to a specific namespace,
+// NSConn describes a connection connected to a specific namespace,
 // it emits with the `Message.Namespace` filled and it can join to multiple rooms.
 // A single `Conn` can be connected to one or more namespaces,
 // each connected namespace is described by this structure.

@@ -16,11 +16,110 @@ Built'n with this package. Types like `Conn`, `NSConn`, `Room` and `ConnHandler[
 
 The `neffos` package is "hybrid/isomorphic", same code can be used for both server-side and client-side connections.
 
+```go
+import (
+    "context"
+    "time"
+    "fmt"
+
+    "github.com/kataras/neffos"
+    "github.com/kataras/neffos/gobwas"
+)
+
+const namespace = "default"
+
+var events = neffos.Namespaces{
+   namespace: neffos.Events{
+        // neffos.OnNamespaceConnect:    ...,
+        // neffos.OnNamespaceConnected:  ...,
+        // neffos.OnNamespaceDisconnect: ...,
+        // neffos.OnRoomJoined: ...
+        // neffos.OnRoomLeft: ...
+
+        "chat": func(c *neffos.NSConn, msg neffos.Message) error {
+            fmt.Println(string(msg.Body))
+            return nil
+        },
+    },
+}
+
+func main() {
+    ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5 * time.Second))
+    defer cancel()
+
+    // init the websocket connection by dialing the server.
+    client, err := neffos.Dial(
+        // Optional context cancelation and deadline for dialing.
+        nil,
+        // The underline dialer, can be also a gobwas.Dialer/DefautlDialer or a gorilla.Dialer/DefaultDialer.
+        // Here we wrap a custom gobwas dialer in order to send the username among, on the handshake state,
+        // see `Server#IDGenerator`.
+        gobwas.Dialer(gobwas.Options{Header: gobwas.Header{"X-MyHeader": []string{"myHeaderValue"}}}),
+        // The endpoint, i.e ws://localhost:8080/path.
+        "ws://localhost:8080/echo",
+        // The namespaces and events, can be optionally shared with the server's.
+        events)
+
+    if err != nil {
+        panic(err)
+    }
+
+    defer client.Close()
+
+    // connect to the "default" namespace.
+    nsConn, err := client.Connect(ctx, namespace)
+    if err != nil {
+        panic(err)
+    }
+
+    nsConn.Emit("chat", "Hello from Go client side!")
+    // [...]
+}
+```
+
 ## Typescript/Javascript Client
 
 The client package lives on its own repository for front-end developers: <https://github.com/kataras/neffos.js>.
 
 `neffos.js` client can run through any modern **browser** and **nodejs**.
+
+```javascript
+const neffos = require('neffos.js');
+// [...]
+try {
+    const username = prompt("Please specify a username: ");
+
+    const conn = await neffos.dial("ws://localhost:8080/echo", {
+        default: { // "default" namespace.
+            _OnNamespaceConnected: function (nsConn, msg) {
+                console.log("connected to namespace: " + msg.Namespace);
+                // [...handleNamespaceConn(nsConn)]
+            },
+            _OnNamespaceDisconnect: function (nsConn, msg) {
+                console.log("disconnected from namespace: " + msg.Namespace);
+            },
+            _OnRoomJoined: function (nsConn, msg) {
+                console.log("joined to room: " + msg.Room);
+            },
+            _OnRoomLeft: function (nsConn, msg) {
+                console.log("left from room: " + msg.Room);
+            },
+            chat: function (nsConn, msg) { // "chat" event.
+                console.log(msg.Body);
+            }
+        }
+    }, { headers: { "X-Username": username } });
+
+    const nsConn = await conn.connect("default");
+    nsConn.emit("chat", "Hello from javascript-side client side!");
+    // [...]
+
+} catch (err) {
+    // [...handleError(err)]
+}
+
+
+```
 
 ## Getting Started
 
