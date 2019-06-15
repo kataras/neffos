@@ -50,7 +50,7 @@ func main() {
     // init the websocket connection by dialing the server.
     client, err := neffos.Dial(
         // Optional context cancelation and deadline for dialing.
-        nil,
+        ctx,
         // The underline dialer, can be also a gobwas.Dialer/DefautlDialer or a gorilla.Dialer/DefaultDialer.
         // Here we wrap a custom gobwas dialer in order to send the username among, on the handshake state,
         // see `Server#IDGenerator`.
