@@ -103,7 +103,7 @@ func newConn(socket Socket, namespaces Namespaces) *Conn {
 		// then no need to call Connect(...) because:
 		// client-side can use raw websocket without the neffos.js library
 		// so no access to connect to a namespace.
-		if len(c.namespaces) == 1 && len(emptyNamespace) == 0 {
+		if len(c.namespaces) == 1 && len(emptyNamespace) == 1 {
 			c.connectedNamespaces[""] = newNSConn(c, "", emptyNamespace)
 			c.shouldHandleOnlyNativeMessages = true
 			atomic.StoreUint32(c.acknowledged, 1)
