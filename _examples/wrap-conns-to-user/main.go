@@ -277,7 +277,7 @@ func server(upgrader neffos.Upgrader) {
 				// c.Close()
 				c.Namespace(namespace).Disconnect(nil)
 			}, false)
-		} else { 
+		} else {
 			// srv.Do(func(c *neffos.Conn) {
 			// 	c.Write(namespace, "chat", text)
 			// }, false)

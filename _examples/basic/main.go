@@ -130,12 +130,21 @@ func startServer() {
 		return neffos.DefaultIDGenerator(w, r)
 	}
 
+	server.OnUpgradeError = func(err error) {
+		if retries, ok := neffos.IsTryingToReconnect(err); ok {
+			log.Printf("a client was tried to reconnect %d times\n", retries)
+			return
+		}
+		log.Printf("ERROR: %v", err)
+	}
+
 	server.OnConnect = func(c *neffos.Conn) error {
 		log.Printf("[%s] connected to the server.", c)
 
 		// if returns non-nil error then it refuses the client to connect to the server.
 		return nil
 	}
+
 	server.OnDisconnect = func(c *neffos.Conn) {
 		log.Printf("[%s] disconnected from the server.", c)
 	}

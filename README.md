@@ -108,7 +108,7 @@ try {
                 console.log(msg.Body);
             }
         }
-    }, { headers: { "X-Username": username } });
+    }, { headers: { "X-Username": username, reconnect: 5000 } });
 
     const nsConn = await conn.connect("default");
     nsConn.emit("chat", "Hello from javascript-side client side!");

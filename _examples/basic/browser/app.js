@@ -82,7 +82,9 @@ async function runExample() {
         }, {
             headers: {
                 'X-Username': username
-            }
+            },
+            // if > 0 then on network failures it tries to reconnect every 5 seconds, defaults to 0 (disabled).
+            reconnect: 5000
         });
 
         conn.connect("default");

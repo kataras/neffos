@@ -183,6 +183,31 @@ func tryParseURLParamsToHeaders(r *http.Request) {
 	}
 }
 
+type errUpgradeOnGetRetry struct {
+	retriesStr string
+}
+
+func (err errUpgradeOnGetRetry) Error() string {
+	return err.retriesStr
+}
+
+// IsTryingToReconnect reports whether the "err" is from a client
+// that was trying to reconnect to the websocket server,
+// the first output parameter is the number of total reconnection retries,
+// including the previous failures and the succeed last one.
+func IsTryingToReconnect(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	if u, ok := err.(errUpgradeOnGetRetry); ok {
+		retries, _ := strconv.Atoi(u.retriesStr)
+		return retries, ok
+	}
+
+	return 0, false
+}
+
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
 // a socket wrapper and it does return the connection or any errors.
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper func(Socket) Socket) (*Conn, error) {
@@ -207,6 +232,17 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 
 	socket, err := s.upgrader(w, r)
 	if err != nil {
+		// Tthis header key should match with that browser-client's `whenResourceOnline` uses.
+		if v := r.Header.Get("X-Websocket-Reconnect"); v != "" {
+			// If that header exists and its not empty then it means that it tries to see if the GET resouce is online,
+			// let's make the error more useful so it can be checked from callers.
+			//
+			// Note that this request will fail at the end
+			// but the caller can ignore logging it an actual error,
+			// see the `IsTryingToReconnect` package-level function for more.
+			err = errUpgradeOnGetRetry{v}
+		}
+
 		if s.OnUpgradeError != nil {
 			s.OnUpgradeError(err)
 		}
@@ -222,28 +258,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
-	// TODO: find a way to shutdown this goroutine if not broadcast, or select the other way...
-	// DONE: found, see `waitMessage`.
-	// go func(c *conn) {
-	// 	for {
-	// 		// select {
-	// 		// case <-c.closeCh:
-	// 		// 	return
-	// 		// default:
-	// 		s.broadcastMu.Lock()
-	// 		s.broadcastCond.Wait()
-	//
-	// 		if s.broadcastMessage.from != c.ID() {
-	// 			if !c.write(s.broadcastMessage) && c.IsClosed() {
-	// 				s.broadcastMu.Unlock()
-	// 				return
-	// 			}
-	// 		}
-	//
-	// 		s.broadcastMu.Unlock()
-	// 	}
-
-	// }(c)
 
 	go func(c *Conn) {
 		for s.waitMessage(c) {
