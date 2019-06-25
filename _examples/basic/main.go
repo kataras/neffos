@@ -12,6 +12,10 @@ import (
 	"github.com/kataras/neffos/gobwas"
 )
 
+/*
+	Read the README.md
+*/
+
 const (
 	addr      = "localhost:8080"
 	endpoint  = "/echo"

@@ -68,9 +68,11 @@ type Conn struct {
 	waitingMessages      map[string]chan Message
 	waitingMessagesMutex sync.RWMutex
 
-	allowNativeMessages bool
-	queue               [][]byte
-	queueMutex          sync.Mutex
+	allowNativeMessages            bool
+	shouldHandleOnlyNativeMessages bool
+
+	queue      [][]byte
+	queueMutex sync.Mutex
 
 	// used to fire `conn#Close` once.
 	closed *uint32
@@ -79,18 +81,37 @@ type Conn struct {
 }
 
 func newConn(socket Socket, namespaces Namespaces) *Conn {
-	return &Conn{
-		socket:              socket,
-		namespaces:          namespaces,
-		readiness:           newWaiterOnce(),
-		acknowledged:        new(uint32),
-		connectedNamespaces: make(map[string]*NSConn),
-		processes:           newProcesses(),
-		waitingMessages:     make(map[string]chan Message),
-		allowNativeMessages: namespaces[""] != nil && namespaces[""][OnNativeMessage] != nil,
-		closed:              new(uint32),
-		closeCh:             make(chan struct{}),
+	c := &Conn{
+		socket:                         socket,
+		namespaces:                     namespaces,
+		readiness:                      newWaiterOnce(),
+		acknowledged:                   new(uint32),
+		connectedNamespaces:            make(map[string]*NSConn),
+		processes:                      newProcesses(),
+		waitingMessages:                make(map[string]chan Message),
+		allowNativeMessages:            false,
+		shouldHandleOnlyNativeMessages: false,
+		closed:                         new(uint32),
+		closeCh:                        make(chan struct{}),
 	}
+
+	if emptyNamespace := namespaces[""]; emptyNamespace != nil && emptyNamespace[OnNativeMessage] != nil {
+		c.allowNativeMessages = true
+
+		// if allow native messages and only this namespace empty namespaces is registered (via Events{} for example)
+		// and the only one event is the `OnNativeMessage`
+		// then no need to call Connect(...) because:
+		// client-side can use raw websocket without the neffos.js library
+		// so no access to connect to a namespace.
+		if len(c.namespaces) == 1 && len(emptyNamespace) == 0 {
+			c.connectedNamespaces[""] = newNSConn(c, "", emptyNamespace)
+			c.shouldHandleOnlyNativeMessages = true
+			atomic.StoreUint32(c.acknowledged, 1)
+			c.readiness.unwait(nil)
+		}
+	}
+
+	return c
 }
 
 // ID method returns the unique identifier of the connection.
@@ -138,6 +159,13 @@ const (
 )
 
 func (c *Conn) sendClientACK() error {
+	// if neffos client used but in reality nor of its features are used
+	// because end-dev set it as native only sender and receiver so any webscoket client can be used
+	// even the browser's default; we can't accept a custom ack neither a namespace connection or two-way error handling.
+	if c.shouldHandleOnlyNativeMessages {
+		return nil
+	}
+
 	ok := c.write([]byte{ackBinary}, false)
 	if !ok {
 		c.Close()
@@ -168,7 +196,7 @@ func (c *Conn) startReader() {
 		}
 
 		if len(b) == 0 {
-			return
+			continue
 		}
 
 		if !c.isAcknowledged() {
@@ -248,7 +276,7 @@ var ErrInvalidPayload = errors.New("invalid payload")
 
 func (c *Conn) handleMessage(b []byte) error {
 	// println("handle message: " + string(b))
-	msg := deserializeMessage(nil, b, c.allowNativeMessages)
+	msg := deserializeMessage(nil, b, c.allowNativeMessages, c.shouldHandleOnlyNativeMessages)
 	if msg.isInvalid {
 		return ErrInvalidPayload
 	}
@@ -513,6 +541,10 @@ func (c *Conn) replyConnect(msg Message) {
 // `OnNamespaceDisconnect` even will be fired and its `Message.IsLocal` will be true.
 // The remote side gets notified.
 func (c *Conn) DisconnectAll(ctx context.Context) error {
+	if c.shouldHandleOnlyNativeMessages {
+		return nil
+	}
+
 	c.connectedNamespacesMutex.Lock()
 	defer c.connectedNamespacesMutex.Unlock()
 
@@ -699,6 +731,11 @@ func (c *Conn) sendConfirmation(wait string) {
 
 // Ask method sends a message to the remote side and blocks until a response or an error received from the specific `Message.Event`.
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
+	if c.shouldHandleOnlyNativeMessages {
+		// should panic or...
+		return Message{}, nil
+	}
+
 	if c.IsClosed() {
 		return msg, CloseError{Code: -1, error: ErrWrite}
 	}
@@ -745,23 +782,25 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 // After this method call the `Conn` is not usable anymore, a new `Dial` call is required.
 func (c *Conn) Close() {
 	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
-		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
-		c.connectedNamespacesMutex.Lock()
-		for namespace, ns := range c.connectedNamespaces {
-			// leave rooms first with force and local property before remove the namespace completely.
-			ns.forceLeaveAll(true)
+		if !c.shouldHandleOnlyNativeMessages {
+			disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
+			c.connectedNamespacesMutex.Lock()
+			for namespace, ns := range c.connectedNamespaces {
+				// leave rooms first with force and local property before remove the namespace completely.
+				ns.forceLeaveAll(true)
 
-			disconnectMsg.Namespace = ns.namespace
-			ns.events.fireEvent(ns, disconnectMsg)
-			delete(c.connectedNamespaces, namespace)
-		}
-		c.connectedNamespacesMutex.Unlock()
+				disconnectMsg.Namespace = ns.namespace
+				ns.events.fireEvent(ns, disconnectMsg)
+				delete(c.connectedNamespaces, namespace)
+			}
+			c.connectedNamespacesMutex.Unlock()
 
-		c.waitingMessagesMutex.Lock()
-		for wait := range c.waitingMessages {
-			delete(c.waitingMessages, wait)
+			c.waitingMessagesMutex.Lock()
+			for wait := range c.waitingMessages {
+				delete(c.waitingMessages, wait)
+			}
+			c.waitingMessagesMutex.Unlock()
 		}
-		c.waitingMessagesMutex.Unlock()
 
 		atomic.StoreUint32(c.acknowledged, 0)
 

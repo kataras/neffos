@@ -195,6 +195,8 @@ func (err errUpgradeOnGetRetry) Error() string {
 // that was trying to reconnect to the websocket server,
 // the first output parameter is the number of total reconnection retries,
 // including the previous failures and the succeed last one.
+//
+// Use it on registered callbacks for `Server#OnUpgradeError`.
 func IsTryingToReconnect(err error) (int, bool) {
 	if err == nil {
 		return 0, false
@@ -232,13 +234,13 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 
 	socket, err := s.upgrader(w, r)
 	if err != nil {
-		// Tthis header key should match with that browser-client's `whenResourceOnline` uses.
+		// This header key should match with that browser-client's `whenResourceOnline` uses.
 		if v := r.Header.Get("X-Websocket-Reconnect"); v != "" {
-			// If that header exists and its not empty then it means that it tries to see if the GET resouce is online,
+			// If that header exists and it's not empty then it means that it tries to see if the GET resouce is online,
 			// let's make the error more useful so it can be checked from callers.
 			//
 			// Note that this request will fail at the end
-			// but the caller can ignore logging it an actual error,
+			// but the caller can ignore logging it as an actual error,
 			// see the `IsTryingToReconnect` package-level function for more.
 			err = errUpgradeOnGetRetry{v}
 		}

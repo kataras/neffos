@@ -298,12 +298,12 @@ func serializeOutput(wait, namespace, room, event string,
 }
 
 // when allowNativeMessages only Body is filled and check about message format is skipped.
-func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bool) Message {
+func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
 	if decrypt != nil {
 		b = decrypt(b)
 	}
 
-	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages)
+	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
 	return Message{
 		wait,
 		unescape(namespace),
@@ -326,7 +326,7 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages bo
 
 const validMessageSepCount = 7
 
-func deserializeInput(b []byte, allowNativeMessages bool) ( // go-lint: ignore line
+func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) ( // go-lint: ignore line
 	wait,
 	namespace,
 	room,
@@ -339,6 +339,12 @@ func deserializeInput(b []byte, allowNativeMessages bool) ( // go-lint: ignore l
 
 	if len(b) == 0 {
 		isInvalid = true
+		return
+	}
+
+	if shouldHandleOnlyNativeMessages {
+		event = OnNativeMessage
+		body = b
 		return
 	}
 

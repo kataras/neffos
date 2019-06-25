@@ -284,6 +284,55 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 	}
 }
 
+func TestOnNativeMessageOnly(t *testing.T) {
+	// when the only one namespace is "" and event OnNativeMessage.
+	var (
+		wg            sync.WaitGroup
+		namespace     = ""
+		nativeMessage = []byte("this is a native/raw websocket message")
+		events        = neffos.Events{
+			neffos.OnNativeMessage: func(c *neffos.NSConn, msg neffos.Message) error {
+				defer wg.Done()
+
+				expectedMessage := neffos.Message{
+					Event:    neffos.OnNativeMessage,
+					Body:     nativeMessage,
+					IsNative: true,
+				}
+
+				if !reflect.DeepEqual(expectedMessage, msg) {
+					t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+				}
+
+				return nil
+			},
+		}
+	)
+
+	teardownServer := runTestServer("localhost:8080", events)
+	defer teardownServer()
+
+	err := runTestClient("localhost:8080", events, func(dialer string, client *neffos.Client) {
+		defer client.Close()
+
+		c, err := client.Connect(nil, namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wg.Add(1)
+		c.Conn.Write(neffos.Message{
+			Body:     nativeMessage,
+			IsNative: true,
+		})
+
+		wg.Wait()
+	})()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSimultaneouslyEventsRoutines(t *testing.T) {
 	// test multiple goroutines sending events, it should work because the lib it is designed to take care of these things.
 	var (

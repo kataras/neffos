@@ -15,6 +15,12 @@ import (
 	"github.com/kataras/neffos/gorilla"
 )
 
+/*
+	$ go run main.go server
+	# new tab(s) and:
+	$ go run main.go client
+*/
+
 const (
 	endpoint  = "localhost:9090"
 	namespace = "default"
