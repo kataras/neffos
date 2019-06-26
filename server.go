@@ -230,21 +230,26 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 		return nil, errInvalidMethod
 	}
 
+	// This header key should match with that browser-client's `whenResourceOnline` uses.
+	if v := r.Header.Get("X-Websocket-Reconnect"); v != "" {
+		// If that header exists and it's not empty then it means that it tries to see if the GET resouce is online,
+		// let's make the error more useful so it can be checked from callers.
+		//
+		// Note that this request will fail at the end
+		// but the caller can ignore logging it as an actual error,
+		// see the `IsTryingToReconnect` package-level function for more.
+		err := errUpgradeOnGetRetry{v}
+		if s.OnUpgradeError != nil {
+			s.OnUpgradeError(err)
+		}
+
+		return nil, err
+	}
+
 	tryParseURLParamsToHeaders(r)
 
 	socket, err := s.upgrader(w, r)
 	if err != nil {
-		// This header key should match with that browser-client's `whenResourceOnline` uses.
-		if v := r.Header.Get("X-Websocket-Reconnect"); v != "" {
-			// If that header exists and it's not empty then it means that it tries to see if the GET resouce is online,
-			// let's make the error more useful so it can be checked from callers.
-			//
-			// Note that this request will fail at the end
-			// but the caller can ignore logging it as an actual error,
-			// see the `IsTryingToReconnect` package-level function for more.
-			err = errUpgradeOnGetRetry{v}
-		}
-
 		if s.OnUpgradeError != nil {
 			s.OnUpgradeError(err)
 		}
