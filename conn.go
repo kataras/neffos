@@ -36,6 +36,9 @@ type Conn struct {
 
 	// the gorilla or gobwas socket.
 	socket Socket
+	// ReconnectTries, if > 0 then this connection is a result of a client-side reconnection,
+	// see `WasReconnected() bool`.
+	ReconnectTries int
 
 	// non-nil if server-side connection.
 	server *Server
@@ -145,6 +148,12 @@ func (c *Conn) Server() *Server {
 	}
 
 	return c.server
+}
+
+// WasReconnected reports whether the current connection is a result of a client-side reconnection.
+// To get the numbers of total retries see the `ReconnectTries` field.
+func (c *Conn) WasReconnected() bool {
+	return c.ReconnectTries > 0
 }
 
 func (c *Conn) isAcknowledged() bool {

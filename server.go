@@ -183,32 +183,19 @@ func tryParseURLParamsToHeaders(r *http.Request) {
 	}
 }
 
-type errUpgradeOnGetRetry struct {
-	retriesStr string
-}
-
-func (err errUpgradeOnGetRetry) Error() string {
-	return err.retriesStr
-}
+var errUpgradeOnRetry = errors.New("check status")
 
 // IsTryingToReconnect reports whether the "err" is from a client
-// that was trying to reconnect to the websocket server,
-// the first output parameter is the number of total reconnection retries,
-// including the previous failures and the succeed last one.
+// that was trying to reconnect to the websocket server.
 //
-// Use it on registered callbacks for `Server#OnUpgradeError`.
-func IsTryingToReconnect(err error) (int, bool) {
-	if err == nil {
-		return 0, false
-	}
-
-	if u, ok := err.(errUpgradeOnGetRetry); ok {
-		retries, _ := strconv.Atoi(u.retriesStr)
-		return retries, ok
-	}
-
-	return 0, false
+// Used on manual calls of `Server#Upgrade`,
+// Look the `Conn#WasReconnected` too.
+func IsTryingToReconnect(err error) (ok bool) {
+	return err != nil && err == errUpgradeOnRetry
 }
+
+// This header key should match with that browser-client's `whenResourceOnline->re-dial` uses.
+const websocketReconectHeaderKey = "X-Websocket-Reconnect"
 
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
 // a socket wrapper and it does return the connection or any errors.
@@ -216,6 +203,11 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 	if atomic.LoadUint32(&s.closed) > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil, errServerClosed
+	}
+
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusFound)
+		return nil, errUpgradeOnRetry
 	}
 
 	if r.Method != http.MethodGet {
@@ -228,22 +220,6 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		fmt.Fprintln(w, http.StatusText(http.StatusMethodNotAllowed))
 		return nil, errInvalidMethod
-	}
-
-	// This header key should match with that browser-client's `whenResourceOnline` uses.
-	if v := r.Header.Get("X-Websocket-Reconnect"); v != "" {
-		// If that header exists and it's not empty then it means that it tries to see if the GET resouce is online,
-		// let's make the error more useful so it can be checked from callers.
-		//
-		// Note that this request will fail at the end
-		// but the caller can ignore logging it as an actual error,
-		// see the `IsTryingToReconnect` package-level function for more.
-		err := errUpgradeOnGetRetry{v}
-		if s.OnUpgradeError != nil {
-			s.OnUpgradeError(err)
-		}
-
-		return nil, err
 	}
 
 	tryParseURLParamsToHeaders(r)
@@ -265,6 +241,11 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
+
+	retriesHeaderValue := r.Header.Get(websocketReconectHeaderKey)
+	if retriesHeaderValue != "" {
+		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
+	}
 
 	go func(c *Conn) {
 		for s.waitMessage(c) {
