@@ -326,6 +326,44 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, s
 
 const validMessageSepCount = 7
 
+var knownErrors = []error{ErrBadNamespace, ErrBadRoom}
+
+// RegisterKnownError registers an error that it's "known" to both server and client sides.
+// This simply adds an error to a list which, if its static text matches
+// an incoming error text then its value is set to the `Message.Error` field on the events callbacks.
+//
+// For dynamic text error, there is a special case which if
+// the error "err" contains
+// a `ResolveError(errorText string) bool` method then,
+// it is used to report whether this "err" is match to the incoming error text.
+func RegisterKnownError(err error) {
+	for _, knownErr := range knownErrors {
+		if err == knownErr {
+			return
+		}
+	}
+
+	knownErrors = append(knownErrors, err)
+}
+
+func resolveError(errorText string) error {
+	for _, knownErr := range knownErrors {
+		if resolver, ok := knownErr.(interface {
+			ResolveError(errorText string) bool
+		}); ok {
+			if resolver.ResolveError(errorText) {
+				return knownErr
+			}
+		}
+
+		if knownErr.Error() == errorText {
+			return knownErr
+		}
+	}
+
+	return errors.New(errorText)
+}
+
 func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) ( // go-lint: ignore line
 	wait,
 	namespace,
@@ -370,15 +408,7 @@ func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessa
 	if b := dts[6]; len(b) > 0 {
 		if isError {
 			errorText := string(b)
-			switch errorText {
-			case ErrBadNamespace.Error():
-				err = ErrBadNamespace
-			case ErrBadRoom.Error():
-				err = ErrBadRoom
-			default:
-				err = errors.New(errorText)
-			}
-
+			err = resolveError(errorText)
 		} else {
 			body = b // keep it like that.
 		}

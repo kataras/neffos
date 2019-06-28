@@ -185,11 +185,10 @@ func tryParseURLParamsToHeaders(r *http.Request) {
 
 var errUpgradeOnRetry = errors.New("check status")
 
-// IsTryingToReconnect reports whether the "err" is from a client
-// that was trying to reconnect to the websocket server.
+// IsTryingToReconnect reports whether the returning "err" from the `Server#Upgrade`
+// is from a client that was trying to reconnect to the websocket server.
 //
-// Used on manual calls of `Server#Upgrade`,
-// Look the `Conn#WasReconnected` too.
+// Look the `Conn#WasReconnected` and `Conn#ReconnectTries` too.
 func IsTryingToReconnect(err error) (ok bool) {
 	return err != nil && err == errUpgradeOnRetry
 }
