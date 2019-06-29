@@ -38,5 +38,4 @@ If you discover a security vulnerability within neffos, please send an e-mail to
 The word "neffos" has a greek origin and it is translated to "cloud" in English dictionary.
 
 The neffos real-time framework is open-source software licensed under the [MIT license](https://opensource.org/licenses/MIT).
-
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkataras%2Fneffos.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkataras%2Fneffos?ref=badge_large)
+<!-- [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fkataras%2Fneffos.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fkataras%2Fneffos?ref=badge_large) -->
