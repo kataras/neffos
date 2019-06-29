@@ -25,9 +25,7 @@ class UserMessage {
 
 async function handleNamespaceConnectedConn(nsConn) {
     const roomToJoin = prompt("Please specify a room to join, i.e room1: ");
-    // const room = await nsConn.joinRoom(roomToJoin) with "async function handleNamespaceConnectedConn"...;
-    // or:
-    nsConn.joinRoom(roomToJoin); // and nsConn.room("roomName").leave();
+    nsConn.joinRoom(roomToJoin);
 
     let inputTxt = document.getElementById("input");
     let sendBtn = document.getElementById("sendBtn");
