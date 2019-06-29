@@ -72,6 +72,8 @@ func runClient() {
 		panic(err)
 	}
 
+	// Connect does nothing at this case,
+	// it just returns a connection to work with its methods.
 	c, err := client.Connect(ctx, "")
 	if err != nil {
 		panic(err)
