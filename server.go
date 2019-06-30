@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/iris-contrib/go.uuid"
+	uuid "github.com/iris-contrib/go.uuid"
 )
 
 // Upgrader is the definition type of a protocol upgrader, gorilla or gobwas or custom.
@@ -343,6 +343,7 @@ type action struct {
 // callers can do whatever they want on a connection outside of a event's callback,
 // but make sure that these operations are not taking long time to complete because it delays the
 // new incoming connections.
+// If "async" is true then this method does not block the flow of the program.
 func (s *Server) Do(fn func(*Conn), async bool) {
 	act := action{call: fn}
 	if !async {

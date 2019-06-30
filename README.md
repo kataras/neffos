@@ -10,6 +10,7 @@ Neffos is a cross-platform real-time framework with expressive, elegant API writ
 - Acknowledgements
 - Namespaces
 - Rooms
+- Broadcast
 - Event-Driven architecture
 - Request-Response architecture
 - Error Awareness
@@ -21,7 +22,7 @@ Neffos is a cross-platform real-time framework with expressive, elegant API writ
 
 ## Learning neffos
 
-Neffos contains extensive and thorough [wiki](https://github.com/kataras/neffos/wiki) making it easy to get started with the framework.
+Neffos contains extensive and thorough **[wiki](https://github.com/kataras/neffos/wiki)** making it easy to get started with the framework.
 
 For a more detailed technical documentation you can head over to our [godocs](https://godoc.org/github.com/kataras/neffos). And for executable code you can always visit the [_examples](_examples/) repository's subdirectory.
 
