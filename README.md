@@ -26,7 +26,7 @@ Neffos contains extensive and thorough **[wiki](https://github.com/kataras/neffo
 
 For a more detailed technical documentation you can head over to our [godocs](https://godoc.org/github.com/kataras/neffos). And for executable code you can always visit the [_examples](_examples/) repository's subdirectory.
 
-## Do you like to read while traveling?
+### Do you like to read while traveling?
 
 You can [request](https://bit.ly/neffos-req-book) a PDF version of the **E-Book** today and be participated in the development of neffos.
 

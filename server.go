@@ -23,7 +23,8 @@ type Upgrader func(w http.ResponseWriter, r *http.Request) (Socket, error)
 // See `Server.IDGenerator`.
 type IDGenerator func(w http.ResponseWriter, r *http.Request) string
 
-// DefaultIDGenerator returns a random unique for a new connection.
+// DefaultIDGenerator returns a universal unique identifier for a new connection.
+// It's the default `IDGenerator` for `Server`.
 var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
 	id, err := uuid.NewV4()
 	if err != nil {
