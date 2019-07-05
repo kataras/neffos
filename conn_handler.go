@@ -115,7 +115,8 @@ func (s *Struct) SetNamespace(namespace string) *Struct {
 	return s
 }
 
-// SetEventMatcher sets an event method matcher.
+// SetEventMatcher sets an event method matcher which applies to every
+// event except the system events (OnNamespaceConnected, and so on).
 func (s *Struct) SetEventMatcher(matcher EventMatcherFunc) *Struct {
 	s.eventMatcher = matcher
 	return s
@@ -153,14 +154,14 @@ var (
 // The methods if "ptr" structure value
 // can be func(msg neffos.Message) error if the structure contains a *neffos.NSConn field,
 // otherwise they should be like any event callback: func(nsConn *neffos.NSConn, msg neffos.Message) error.
-// If contains a field of type *neffos.NSConn then on each event callback a new controller is created
+// If contains a field of type *neffos.NSConn then on each new connection to the namespace a new controller is created
 // and static fields(if any) are set on runtime with the NSConn itself.
 // If it's a static controller (does not contain a NSConn field)
 // then it just registers its functions as regular events without performance cost.
 //
 // Users of this method is `New` and `Dial`.
 //
-// Note that this method has a performance cost when an event's callback's logic has small footprint.
+// Note that this method has a tiny performance cost when an event's callback's logic has small footprint.
 func NewStruct(ptr interface{}) *Struct {
 	return &Struct{
 		ptr: ptr,
@@ -315,13 +316,27 @@ func (s *Struct) getNamespaces() Namespaces {
 		}
 
 		eventName := method.Name
-		if s.eventMatcher != nil {
-			newName, ok := s.eventMatcher(method.Name)
-			if !ok {
-				continue
-			}
 
-			eventName = newName
+		// if method looks like a system event, i.e
+		// OnNamespaceConnected, then convert its registered event name
+		// _OnNamespaceConnected which is the correct.
+		// We could accept a func like:
+		// func(s *myConn) _OnNamespaceConnected(msg neffos.Message) error
+		// but Go linting does not allow this and
+		// we don't want our users to have yellow boxes everywhere in their editors.
+		if IsSystemEvent("_" + eventName) {
+			eventName = "_" + eventName
+		}
+
+		if !IsSystemEvent(eventName) {
+			if s.eventMatcher != nil {
+				newName, ok := s.eventMatcher(method.Name)
+				if !ok {
+					continue
+				}
+
+				eventName = newName
+			}
 		}
 
 		// println("found an event callback: "+method.Name+" ("+eventName+") on position: ", i)
@@ -332,20 +347,44 @@ func (s *Struct) getNamespaces() Namespaces {
 		}
 
 		events[eventName] = func(c *NSConn, msg Message) error {
-			newPtr := reflect.New(elemTyp)
-			newPtrElem := newPtr.Elem()
+			// load an existing instance which contains the same "c".
+			cachePtr := c.Value.Load().(reflect.Value)
+			return cachePtr.MethodByName(method.Name).Interface().(func(Message) error)(msg)
+		}
+	}
 
-			// don't support type customType neffos.NSConn:
-			// newPtrElem.Set(reflect.ValueOf(c).Elem().Convert(elemTyp))
+	if s.isDynamic {
+		cb, hasNamespaceConnected := events[OnNamespaceConnected]
 
-			newPtrElem.Field(s.dynamicFieldIndex).Set(reflect.ValueOf(c))
+		events[OnNamespaceConnected] = func(c *NSConn, msg Message) error {
+			if msg.Namespace != s.namespace {
+				panic("Struct: This should never happen [" + msg.Namespace + " vs " + s.namespace + "], please report it!")
+			}
+
+			// create a new instance.
+			cachePtr := reflect.New(elemTyp)
+			cacheElem := cachePtr.Elem()
+			// type myType NSConn is not allowed:
+			// cacheElem.Set(reflect.ValueOf(c).Elem().Convert(elemTyp))
+
+			// set the NSConn dynamic field.
+			cacheElem.Field(s.dynamicFieldIndex).Set(reflect.ValueOf(c))
 			if s.staticFields != nil {
+				// set any static fields.
 				for findex, fvalue := range s.staticFields {
-					newPtrElem.Field(findex).Set(fvalue)
+					cacheElem.Field(findex).Set(fvalue)
 				}
 			}
 
-			return newPtr.MethodByName(method.Name).Interface().(func(Message) error)(msg)
+			// Store it for the rest of the events inside
+			// this namespace of that specific connection.
+			c.Value.Store(cachePtr)
+
+			if hasNamespaceConnected {
+				return cb(c, msg)
+			}
+
+			return nil
 		}
 	}
 

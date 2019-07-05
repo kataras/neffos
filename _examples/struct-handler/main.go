@@ -10,7 +10,8 @@ import (
 )
 
 type serverConn struct {
-	// dynamic field, a new "serverConn" instance is created on each event callback fire.
+	// dynamic field, a new "serverConn" instance is created
+	// on each new connection to this namespace.
 	Conn *neffos.NSConn
 	// a static field is allowed, if filled before server ran then
 	// is set on each new "serverConn" instance.
@@ -22,12 +23,17 @@ func (c *serverConn) OnChat(msg neffos.Message) error {
 	return nil
 }
 
+func (c *serverConn) OnNamespaceConnected(msg neffos.Message) error {
+	log.Printf("[%s] connected to namespace: [%s]", c.Conn.String(), msg.Namespace)
+	return nil
+}
+
 type clientConn struct {
 	Conn *neffos.NSConn
 }
 
 func (s *clientConn) ChatResponse(msg neffos.Message) error {
-	log.Printf("Echo back from server: %s", string(msg.Body))
+	log.Printf("[%s] Echo back from server: %s", s.Conn, string(msg.Body))
 	return nil
 }
 
@@ -60,7 +66,8 @@ func startServer() {
 	// This will convert a structure to neffos.Namespaces based on the struct's methods.
 	// The methods can be func(msg neffos.Message) error if the structure contains a *neffos.NSConn field,
 	// otherwise they should be like any event callback: func(nsConn *neffos.NSConn, msg neffos.Message) error.
-	// If contains a field of type *neffos.NSConn then on each event callback a new controller is created
+	// If contains a field of type *neffos.NSConn then a new controller
+	// is created on each new connection to this namespace
 	// and static fields(if any) are set on runtime with the NSConn itself.
 	// If it's a static controller (does not contain a NSConn field)
 	// then it just registers its functions as regular events without performance cost.
