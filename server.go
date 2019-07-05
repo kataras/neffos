@@ -198,8 +198,14 @@ func IsTryingToReconnect(err error) (ok bool) {
 const websocketReconectHeaderKey = "X-Websocket-Reconnect"
 
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
-// a socket wrapper and it does return the connection or any errors.
-func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper func(Socket) Socket) (*Conn, error) {
+// a socket wrapper and a "customID" that overrides the server's IDGenerator
+// and it does return the connection or any errors.
+func (s *Server) Upgrade(
+	w http.ResponseWriter,
+	r *http.Request,
+	socketWrapper func(Socket) Socket,
+	customID string,
+) (*Conn, error) {
 	if atomic.LoadUint32(&s.closed) > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil, errServerClosed
@@ -237,7 +243,12 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 	}
 
 	c := newConn(socket, s.namespaces)
-	c.id = s.IDGenerator(w, r)
+	if customID != "" {
+		c.id = customID
+	} else {
+		c.id = s.IDGenerator(w, r)
+	}
+
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
 	c.server = s
@@ -298,7 +309,7 @@ func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request, socketWrapper f
 // ServeHTTP completes the `http.Handler` interface, it should be passed on a http server's router
 // to serve this neffos server on a specific endpoint.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.Upgrade(w, r, nil)
+	s.Upgrade(w, r, nil, "")
 }
 
 func (s *Server) waitMessage(c *Conn) bool {
