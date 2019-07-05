@@ -80,6 +80,11 @@ func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Du
 		writeTimeout = t.WriteTimeout
 	}
 
+	if s, ok := h.(*Struct); ok {
+		readTimeout = s.readTimeout
+		writeTimeout = s.writeTimeout
+	}
+
 	return
 }
 
@@ -105,6 +110,8 @@ type Struct struct {
 	// if the Ptr is something like type myNSConn neffos.NSConn then the dynamicFieldIndex will be -1.
 	staticFields map[int]reflect.Value
 	namespaces   Namespaces
+
+	readTimeout, writeTimeout time.Duration
 }
 
 // SetNamespace sets a namespace that this Struct is responsible for,
@@ -119,6 +126,17 @@ func (s *Struct) SetNamespace(namespace string) *Struct {
 // event except the system events (OnNamespaceConnected, and so on).
 func (s *Struct) SetEventMatcher(matcher EventMatcherFunc) *Struct {
 	s.eventMatcher = matcher
+	return s
+}
+
+// SetTimeouts sets read and write deadlines on the underlying network connection.
+// After a read or write have timed out, the websocket connection is closed.
+//
+// Defaults to 0, no timeout except an `Upgrader` or `Dialer` specifies its own values.
+func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
+	s.readTimeout = read
+	s.writeTimeout = write
+
 	return s
 }
 
@@ -341,22 +359,23 @@ func (s *Struct) getNamespaces() Namespaces {
 
 		// println("found an event callback: "+method.Name+" ("+eventName+") on position: ", i)
 
-		if !s.isDynamic {
-			events[eventName] = v.Method(i).Interface().(func(*NSConn, Message) error)
+		if s.isDynamic {
+			events[eventName] = func(c *NSConn, msg Message) error {
+				// load an existing instance which contains the same "c".
+				cachePtr := c.Value.Load().(reflect.Value)
+				return cachePtr.MethodByName(method.Name).Interface().(func(Message) error)(msg)
+			}
+
 			continue
 		}
 
-		events[eventName] = func(c *NSConn, msg Message) error {
-			// load an existing instance which contains the same "c".
-			cachePtr := c.Value.Load().(reflect.Value)
-			return cachePtr.MethodByName(method.Name).Interface().(func(Message) error)(msg)
-		}
+		events[eventName] = v.Method(i).Interface().(func(*NSConn, Message) error)
 	}
 
 	if s.isDynamic {
-		cb, hasNamespaceConnected := events[OnNamespaceConnected]
+		cb, hasNamespaceConnect := events[OnNamespaceConnect]
 
-		events[OnNamespaceConnected] = func(c *NSConn, msg Message) error {
+		events[OnNamespaceConnect] = func(c *NSConn, msg Message) error {
 			if msg.Namespace != s.namespace {
 				panic("Struct: This should never happen [" + msg.Namespace + " vs " + s.namespace + "], please report it!")
 			}
@@ -380,7 +399,7 @@ func (s *Struct) getNamespaces() Namespaces {
 			// this namespace of that specific connection.
 			c.Value.Store(cachePtr)
 
-			if hasNamespaceConnected {
+			if hasNamespaceConnect {
 				return cb(c, msg)
 			}
 

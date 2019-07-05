@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gobwas"
@@ -22,6 +23,13 @@ func (c *serverConn) OnChat(msg neffos.Message) error {
 	c.Conn.Emit("ChatResponse", append(msg.Body, []byte(c.SuffixResponse)...))
 	return nil
 }
+
+// This is supported too, uncomment these lines,
+// import the std "errors" package and run a client.
+//
+// func (c *serverConn) OnNamespaceConnect(msg neffos.Message) error {
+// 	return errors.New("not allowed")
+// }
 
 func (c *serverConn) OnNamespaceConnected(msg neffos.Message) error {
 	log.Printf("[%s] connected to namespace: [%s]", c.Conn.String(), msg.Namespace)
@@ -76,6 +84,12 @@ func startServer() {
 		// alternatively you can add a `Namespace() string` to the serverConn struct
 		// or leave it empty for empty namespace.
 		SetNamespace("default").
+		// Optionally, sets read and write deadlines on the underlying network connection.
+		// After a read or write have timed out, the websocket connection is closed.
+		// For example:
+		// If a client or server didn't receive or sent something
+		// for 20 seconds this connection will be terminated.
+		SetTimeouts(20*time.Second, 20*time.Second).
 		// This will convert the "OnChat" method to a "Chat" event instead.
 		SetEventMatcher(neffos.EventTrimPrefixMatcher("On"))
 

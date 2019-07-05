@@ -55,7 +55,7 @@ func TestConnHandlerStructDynamic(t *testing.T) {
 	s.getNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
-	s.namespaces[s.namespace][OnNamespaceConnected](nsConn, Message{Namespace: s.namespace})
+	s.namespaces[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
 
 	err := s.namespaces[s.namespace]["OnMyEvent"](nsConn, Message{})
 	if expected, got := s.namespace+v.StaticFieldErr.Error(), err.Error(); expected != got {
@@ -83,7 +83,7 @@ func TestConnHandlerStructDynamicEmbedded(t *testing.T) {
 	s.getNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
-	s.namespaces[s.namespace][OnNamespaceConnected](nsConn, Message{Namespace: s.namespace})
+	s.namespaces[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
 
 	err := s.namespaces[s.namespace]["OnMyEvent"](nsConn, Message{})
 	if err.Error() != s.namespace {
