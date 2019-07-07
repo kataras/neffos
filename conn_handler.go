@@ -94,24 +94,16 @@ type EventMatcherFunc = func(methodName string) (string, bool)
 // Struct is a ConnHandler. All fields are unexported, use `NewStruct` instead.
 // It converts any pointer to a struct value to `neffos.Namespaces` using reflection.
 type Struct struct {
-	ptr interface{}
+	ptr reflect.Value
 
 	// defaults to empty and tries to get it through `Struct.Namespace() string` method.
 	namespace string
 	// defaults to nil, if specified
 	// then it matches the events based on the result string or false if this method shouldn't register as event.
-	eventMatcher EventMatcherFunc
-
-	// if the Ptr contais a NSConnn field then a new Ptr should be created on each new client connection.
-	isDynamic         bool
-	dynamicFieldIndex int // the NSConn, it should be an exported field one.
-	// if isDynamic but contains fields other than NSConn type and they are filled, they are stored here
-	// so each new Ptr sets them too. Non-exported are acceptable too. As a special case though
-	// if the Ptr is something like type myNSConn neffos.NSConn then the dynamicFieldIndex will be -1.
-	staticFields map[int]reflect.Value
-	namespaces   Namespaces
-
+	eventMatcher              EventMatcherFunc
 	readTimeout, writeTimeout time.Duration
+
+	events Events
 }
 
 // SetNamespace sets a namespace that this Struct is responsible for,
@@ -119,24 +111,6 @@ type Struct struct {
 // to retrieve this namespace at build time.
 func (s *Struct) SetNamespace(namespace string) *Struct {
 	s.namespace = namespace
-	return s
-}
-
-// SetEventMatcher sets an event method matcher which applies to every
-// event except the system events (OnNamespaceConnected, and so on).
-func (s *Struct) SetEventMatcher(matcher EventMatcherFunc) *Struct {
-	s.eventMatcher = matcher
-	return s
-}
-
-// SetTimeouts sets read and write deadlines on the underlying network connection.
-// After a read or write have timed out, the websocket connection is closed.
-//
-// Defaults to 0, no timeout except an `Upgrader` or `Dialer` specifies its own values.
-func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
-	s.readTimeout = read
-	s.writeTimeout = write
-
 	return s
 }
 
@@ -165,6 +139,24 @@ var (
 	}
 )
 
+// SetEventMatcher sets an event method matcher which applies to every
+// event except the system events (OnNamespaceConnected, and so on).
+func (s *Struct) SetEventMatcher(matcher EventMatcherFunc) *Struct {
+	s.eventMatcher = matcher
+	return s
+}
+
+// SetTimeouts sets read and write deadlines on the underlying network connection.
+// After a read or write have timed out, the websocket connection is closed.
+//
+// Defaults to 0, no timeout except an `Upgrader` or `Dialer` specifies its own values.
+func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
+	s.readTimeout = read
+	s.writeTimeout = write
+
+	return s
+}
+
 // NewStruct returns a new Struct value instance type of ConnHandler.
 // The "ptr" should be a pointer to a struct.
 // This function is used when you want to convert a structure to
@@ -181,235 +173,57 @@ var (
 //
 // Note that this method has a tiny performance cost when an event's callback's logic has small footprint.
 func NewStruct(ptr interface{}) *Struct {
-	return &Struct{
-		ptr: ptr,
-	}
-}
-
-var (
-	nsConnType = reflect.TypeOf((*NSConn)(nil))
-	msgType    = reflect.TypeOf(Message{})
-	errType    = reflect.TypeOf((*error)(nil)).Elem()
-)
-
-func isZero(v reflect.Value) bool {
-	switch v.Kind() {
-	case reflect.Struct:
-		zero := true
-		for i := 0; i < v.NumField(); i++ {
-			zero = zero && isZero(v.Field(i))
-		}
-
-		if typ := v.Type(); typ != nil && v.IsValid() {
-			f, ok := typ.MethodByName("IsZero")
-			// if not found
-			// if has input arguments (1 is for the value receiver, so > 1 for the actual input args)
-			// if output argument is not boolean
-			// then skip this IsZero user-defined function.
-			if !ok || f.Type.NumIn() > 1 || f.Type.NumOut() != 1 && f.Type.Out(0).Kind() != reflect.Bool {
-				return zero
-			}
-
-			method := v.Method(f.Index)
-			// no needed check but:
-			if method.IsValid() && !method.IsNil() {
-				// it shouldn't panic here.
-				zero = method.Call(nil)[0].Interface().(bool)
-			}
-		}
-
-		return zero
-	case reflect.Func, reflect.Map, reflect.Slice:
-		return v.IsNil()
-	case reflect.Array:
-		zero := true
-		for i := 0; i < v.Len(); i++ {
-			zero = zero && isZero(v.Index(i))
-		}
-		return zero
-	}
-	// if not any special type then use the reflect's .Zero
-	// usually for fields, but remember if it's boolean and it's false
-	// then it's zero, even if set-ed.
-
-	if !v.CanInterface() {
-		// if can't interface, i.e return value from unexported field or method then return false
-		return false
-	}
-
-	zero := reflect.Zero(v.Type())
-	return v.Interface() == zero.Interface()
-}
-
-func (s *Struct) getNamespaces() Namespaces {
-	if s.namespaces != nil {
-		return s.namespaces
-	}
-
-	typ := reflect.TypeOf(s.ptr) // use for methods with receiver Ptr.
+	typ := reflect.TypeOf(ptr) // use for methods with receiver Ptr.
 	if typ.Kind() != reflect.Ptr {
-		panic("Struct: Ptr should be a pointer to a struct value")
+		panic("NewStruct: value should be a pointer")
 	}
-
-	elemTyp := typ.Elem() // use for fields.
 
 	if typ.ConvertibleTo(nsConnType) {
-		panic("Struct: conversion for type" + typ.String() + " NSConn is not allowed.")
+		panic("NewStruct: conversion for type" + typ.String() + " NSConn is not allowed.")
 	}
 
-	if elemTyp.Kind() != reflect.Struct {
-		panic("Struct: Ptr does not points to a struct")
+	if indirectType(typ).Kind() != reflect.Struct {
+		panic("NewStruct: value does not points to a struct")
 	}
 
-	v := reflect.ValueOf(s.ptr) // use for methods with receiver Ptr.
+	v := reflect.ValueOf(ptr) // use for methods with receiver Ptr.
 	if !v.IsValid() {
-		panic("Struct: Ptr is not a valid value")
+		panic("NewStruct: value is not a valid one")
 	}
-
-	elem := v.Elem() // use for fields.
 
 	n := typ.NumMethod()
-	if n == 0 || n == 1 && s.namespace == "" {
-		panic("Struct: Ptr does not contain any exported method")
+	_, hasNamespaceMethod := typ.MethodByName("Namespace")
+	if n == 0 || (n == 1 && hasNamespaceMethod) {
+		panic("NewStruct: value does not contain any exported methods")
 	}
 
-	if !s.isDynamic {
-		for nFields, i := elemTyp.NumField(), 0; i < nFields; i++ {
-			f := elemTyp.Field(i)
+	return &Struct{
+		ptr: v,
+	}
+}
 
-			if f.Type == nsConnType && f.PkgPath == "" {
-				if f.Anonymous && f.Type.Name() == nsConnType.Name() {
-					// It's embedded NSConn, add a warning or let it go?
-				}
-				s.isDynamic = true
-				s.dynamicFieldIndex = i
-				continue
-			}
-
-			// set static fields that are not zero.
-			if fVal := elem.Field(i); !isZero(fVal) {
-				if s.staticFields == nil {
-					s.staticFields = make(map[int]reflect.Value)
-				}
-
-				// println("add " + f.Name + " to the static filled fields")
-				s.staticFields[i] = fVal
-			}
-		}
+// Events builds and returns the Events.
+// Callers of this method is users that want to add Structs to different namespaces
+// in the same application.
+// When a single namespace is used then this call is unnecessary,
+// the `Struct` is already a fully featured `ConnHandler` by itself.
+func (s *Struct) Events() Events {
+	if s.events != nil {
+		return s.events
 	}
 
-	events := make(Events, 0)
+	s.events = makeEventsFromStruct(s.ptr, s.eventMatcher)
+	return s.events
+}
 
-	// Create the dynamic type which methods will be compared to.
-	// remember, the receiver Ptr is also part of the input arguments,
-	// that's why we don't use a static type assertion.
-	expectedIn := []reflect.Type{
-		typ,
-		nsConnType,
-		msgType,
+func (s *Struct) getNamespaces() Namespaces { // completes the `ConnHandler` interface.
+	if s.namespace == "" {
+		s.namespace, _ = resolveStructNamespace(s.ptr)
 	}
 
-	if s.isDynamic {
-		// Except when the Ptr is a dynamic one (has a field of NSConn) then the event callback does not require
-		// that on its input arguments.
-		expectedIn = append(expectedIn[0:1], expectedIn[2:]...)
+	return Namespaces{
+		s.namespace: s.Events(),
 	}
-
-	var msgHandlerType = reflect.FuncOf(expectedIn, []reflect.Type{errType}, false)
-
-	for i := 0; i < n; i++ {
-		method := typ.Method(i)
-
-		// If no namespace provided by the Struct and this Ptr's method is a Namespace() string then set the namespace to its out result.
-		// Empty namespace is allowed but if more than one Struct with empty namespace
-		// is used then the JoinConnHandlers should be used to wrap all them to one namespace as expected.
-		if s.namespace == "" && method.Name == "Namespace" && method.Type.NumOut() == 1 && method.Type.Out(0).Kind() == reflect.String {
-			s.namespace = v.Method(i).Call(nil)[0].Interface().(string)
-			continue
-		}
-
-		// Convert each method to MessageHandlerFunc.
-		if method.Type != msgHandlerType {
-			continue
-		}
-
-		eventName := method.Name
-
-		// if method looks like a system event, i.e
-		// OnNamespaceConnected, then convert its registered event name
-		// _OnNamespaceConnected which is the correct.
-		// We could accept a func like:
-		// func(s *myConn) _OnNamespaceConnected(msg neffos.Message) error
-		// but Go linting does not allow this and
-		// we don't want our users to have yellow boxes everywhere in their editors.
-		if IsSystemEvent("_" + eventName) {
-			eventName = "_" + eventName
-		}
-
-		if !IsSystemEvent(eventName) {
-			if s.eventMatcher != nil {
-				newName, ok := s.eventMatcher(method.Name)
-				if !ok {
-					continue
-				}
-
-				eventName = newName
-			}
-		}
-
-		// println("found an event callback: "+method.Name+" ("+eventName+") on position: ", i)
-
-		if s.isDynamic {
-			events[eventName] = func(c *NSConn, msg Message) error {
-				// load an existing instance which contains the same "c".
-				cachePtr := c.Value.Load().(reflect.Value)
-				return cachePtr.MethodByName(method.Name).Interface().(func(Message) error)(msg)
-			}
-
-			continue
-		}
-
-		events[eventName] = v.Method(i).Interface().(func(*NSConn, Message) error)
-	}
-
-	if s.isDynamic {
-		cb, hasNamespaceConnect := events[OnNamespaceConnect]
-
-		events[OnNamespaceConnect] = func(c *NSConn, msg Message) error {
-			if msg.Namespace != s.namespace {
-				panic("Struct: This should never happen [" + msg.Namespace + " vs " + s.namespace + "], please report it!")
-			}
-
-			// create a new instance.
-			cachePtr := reflect.New(elemTyp)
-			cacheElem := cachePtr.Elem()
-			// type myType NSConn is not allowed:
-			// cacheElem.Set(reflect.ValueOf(c).Elem().Convert(elemTyp))
-
-			// set the NSConn dynamic field.
-			cacheElem.Field(s.dynamicFieldIndex).Set(reflect.ValueOf(c))
-			if s.staticFields != nil {
-				// set any static fields.
-				for findex, fvalue := range s.staticFields {
-					cacheElem.Field(findex).Set(fvalue)
-				}
-			}
-
-			// Store it for the rest of the events inside
-			// this namespace of that specific connection.
-			c.Value.Store(cachePtr)
-
-			if hasNamespaceConnect {
-				return cb(c, msg)
-			}
-
-			return nil
-		}
-	}
-
-	s.namespaces = Namespaces{s.namespace: events}
-
-	return s.namespaces
 }
 
 // JoinConnHandlers combines two or more "connHandlers"

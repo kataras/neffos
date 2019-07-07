@@ -18,22 +18,25 @@ func (s *testStructStatic) OnMyEvent(c *NSConn, msg Message) error {
 }
 
 func TestConnHandlerStructStatic(t *testing.T) {
+	// EnableDebug(nil)
+
 	v := new(testStructStatic)
 	v.Err = fmt.Errorf("from static")
 	s := NewStruct(v)
-	s.getNamespaces()
+	nss := s.getNamespaces()
 
 	if expected, got := v.Namespace(), s.namespace; expected != got {
 		t.Fatalf("expected namespace to be: %s but got: %s", expected, got)
 	}
 
-	err := s.namespaces[s.namespace]["OnMyEvent"](nil, Message{})
+	err := nss[s.namespace]["OnMyEvent"](nil, Message{})
 	if err != v.Err {
 		t.Fatalf("expected output error to be: %v but got: %v", v.Err, err)
 	}
 }
 
 type testStructDynamic struct {
+	Namespace      string
 	StaticFieldErr error
 
 	Conn *NSConn
@@ -48,21 +51,22 @@ func (s *testStructDynamic) OnMySecondEvent(msg Message) error {
 }
 
 func TestConnHandlerStructDynamic(t *testing.T) {
-	v := new(testStructDynamic)
-	v.StaticFieldErr = fmt.Errorf("a static field which should be set on each new testStructDynamic")
+	v := &testStructDynamic{
+		Namespace:      "default",
+		StaticFieldErr: fmt.Errorf("a static field which should be set on each new testStructDynamic"),
+	}
 	s := NewStruct(v)
-	s.namespace = "default"
-	s.getNamespaces()
+	nss := s.getNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
-	s.namespaces[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
+	nss[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
 
-	err := s.namespaces[s.namespace]["OnMyEvent"](nsConn, Message{})
+	err := nss[s.namespace]["OnMyEvent"](nsConn, Message{})
 	if expected, got := s.namespace+v.StaticFieldErr.Error(), err.Error(); expected != got {
 		t.Fatalf("expected output error to be: %v but got: %v", expected, got)
 	}
 
-	err = s.namespaces[s.namespace]["OnMySecondEvent"](nsConn, Message{})
+	err = nss[s.namespace]["OnMySecondEvent"](nsConn, Message{})
 	if expected, got := v.StaticFieldErr, err; expected != got {
 		t.Fatalf("expected output error to be: %v but got: %v", expected, got)
 	}
@@ -80,35 +84,13 @@ func TestConnHandlerStructDynamicEmbedded(t *testing.T) {
 	v := new(testStructDynamicEmbedded)
 	s := NewStruct(v)
 	s.namespace = "default"
-	s.getNamespaces()
+	nss := s.getNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
-	s.namespaces[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
+	nss[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
 
-	err := s.namespaces[s.namespace]["OnMyEvent"](nsConn, Message{})
+	err := nss[s.namespace]["OnMyEvent"](nsConn, Message{})
 	if err.Error() != s.namespace {
 		t.Fatalf("expected output error to be: %v but got: %v", s.namespace, err)
 	}
 }
-
-// This is dissalowed, although I made it work:
-// type testStructNSConn NSConn
-//
-// func (s *testStructNSConn) OnMyEvent(msg Message) error {
-
-// 	return fmt.Errorf(s.namespace)
-// }
-
-// func TestConnHandlerStructNSConnType(t *testing.T) {
-// 	var expectedNamespace = "default"
-
-// 	v := new(testStructNSConn)
-// 	s := NewStruct(v)
-// 	s.namespace = expectedNamespace
-// 	s.getNamespaces()
-
-// 	err := s.namespaces[s.namespace]["OnMyEvent"](&NSConn{namespace: expectedNamespace}, Message{})
-// 	if err.Error() != expectedNamespace {
-// 		t.Fatalf("expected output error to be: %v but got: %v", expectedNamespace, err)
-// 	}
-// }

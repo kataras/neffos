@@ -19,6 +19,10 @@ type serverConn struct {
 	SuffixResponse string
 }
 
+func (c *serverConn) Namespace() string {
+	return "default"
+}
+
 func (c *serverConn) OnChat(msg neffos.Message) error {
 	c.Conn.Emit("ChatResponse", append(msg.Body, []byte(c.SuffixResponse)...))
 	return nil
@@ -32,7 +36,12 @@ func (c *serverConn) OnChat(msg neffos.Message) error {
 // }
 
 func (c *serverConn) OnNamespaceConnected(msg neffos.Message) error {
-	log.Printf("[%s] connected to namespace: [%s]", c.Conn.String(), msg.Namespace)
+	log.Printf("[%s] connected to namespace [%s]", c.Conn, msg.Namespace)
+	return nil
+}
+
+func (c *serverConn) OnNamespaceDisconnect(msg neffos.Message) error {
+	log.Printf("[%s] disconnected from namespace [%s]", c.Conn, msg.Namespace)
 	return nil
 }
 
@@ -48,8 +57,10 @@ func (s *clientConn) ChatResponse(msg neffos.Message) error {
 // $ go run main.go server
 // $ go run main.go client
 // # expected output:
-// # Echo back from server: Hello from client! Static Response Suffix for shake of the example.
+// # Echo back from server: Hello from client!Static Response Suffix for shake of the example.
 func main() {
+	neffos.EnableDebug(nil)
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		log.Fatalf("expected program to start with 'server' or 'client' argument")
@@ -69,7 +80,7 @@ func main() {
 
 func startServer() {
 	controller := new(serverConn)
-	controller.SuffixResponse = " Static Response Suffix for shake of the example"
+	controller.SuffixResponse = "Static Response Suffix for shake of the example"
 
 	// This will convert a structure to neffos.Namespaces based on the struct's methods.
 	// The methods can be func(msg neffos.Message) error if the structure contains a *neffos.NSConn field,
@@ -80,10 +91,6 @@ func startServer() {
 	// If it's a static controller (does not contain a NSConn field)
 	// then it just registers its functions as regular events without performance cost.
 	events := neffos.NewStruct(controller).
-		// This sets for the "default" namespace,
-		// alternatively you can add a `Namespace() string` to the serverConn struct
-		// or leave it empty for empty namespace.
-		SetNamespace("default").
 		// Optionally, sets read and write deadlines on the underlying network connection.
 		// After a read or write have timed out, the websocket connection is closed.
 		// For example:
@@ -101,7 +108,12 @@ func startServer() {
 
 func startClient() {
 	controller := new(clientConn)
-	events := neffos.NewStruct(controller).SetNamespace("default")
+	events := neffos.NewStruct(controller).
+		// This sets a namespace.
+		// Alternatively you can add a `Namespace() string`
+		// as you've seen on the `serverConn struct` above
+		// or leave it empty for empty namespace.
+		SetNamespace("default")
 
 	client, err := neffos.Dial(nil, gobwas.DefaultDialer, "ws://localhost:8080", events)
 	if err != nil {
