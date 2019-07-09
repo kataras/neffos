@@ -32,11 +32,12 @@ func EnableDebug(printer interface{}) {
 	}
 
 	if printer == nil {
-		printer = log.New(os.Stderr, "| neffos | ", 0)
+		logger := log.New(os.Stderr, "| neffos | ", 0)
+		printer = logger
+		logger.Println("debug mode is set")
 	}
 
 	debugPrinter = printer
-	debugf("debug mode is set")
 }
 
 type (

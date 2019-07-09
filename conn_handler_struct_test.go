@@ -23,7 +23,7 @@ func TestConnHandlerStructStatic(t *testing.T) {
 	v := new(testStructStatic)
 	v.Err = fmt.Errorf("from static")
 	s := NewStruct(v)
-	nss := s.getNamespaces()
+	nss := s.GetNamespaces()
 
 	if expected, got := v.Namespace(), s.namespace; expected != got {
 		t.Fatalf("expected namespace to be: %s but got: %s", expected, got)
@@ -56,7 +56,7 @@ func TestConnHandlerStructDynamic(t *testing.T) {
 		StaticFieldErr: fmt.Errorf("a static field which should be set on each new testStructDynamic"),
 	}
 	s := NewStruct(v)
-	nss := s.getNamespaces()
+	nss := s.GetNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
 	nss[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})
@@ -84,7 +84,7 @@ func TestConnHandlerStructDynamicEmbedded(t *testing.T) {
 	v := new(testStructDynamicEmbedded)
 	s := NewStruct(v)
 	s.namespace = "default"
-	nss := s.getNamespaces()
+	nss := s.GetNamespaces()
 
 	nsConn := &NSConn{namespace: s.namespace}
 	nss[s.namespace][OnNamespaceConnect](nsConn, Message{Namespace: s.namespace})

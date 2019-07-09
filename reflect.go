@@ -2,6 +2,7 @@ package neffos
 
 import (
 	"reflect"
+	"strings"
 )
 
 func indirectType(typ reflect.Type) reflect.Type {
@@ -109,8 +110,8 @@ func resolveStructNamespace(v reflect.Value) (string, bool) {
 	if ok {
 		if getNamespace, ok := v.Method(method.Index).Interface().(func() string); ok {
 			namespace := getNamespace()
-			debugf("set namespace [%s] from method [%s.%s]", func() dargs {
-				return dargs{namespace, indirectType(typ).Name(), method.Name}
+			debugf("Set namespace [\"%s\"] from method [%s.%s]", func() dargs {
+				return dargs{namespace, nameOf(typ), method.Name}
 			})
 
 			return namespace, true
@@ -123,8 +124,8 @@ func resolveStructNamespace(v reflect.Value) (string, bool) {
 	if f, ok := typ.FieldByNameFunc(func(s string) bool { return s == "Namespace" }); ok {
 		if f.Type.Kind() == reflect.String {
 			namespace := v.Field(f.Index[0]).String()
-			debugf("set namespace [%s] from field [%s.%s]", func() dargs {
-				return dargs{namespace, typ.Name(), f.Name}
+			debugf("Set namespace [\"%s\"] from field [%s.%s]", func() dargs {
+				return dargs{namespace, nameOf(typ), f.Name}
 			})
 			return namespace, true
 		}
@@ -204,15 +205,27 @@ func makeEventFromMethod(v reflect.Value, method reflect.Method, eventMatcher Ev
 		// the NSConn exists on the "controller" itself which is set dynamically.
 		cb = func(c *NSConn, msg Message) error {
 			// load an existing instance which contains the same "c".
-			cachePtr := c.Value.Load().(reflect.Value)
-			return cachePtr.Method(method.Index).Interface().(func(Message) error)(msg)
+			return c.value.Method(method.Index).Interface().(func(Message) error)(msg)
 		}
 	}
 
 	return
 }
 
-func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc) Events {
+// StructInjector is a type which injects a dynamic struct value.
+// See `Struct.SetInjector` for more.
+type StructInjector func(structType reflect.Type, nsConn *NSConn) (structValue reflect.Value)
+
+func nameOf(structType reflect.Type) string {
+	structType = indirectType(structType)
+
+	typName := structType.Name()
+	pkgPath := structType.PkgPath()
+	fullname := pkgPath[strings.LastIndexByte(pkgPath, '/')+1:] + "." + typName
+	return fullname
+}
+
+func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, injector StructInjector) Events {
 	events := make(Events, 0)
 
 	typ := v.Type()
@@ -233,52 +246,51 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc) Events
 			continue
 		}
 
-		debugf("event [%s] is handled by [%s.%s]", func() dargs {
-			return dargs{eventName, indirectType(typ).Name(), method.Name}
+		debugf("Event [\"%s\"] is handled by [%s.%s] method", func() dargs {
+			return dargs{eventName, nameOf(typ), method.Name}
 		})
 
 		events[eventName] = cb
 	}
 
 	if nsConnFieldIndex != -1 {
-		// if it's a dynamic.
 		typ = indirectType(typ)
 
-		cb, hasNamespaceConnect := events[OnNamespaceConnect]
-		staticFields := getNonZeroFields(v)
+		var staticFields map[int]reflect.Value
 
-		// debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", func(fidx int, f reflect.Value) dargs {
-		// 	fval := f.Interface()
-		// 	return dargs{typ.Name(), typ.Field(fidx).Name, fval, fval}
-		// }).forEach(staticFields)
+		if injector == nil {
+			// maybe this should be added no matter what, I have to check
+			// some things in our company's production server first.
+			staticFields = getNonZeroFields(v)
 
-		debugEach(staticFields, func(idx int, f reflect.Value) {
-			fval := f.Interface()
-			fname := typ.Field(idx).Name
-			if fname == "Namespace" {
-				return // let's no log this as user field because
-				// it's optionally used to provide a namespace on NewStruct.getNamespaces().
+			debugEach(staticFields, func(idx int, f reflect.Value) {
+				fval := f.Interface()
+				fname := typ.Field(idx).Name
+				if fname == "Namespace" {
+					// let's no log this as user field because
+					// it's optionally used to provide a namespace on NewStruct.GetNamespaces().
+					return
+				}
+
+				debugf("Field [%s.%s] marked as static on value [%v]", nameOf(typ), fname, fval)
+			})
+
+			injector = func(typ reflect.Type, nsConn *NSConn) reflect.Value {
+				return reflect.New(typ)
 			}
+		}
 
-			debugf("field [%s.%s] marked as static on value [%v]", typ.Name(), fname, fval)
-		})
-
-		// if debugEnabled() {
-		// 	for fidx, f := range staticFields {
-		// 		fval := f.Interface()
-		// 		debugf(, typ.Name(), typ.Field(fidx).Name, fval, fval)
-		// 	}
-		// }
+		cb, hasNamespaceConnect := events[OnNamespaceConnect]
 
 		events[OnNamespaceConnect] = func(c *NSConn, msg Message) error {
-			// create a new elem instance.
-			cachePtr := reflect.New(typ)
+			cachePtr := injector(typ, c)
 			cacheElem := cachePtr.Elem()
 
 			// set the NSConn dynamic field.
 			cacheElem.Field(nsConnFieldIndex).Set(reflect.ValueOf(c))
+
 			if staticFields != nil {
-				// set any static fields.
+				// set any static fields if default injector (see above).
 				for findex, fvalue := range staticFields {
 					cacheElem.Field(findex).Set(fvalue)
 				}
@@ -286,7 +298,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc) Events
 
 			// Store it for the rest of the events inside
 			// this namespace of that specific connection.
-			c.Value.Store(cachePtr)
+			c.value = cachePtr
 
 			if hasNamespaceConnect {
 				return cb(c, msg)

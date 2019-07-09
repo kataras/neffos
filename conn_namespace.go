@@ -2,8 +2,8 @@ package neffos
 
 import (
 	"context"
+	"reflect"
 	"sync"
-	"sync/atomic"
 )
 
 // NSConn describes a connection connected to a specific namespace,
@@ -25,9 +25,9 @@ type NSConn struct {
 	rooms      map[string]*Room
 	roomsMutex sync.RWMutex
 
-	// Value is just a temporarily atomic value.
+	// value is just a temporarily value.
 	// Storage across event callbacks for this namespace.
-	Value atomic.Value
+	value reflect.Value
 }
 
 func newNSConn(c *Conn, namespace string, events Events) *NSConn {

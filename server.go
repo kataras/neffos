@@ -86,7 +86,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 
 	s := &Server{
 		upgrader:     upgrader,
-		namespaces:   connHandler.getNamespaces(),
+		namespaces:   connHandler.GetNamespaces(),
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 		connections:  make(map[*Conn]struct{}),

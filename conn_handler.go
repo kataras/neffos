@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// ConnHandler is the interface which
-// `Events`, `Namespaces` and `WithTimeout` are implement.
-// It's exported just to be used on the `Dial`(client) and `New` (server) functions.
+// ConnHandler is the interface which namespaces and events can be retrieved through.
+// Built-in ConnHandlers are the`Events`, `Namespaces`, `WithTimeout` and `NewStruct`.
+// Users of this are the `Dial`(client) and `New` (server) functions.
 type ConnHandler interface {
-	getNamespaces() Namespaces
+	GetNamespaces() Namespaces
 }
 
 var (
@@ -31,7 +31,8 @@ var (
 // See `Namespaces`, `New` and `Dial` too.
 type Events map[string]MessageHandlerFunc
 
-func (e Events) getNamespaces() Namespaces {
+// GetNamespaces returns an empty namespace with the "e" Events.
+func (e Events) GetNamespaces() Namespaces {
 	return Namespaces{"": e}
 }
 
@@ -55,7 +56,8 @@ func (e Events) fireEvent(c *NSConn, msg Message) error {
 // See `WithTimeout`, `New` and `Dial` too.
 type Namespaces map[string]Events
 
-func (nss Namespaces) getNamespaces() Namespaces { return nss }
+// GetNamespaces just returns the "nss" namespaces.
+func (nss Namespaces) GetNamespaces() Namespaces { return nss }
 
 // WithTimeout completes the `ConnHandler` interface.
 // Can be used to register namespaces and events or just events on an empty namespace
@@ -70,8 +72,10 @@ type WithTimeout struct {
 	Events     Events
 }
 
-func (t WithTimeout) getNamespaces() Namespaces {
-	return JoinConnHandlers(t.Namespaces, t.Events).getNamespaces()
+// GetNamespaces returns combined namespaces from "Namespaces" and "Events" fields
+// with read and write timeouts from "ReadTimeout" and "WriteTimeout" fields of "t".
+func (t WithTimeout) GetNamespaces() Namespaces {
+	return JoinConnHandlers(t.Namespaces, t.Events).GetNamespaces()
 }
 
 func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Duration) {
@@ -102,6 +106,9 @@ type Struct struct {
 	// then it matches the events based on the result string or false if this method shouldn't register as event.
 	eventMatcher              EventMatcherFunc
 	readTimeout, writeTimeout time.Duration
+
+	// This field is set when external dependency injection system is used.
+	injector StructInjector
 
 	events Events
 }
@@ -157,6 +164,18 @@ func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
 	return s
 }
 
+// SetInjector sets a custom injector and overrides the neffos default behavior
+// on dynamic structs.
+// The "fn" should handle to fill static fields and the NSConn.
+// This "fn" will only be called when dynamic struct "ptr" is passed
+// on the `NewStruct`.
+// The caller should return a
+// valid type of "ptr" reflect.Value.
+func (s *Struct) SetInjector(fn StructInjector) *Struct {
+	s.injector = fn
+	return s
+}
+
 // NewStruct returns a new Struct value instance type of ConnHandler.
 // The "ptr" should be a pointer to a struct.
 // This function is used when you want to convert a structure to
@@ -173,7 +192,27 @@ func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
 //
 // Note that this method has a tiny performance cost when an event's callback's logic has small footprint.
 func NewStruct(ptr interface{}) *Struct {
-	typ := reflect.TypeOf(ptr) // use for methods with receiver Ptr.
+	if ptr == nil {
+		panic("NewStruct: value is nil")
+	}
+
+	if s, ok := ptr.(*Struct); ok { // if it's already a *Struct then just return it.
+		return s
+	}
+
+	var v reflect.Value // use for methods with receiver Ptr.
+	if rValue, ok := ptr.(reflect.Value); ok {
+		v = rValue
+	} else {
+		v = reflect.ValueOf(ptr)
+	}
+
+	if !v.IsValid() {
+		panic("NewStruct: value is not a valid one")
+	}
+
+	typ := v.Type() // use for methods with receiver Ptr.
+
 	if typ.Kind() != reflect.Ptr {
 		panic("NewStruct: value should be a pointer")
 	}
@@ -184,11 +223,6 @@ func NewStruct(ptr interface{}) *Struct {
 
 	if indirectType(typ).Kind() != reflect.Struct {
 		panic("NewStruct: value does not points to a struct")
-	}
-
-	v := reflect.ValueOf(ptr) // use for methods with receiver Ptr.
-	if !v.IsValid() {
-		panic("NewStruct: value is not a valid one")
 	}
 
 	n := typ.NumMethod()
@@ -212,11 +246,13 @@ func (s *Struct) Events() Events {
 		return s.events
 	}
 
-	s.events = makeEventsFromStruct(s.ptr, s.eventMatcher)
+	s.events = makeEventsFromStruct(s.ptr, s.eventMatcher, s.injector)
 	return s.events
 }
 
-func (s *Struct) getNamespaces() Namespaces { // completes the `ConnHandler` interface.
+// GetNamespaces creates and returns Namespaces based on the
+// pointer to struct value provided by the "s".
+func (s *Struct) GetNamespaces() Namespaces { // completes the `ConnHandler` interface.
 	if s.namespace == "" {
 		s.namespace, _ = resolveStructNamespace(s.ptr)
 	}
@@ -233,7 +269,7 @@ func JoinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 	namespaces := Namespaces{}
 
 	for _, h := range connHandlers {
-		nss := h.getNamespaces()
+		nss := h.GetNamespaces()
 		if len(nss) > 0 {
 			for namespace, events := range nss {
 				if events == nil {
