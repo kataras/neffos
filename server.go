@@ -108,6 +108,32 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	return s
 }
 
+// UseStackExchange can be used to add one or more StackExchange
+// to the server.
+// Returns a non-nil error when "exc"
+// completes the `StackExchangeInitializer` interface and its `Init` failed.
+//
+// Read more at the `StackExchange` type's docs.
+func (s *Server) UseStackExchange(exc StackExchange) error {
+	if err := stackExchangeInit(exc, s.namespaces); err != nil {
+		return err
+	}
+
+	if s.usesStackExchange() {
+		s.StackExchange = wrapStackExchanges(s.StackExchange, exc)
+	} else {
+		s.StackExchange = exc
+	}
+
+	return nil
+}
+
+// usesStackExchange reports whether this server
+// uses one or more `StackExchange`s.
+func (s *Server) usesStackExchange() bool {
+	return s.StackExchange != nil
+}
+
 func (s *Server) start() {
 	atomic.StoreUint32(&s.closed, 0)
 
@@ -130,7 +156,7 @@ func (s *Server) start() {
 					s.OnDisconnect(c)
 				}
 
-				if s.StackExchange != nil {
+				if s.usesStackExchange() {
 					s.StackExchange.OnDisconnect(c)
 				}
 			}
@@ -275,10 +301,13 @@ func (s *Server) Upgrade(
 		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
 	}
 
-	go func(c *Conn) {
-		for s.waitMessage(c) {
-		}
-	}(c)
+	if !s.usesStackExchange() {
+		// fire neffos broadcaster when no exchangers are registered.
+		go func(c *Conn) {
+			for s.waitMessage(c) {
+			}
+		}(c)
+	}
 
 	s.connect <- c
 
@@ -317,7 +346,7 @@ func (s *Server) Upgrade(
 		}
 	}
 
-	if s.StackExchange != nil {
+	if s.usesStackExchange() {
 		if err := s.StackExchange.OnConnect(c); err != nil {
 			c.readiness.unwait(err)
 			return nil, err
@@ -443,7 +472,7 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 
 	// s.broadcastCond.Broadcast()
 
-	if s.StackExchange != nil {
+	if s.usesStackExchange() {
 		s.StackExchange.Publish(msg)
 		return
 	}

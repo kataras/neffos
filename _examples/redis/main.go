@@ -161,7 +161,13 @@ func startServer() {
 	if err != nil {
 		panic(err)
 	}
-	server.StackExchange = exc
+	server.UseStackExchange(exc)
+	// The server.StackExchange field is also exported
+	// so users can directly use or/and test their registered
+	// implementations all together.
+	// This is possible because a wrapper is in-place
+	// when you register more than one stack exchanges
+	// on the same neffos server instance.
 
 	server.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
 		if userID := r.Header.Get("X-Username"); userID != "" {

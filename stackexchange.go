@@ -29,3 +29,71 @@ type StackExchange interface {
 	// it's called automatically on neffos namespace disconnect.
 	Unsubscribe(c *Conn, namespace string) // should close the subscriber.
 }
+
+// StackExchangeInitializer is an optional interface for a `StackExchange`.
+// It contains a single `Init` method which accepts
+// the registered server namespaces  and returns error.
+// It does not called on manual `Server.StackExchange` field set,
+// use the `Server.UseStackExchange` to make sure that this implementation is respected.
+type StackExchangeInitializer interface {
+	// Init should initialize a stackexchange, it's optional.
+	Init(Namespaces) error
+}
+
+func stackExchangeInit(s StackExchange, namespaces Namespaces) error {
+	if s != nil {
+		if sinit, ok := s.(StackExchangeInitializer); ok {
+			return sinit.Init(namespaces)
+		}
+	}
+
+	return nil
+}
+
+// internal use only when more than one stack exchanges are registered.
+type stackExchangeWrapper struct {
+	// read-only fields.
+	parent  StackExchange
+	current StackExchange
+}
+
+func wrapStackExchanges(existingExc StackExchange, newExc StackExchange) StackExchange {
+	return &stackExchangeWrapper{
+		parent:  existingExc,
+		current: newExc,
+	}
+}
+
+func (s *stackExchangeWrapper) OnConnect(c *Conn) error {
+	// return on first error, do not wrap errors,
+	// the server should NOT run if at least one is errored.
+	err := s.parent.OnConnect(c)
+	if err != nil {
+		return err
+	}
+
+	return s.current.OnConnect(c)
+}
+
+func (s *stackExchangeWrapper) OnDisconnect(c *Conn) {
+	s.parent.OnDisconnect(c)
+	s.current.OnDisconnect(c)
+}
+
+func (s *stackExchangeWrapper) Publish(msg Message) bool {
+	// keep try on the next but return false on any failure.
+	okParent := s.parent.Publish(msg)
+	okCurrent := s.current.Publish(msg)
+
+	return okParent && okCurrent
+}
+
+func (s *stackExchangeWrapper) Subscribe(c *Conn, namespace string) {
+	s.parent.Subscribe(c, namespace)
+	s.current.Subscribe(c, namespace)
+}
+
+func (s *stackExchangeWrapper) Unsubscribe(c *Conn, namespace string) {
+	s.parent.Unsubscribe(c, namespace)
+	s.current.Unsubscribe(c, namespace)
+}
