@@ -10,14 +10,27 @@ import (
 
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/stackexchange/redis"
 )
 
 /*
-	Read the README.md
+	# Download & Install Redis
+	# Start Redis with default configuration.
+	# Start a terminal session on this directory and execute:
+	$ go run main.go server :8080
+	$ go run main.go server :9090
+	#
+	# Open some browser tabs at:
+	# http://localhost:8080 and
+	# http://localhost:9090
+	#
+	# Start to send and receive room or private messages
+	# across two different neffos servers and one or more redis instances.
 */
 
+var addr = "localhost:8080"
+
 const (
-	addr      = "localhost:8080"
 	endpoint  = "/echo"
 	namespace = "default"
 )
@@ -25,6 +38,7 @@ const (
 // userMessage implements the `MessageBodyUnmarshaler` and `MessageBodyMarshaler`.
 type userMessage struct {
 	From string `json:"from"`
+	To   string `json:"to"`
 	Text string `json:"text"`
 }
 
@@ -83,16 +97,29 @@ var serverAndClientEvents = neffos.Namespaces{
 		},
 
 		"chat": func(c *neffos.NSConn, msg neffos.Message) error {
+			var userMsg userMessage
+			err := msg.Unmarshal(&userMsg)
+			if err != nil {
+				log.Fatal(err)
+			}
+
 			if !c.Conn.IsClient() {
+				if userMsg.To != "" {
+					// msg.To is not exposed, so you have to add it manually
+					// based on your user messages, like we do here.
+					// Also Server.Broadcast(..., Message{To:...})
+					// is possible when custom user message not required.
+					msg.To = userMsg.To
+				}
+
 				c.Conn.Server().Broadcast(c, msg)
 			} else {
-				var userMsg userMessage
-				err := msg.Unmarshal(&userMsg)
-				if err != nil {
-					log.Fatal(err)
+				if userMsg.To != "" {
+					userMsg.From = "private message: " + userMsg.From
 				}
 				fmt.Printf("%s >> [%s] says: %s\n", msg.Room, userMsg.From, userMsg.Text)
 			}
+
 			return nil
 		},
 		// client-side only event to catch any server messages comes from the custom "notify" event.
@@ -113,6 +140,9 @@ func main() {
 		log.Fatalf("expected program to start with 'server' or 'client' argument")
 	}
 	side := args[0]
+	if len(args) == 2 {
+		addr = args[1]
+	}
 
 	switch side {
 	case "server":
@@ -126,6 +156,13 @@ func main() {
 
 func startServer() {
 	server := neffos.New(gobwas.DefaultUpgrader, serverAndClientEvents)
+
+	exc, err := redis.NewStackExchange(redis.Config{}, "MyChatApp")
+	if err != nil {
+		panic(err)
+	}
+	server.StackExchange = exc
+
 	server.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
 		if userID := r.Header.Get("X-Username"); userID != "" {
 			return userID

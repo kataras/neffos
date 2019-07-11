@@ -42,8 +42,11 @@ var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) st
 // and `Broadcast` and `Close`.
 // Use the `New` function to create a new server, server starts automatically, no further action is required.
 type Server struct {
-	upgrader    Upgrader
-	IDGenerator IDGenerator
+	uuid string
+
+	upgrader      Upgrader
+	IDGenerator   IDGenerator
+	StackExchange StackExchange
 
 	mu         sync.RWMutex
 	namespaces Namespaces
@@ -83,10 +86,11 @@ type Server struct {
 // See examples for more.
 func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
-
+	namespaces := connHandler.GetNamespaces()
 	s := &Server{
+		uuid:         uuid.Must(uuid.NewV4()).String(),
 		upgrader:     upgrader,
-		namespaces:   connHandler.GetNamespaces(),
+		namespaces:   namespaces,
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 		connections:  make(map[*Conn]struct{}),
@@ -124,6 +128,10 @@ func (s *Server) start() {
 						continue
 					}
 					s.OnDisconnect(c)
+				}
+
+				if s.StackExchange != nil {
+					s.StackExchange.OnDisconnect(c)
 				}
 			}
 		case act := <-s.actions:
@@ -197,6 +205,14 @@ func IsTryingToReconnect(err error) (ok bool) {
 // This header key should match with that browser-client's `whenResourceOnline->re-dial` uses.
 const websocketReconectHeaderKey = "X-Websocket-Reconnect"
 
+func isServerConnID(s string) bool {
+	return strings.HasPrefix(s, "neffos(0x")
+}
+
+func genServerConnID(s *Server, c *Conn) string {
+	return fmt.Sprintf("neffos(0x%s(%s%p))", s.uuid, c.id, c)
+}
+
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
 // a socket wrapper and a "customID" that overrides the server's IDGenerator
 // and it does return the connection or any errors.
@@ -248,6 +264,7 @@ func (s *Server) Upgrade(
 	} else {
 		c.id = s.IDGenerator(w, r)
 	}
+	c.serverConnID = genServerConnID(s, c)
 
 	c.readTimeout = s.readTimeout
 	c.writeTimeout = s.writeTimeout
@@ -300,6 +317,13 @@ func (s *Server) Upgrade(
 		}
 	}
 
+	if s.StackExchange != nil {
+		if err := s.StackExchange.OnConnect(c); err != nil {
+			c.readiness.unwait(err)
+			return nil, err
+		}
+	}
+
 	//println("OnConnect does not exist or no error, fire unwait")
 	c.readiness.unwait(nil)
 
@@ -321,8 +345,8 @@ func (s *Server) waitMessage(c *Conn) bool {
 		return false
 	}
 
-	// don't send to its own if set-ed.
 	if msg.from == c.ID() {
+		// if the message is not supposed to return back to any connection with this ID.
 		return true
 	}
 
@@ -399,7 +423,16 @@ func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 //  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
 func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 	if exceptSender != nil {
-		msg.from = exceptSender.String()
+		switch c := exceptSender.(type) {
+		case *Conn:
+			msg.FromExplicit = c.serverConnID
+		case *NSConn:
+			msg.FromExplicit = c.Conn.serverConnID
+		default:
+			msg.from = exceptSender.String()
+		}
+
+		// msg.from = exceptSender.String()
 	}
 
 	// s.broadcast <- msg
@@ -409,6 +442,11 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 	// s.broadcastMu.Unlock()
 
 	// s.broadcastCond.Broadcast()
+
+	if s.StackExchange != nil {
+		s.StackExchange.Publish(msg)
+		return
+	}
 
 	s.broadcaster.broadcast(msg)
 }

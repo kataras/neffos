@@ -27,7 +27,7 @@ var debugPrinter interface{}
 // There is no way to disable the debug mode on serve-time.
 func EnableDebug(printer interface{}) {
 	if debugEnabled() {
-		debugf("debug mode is already set")
+		Debugf("debug mode is already set")
 		return
 	}
 
@@ -56,14 +56,14 @@ func debugEnabled() bool {
 	return debugPrinter != nil
 }
 
-func debugf(format string, args ...interface{}) {
+func Debugf(format string, args ...interface{}) {
 	if !debugEnabled() {
 		return
 	}
 
 	if len(args) == 1 {
 		// handles:
-		// debugf("format", func() dargs {
+		// Debugf("format", func() dargs {
 		//    time-consumed action that should run only on debug.
 		// })
 		if onDebugWithArgs, ok := args[0].(func() dargs); ok {
@@ -87,11 +87,11 @@ type dargs []interface{}
 
 // Runs only on debug.
 // Usage:
-// debugEach(staticFields, func(idx int, f reflect.Value) {
+// DebugEach(staticFields, func(idx int, f reflect.Value) {
 // 	fval := f.Interface()
-// 	debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", typ.Name(), typ.Field(idx).Name, fval, fval)
+// 	Debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", typ.Name(), typ.Field(idx).Name, fval, fval)
 // })
-func debugEach(mapOrSlice interface{}, onDebugVisitor interface{}) {
+func DebugEach(mapOrSlice interface{}, onDebugVisitor interface{}) {
 	if !debugEnabled() || onDebugVisitor == nil {
 		return
 	}

@@ -333,89 +333,91 @@ func TestOnNativeMessageOnly(t *testing.T) {
 	}
 }
 
-func TestSimultaneouslyEventsRoutines(t *testing.T) {
-	// test multiple goroutines sending events, it should work because the lib it is designed to take care of these things.
-	var (
-		wg               sync.WaitGroup
-		namespace        = "namespace1"
-		event1           = "event1"
-		event2           = "event2"
-		event3           = "event3"
-		expectedMessages = map[string]neffos.Message{
-			event1: {
-				Namespace: namespace,
-				Event:     event1,
-				Body:      []byte("body1"),
-			},
-			event2: {
-				Namespace: namespace,
-				Event:     event2,
-				Body:      []byte("body2"),
-			},
-			event3: {
-				Namespace: namespace,
-				Event:     event3,
-				Body:      []byte("body3"),
-			},
-		}
-		events = neffos.Events{
-			neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
-				if neffos.IsSystemEvent(msg.Event) {
-					return nil
-				}
+// No need to encourage users to use go routines for event sending even if it's totally safe in neffos.
+// It works but ^
+// func TestSimultaneouslyEventsRoutines(t *testing.T) {
+// 	// test multiple goroutines sending events, it should work because the lib it is designed to take care of these things.
+// 	var (
+// 		wg               sync.WaitGroup
+// 		namespace        = "namespace1"
+// 		event1           = "event1"
+// 		event2           = "event2"
+// 		event3           = "event3"
+// 		expectedMessages = map[string]neffos.Message{
+// 			event1: {
+// 				Namespace: namespace,
+// 				Event:     event1,
+// 				Body:      []byte("body1"),
+// 			},
+// 			event2: {
+// 				Namespace: namespace,
+// 				Event:     event2,
+// 				Body:      []byte("body2"),
+// 			},
+// 			event3: {
+// 				Namespace: namespace,
+// 				Event:     event3,
+// 				Body:      []byte("body3"),
+// 			},
+// 		}
+// 		events = neffos.Events{
+// 			neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
+// 				if neffos.IsSystemEvent(msg.Event) {
+// 					return nil
+// 				}
 
-				expectedMessage := expectedMessages[msg.Event]
+// 				expectedMessage := expectedMessages[msg.Event]
 
-				if !reflect.DeepEqual(msg, expectedMessage) {
-					t.Fatalf("expected message:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
-				}
+// 				if !reflect.DeepEqual(msg, expectedMessage) {
+// 					t.Fatalf("expected message:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+// 				}
 
-				if c.Conn.IsClient() {
-					// wait for server's reply to the client's send act before done with this event test.
-					defer wg.Done()
-				} else {
-					// send back to the client the message as it's.
-					return neffos.Reply(msg.Body)
-				}
+// 				if c.Conn.IsClient() {
+// 					// wait for server's reply to the client's send act before done with this event test.
+// 					defer wg.Done()
+// 				} else {
+// 					// send back to the client the message as it's.
+// 					return neffos.Reply(msg.Body)
+// 				}
 
-				return nil
-			},
-		}
-	)
+// 				return nil
+// 			},
+// 		}
+// 	)
 
-	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: events})
-	defer teardownServer()
+// 	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: events})
+// 	defer teardownServer()
 
-	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: events},
-		func(dialer string, client *neffos.Client) {
-			defer client.Close()
+// 	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: events},
+// 		func(dialer string, client *neffos.Client) {
+// 			defer client.Close()
 
-			c, err := client.Connect(nil, namespace)
-			if err != nil {
-				t.Fatal(err)
-			}
+// 			c, err := client.Connect(nil, namespace)
+// 			if err != nil {
+// 				t.Fatal(err)
+// 			}
 
-			send := func(event string) {
-				wg.Add(1)
-				msg := expectedMessages[event]
-				c.Emit(msg.Event, msg.Body)
-			}
+// 			send := func(event string) {
+// 				wg.Add(1)
+// 				msg := expectedMessages[event]
+// 				c.Emit(msg.Event, msg.Body)
+// 			}
 
-			for i := 0; i < 5; i++ {
-				go send(event1)
-				go send(event2)
-				go send(event3)
-			}
+// 			for i := 0; i < 5; i++ {
+// 				go send(event1)
+// 				go send(event2)
+// 				go send(event3)
+// 			}
 
-			for i := 0; i < 5; i++ {
-				go send(event3)
-				go send(event2)
-				go send(event1)
-			}
+// 			for i := 0; i < 5; i++ {
+// 				go send(event3)
+// 				go send(event2)
+// 				go send(event1)
+// 			}
 
-			wg.Wait()
-		})()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
+// 			wg.Wait()
+// 		})()
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// }

@@ -110,7 +110,7 @@ func resolveStructNamespace(v reflect.Value) (string, bool) {
 	if ok {
 		if getNamespace, ok := v.Method(method.Index).Interface().(func() string); ok {
 			namespace := getNamespace()
-			debugf("Set namespace [\"%s\"] from method [%s.%s]", func() dargs {
+			Debugf("Set namespace [\"%s\"] from method [%s.%s]", func() dargs {
 				return dargs{namespace, nameOf(typ), method.Name}
 			})
 
@@ -124,7 +124,7 @@ func resolveStructNamespace(v reflect.Value) (string, bool) {
 	if f, ok := typ.FieldByNameFunc(func(s string) bool { return s == "Namespace" }); ok {
 		if f.Type.Kind() == reflect.String {
 			namespace := v.Field(f.Index[0]).String()
-			debugf("Set namespace [\"%s\"] from field [%s.%s]", func() dargs {
+			Debugf("Set namespace [\"%s\"] from field [%s.%s]", func() dargs {
 				return dargs{namespace, nameOf(typ), f.Name}
 			})
 			return namespace, true
@@ -246,7 +246,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 			continue
 		}
 
-		debugf("Event [\"%s\"] is handled by [%s.%s] method", func() dargs {
+		Debugf("Event [\"%s\"] is handled by [%s.%s] method", func() dargs {
 			return dargs{eventName, nameOf(typ), method.Name}
 		})
 
@@ -263,7 +263,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 			// some things in our company's production server first.
 			staticFields = getNonZeroFields(v)
 
-			debugEach(staticFields, func(idx int, f reflect.Value) {
+			DebugEach(staticFields, func(idx int, f reflect.Value) {
 				fval := f.Interface()
 				fname := typ.Field(idx).Name
 				if fname == "Namespace" {
@@ -272,7 +272,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 					return
 				}
 
-				debugf("Field [%s.%s] marked as static on value [%v]", nameOf(typ), fname, fval)
+				Debugf("Field [%s.%s] marked as static on value [%v]", nameOf(typ), fname, fval)
 			})
 
 			injector = func(typ reflect.Type, nsConn *NSConn) reflect.Value {

@@ -50,8 +50,18 @@ type Message struct {
 
 	isInvalid bool
 
-	// the CONN ID, filled automatically if `Server#Broadcast` first parameter of sender connection's ID is not empty, not exposed to the subscribers (rest of the clients).
+	// the CONN ID, filled automatically if `Server#Broadcast` first parameter of sender connection's ID is not empty,
+	// not exposed to the subscribers (rest of the clients).
+	// This is the ID across neffos servers when scale.
 	from string
+	// When sent by the same connection of the current running server instance.
+	// This field is serialized/deserialized but it's clean on sending or receiving from a client
+	// and it's only used on StackExchange feature.
+	// It's serialized as the first parameter, instead of wait signal, if incoming starts with 0x.
+	FromExplicit string // the exact Conn's pointer in this server instance.
+	// Reports whether this message is coming from a stackexchange.
+	// This field is not exposed and it's not serialized at all, local-use only.
+	FromStackExchange bool
 
 	// To is the connection ID of the receiver, used only when `Server#Broadcast` is called, indeed when we only need to send a message to a single connection.
 	// The Namespace, Room are still respected at all.
@@ -100,6 +110,11 @@ func (m *Message) isRoomJoin() bool {
 
 func (m *Message) isRoomLeft() bool {
 	return m.Event == OnRoomLeft
+}
+
+// Serialize returns this message's transport format.
+func (m Message) Serialize() []byte {
+	return serializeMessage(nil, m)
 }
 
 type (
@@ -245,6 +260,14 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 	if msg.IsNative && msg.wait == "" {
 		out = msg.Body
 	} else {
+		if msg.FromExplicit != "" {
+			if msg.wait != "" {
+				// this should never happen unless manual set of FromExplicit by end-developer which is forbidden by the higher level calls.
+				panic("msg.wait and msg.FromExplicit cannot work together")
+			}
+
+			msg.wait = msg.FromExplicit
+		}
 		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
 	}
 
@@ -304,23 +327,31 @@ func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, s
 	}
 
 	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
+
+	fromExplicit := ""
+	if isServerConnID(wait) {
+		fromExplicit = wait
+		wait = ""
+	}
+
 	return Message{
-		wait,
-		unescape(namespace),
-		unescape(room),
-		unescape(event),
-		body,
-		err,
-		err != nil,
-		isNoOp,
-		isInvalid,
-		"",
-		"",
-		false,
-		false,
-		allowNativeMessages && event == OnNativeMessage,
-		false,
-		false,
+		wait:         wait,
+		Namespace:    unescape(namespace),
+		Room:         unescape(room),
+		Event:        unescape(event),
+		Body:         body,
+		Err:          err,
+		isError:      err != nil,
+		isNoOp:       isNoOp,
+		isInvalid:    isInvalid,
+		from:         "",
+		FromExplicit: fromExplicit,
+		To:           "",
+		IsForced:     false,
+		IsLocal:      false,
+		IsNative:     allowNativeMessages && event == OnNativeMessage,
+		locked:       false,
+		SetBinary:    false,
 	}
 }
 
