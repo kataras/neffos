@@ -56,6 +56,8 @@ func debugEnabled() bool {
 	return debugPrinter != nil
 }
 
+// Debugf prints debug messages to the printer defined on `EnableDebug`.
+// Runs only on debug mode.
 func Debugf(format string, args ...interface{}) {
 	if !debugEnabled() {
 		return
@@ -85,7 +87,9 @@ func Debugf(format string, args ...interface{}) {
 
 type dargs []interface{}
 
-// Runs only on debug.
+// DebugEach prints debug messages for each of "mapOrSlice" elements
+// to the printer defined on `EnableDebug`.
+// Runs only on debug mode.
 // Usage:
 // DebugEach(staticFields, func(idx int, f reflect.Value) {
 // 	fval := f.Interface()

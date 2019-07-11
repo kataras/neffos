@@ -234,8 +234,7 @@ func (exc *StackExchange) Publish(msg neffos.Message) bool {
 	cmd := radix.FlatCmd(nil, "PUBLISH", channel, b)
 	err := exc.pool.Do(cmd)
 	if err != nil {
-		panic(err) // TODO: remove this.
-		// return false
+		return false
 	}
 
 	return true
