@@ -37,6 +37,9 @@ type Conn struct {
 	// same server instance. Even if Server#IDGenerator
 	// returns the same ID from the request.
 	serverConnID string
+	//a context-scope storage.
+	store      map[string]interface{}
+	storeMutex sync.RWMutex
 
 	// the gorilla or gobwas socket.
 	socket Socket
@@ -165,6 +168,36 @@ func (c *Conn) Server() *Server {
 	}
 
 	return c.server
+}
+
+// Set sets a value to this connection's store.
+func (c *Conn) Set(key string, value interface{}) {
+	c.storeMutex.Lock()
+	if c.store == nil {
+		c.store = make(map[string]interface{})
+	}
+	c.store[key] = value
+	c.storeMutex.Unlock()
+}
+
+// Get retruns a value based on the given "key"
+// from this connection's store based on its "key".
+func (c *Conn) Get(key string) interface{} {
+	c.storeMutex.RLock()
+	if c.store != nil {
+		// We could use reflection to receive a pointer and perform some type checks
+		// but let that for the caller, it knows better.
+		if v, ok := c.store[key]; ok {
+			c.storeMutex.RUnlock()
+			if v == nil {
+				return nil
+			}
+			return v
+		}
+	}
+
+	c.storeMutex.RUnlock()
+	return nil
 }
 
 // WasReconnected reports whether the current connection is a result of a client-side reconnection.
