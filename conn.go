@@ -310,7 +310,18 @@ func (c *Conn) handleMessage(msg Message) error {
 		return ns.events.fireEvent(ns, msg)
 	}
 
-	if msg.isWait(c.IsClient()) {
+	isClient := c.IsClient()
+	if !isClient {
+		c.server.waitingMessagesMutex.RLock()
+		ch, ok := c.server.waitingMessages[msg.wait]
+		c.server.waitingMessagesMutex.RUnlock()
+		if ok {
+			ch <- msg
+			return nil
+		}
+	}
+
+	if msg.isWait(isClient) {
 		c.waitingMessagesMutex.RLock()
 		ch, ok := c.waitingMessages[msg.wait]
 		c.waitingMessagesMutex.RUnlock()
@@ -710,10 +721,7 @@ func (c *Conn) write(b []byte, binary bool) bool {
 	return true
 }
 
-// Write method sends a message to the remote side,
-// reports whether the connection is still available
-// or when this message is not allowed to be sent to the remote side.
-func (c *Conn) Write(msg Message) bool {
+func (c *Conn) canWrite(msg Message) bool {
 	if c.IsClosed() {
 		return false
 	}
@@ -768,6 +776,17 @@ func (c *Conn) Write(msg Message) bool {
 	// to this server's instance client connection ~~~but give a chance to Publish
 	// it to other instances with the same conn ID, if any~~~.
 	if c.Is(msg.FromExplicit) {
+		return false
+	}
+
+	return true
+}
+
+// Write method sends a message to the remote side,
+// reports whether the connection is still available
+// or when this message is not allowed to be sent to the remote side.
+func (c *Conn) Write(msg Message) bool {
+	if !c.canWrite(msg) {
 		return false
 	}
 

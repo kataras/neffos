@@ -112,3 +112,86 @@ func TestServerBroadcastTo(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestServerAsk(t *testing.T) {
+	// we fire up two connections, one with the "conn_ID" and other with the default uuid id generator,
+	// the message which the second client emits should only be sent to the connection with the ID of "conn_ID".
+
+	var (
+		wg             sync.WaitGroup
+		namespace      = "default"
+		body           = []byte("data")
+		expectResponse = append(body, []byte("ok")...)
+		to             = "conn_ID"
+		clientEvents   = neffos.Namespaces{
+			namespace: neffos.Events{
+				"ask": func(c *neffos.NSConn, msg neffos.Message) error {
+					return neffos.Reply(expectResponse)
+				},
+			},
+		}
+	)
+
+	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{}}, func(wsServer *neffos.Server) {
+		once := new(uint32)
+		wsServer.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
+			if atomic.CompareAndSwapUint32(once, 0, 1) {
+				return to // set the "to" only to the first conn for test.
+			}
+
+			return neffos.DefaultIDGenerator(w, r)
+		}
+
+		wgWaitToAllConnect := new(sync.WaitGroup)
+		wgWaitToAllConnect.Add(2)
+		wsServer.OnConnect = func(c *neffos.Conn) error {
+			wgWaitToAllConnect.Done()
+			return nil
+		}
+
+		go func(wsServer *neffos.Server) {
+			wgWaitToAllConnect.Wait()
+
+			response, err := wsServer.Ask(nil, neffos.Message{
+				Namespace: "default",
+				Event:     "ask",
+				To:        to,
+			})
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !bytes.Equal(response.Body, expectResponse) {
+				t.Fatalf("expected response with body: %s but got: %s", string(expectResponse), string(response.Body))
+			}
+
+			wg.Done()
+		}(wsServer)
+
+	})
+	defer teardownServer()
+
+	wg.Add(2) // two servers, a gorilla and gobwas.
+
+	teardownClient1 := runTestClient("localhost:8080", clientEvents,
+		func(dialer string, client *neffos.Client) {
+			_, err := client.Connect(nil, namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+
+	defer teardownClient1()
+
+	teardownClient2 := runTestClient("localhost:8080", clientEvents,
+		func(dialer string, client *neffos.Client) {
+			_, err := client.Connect(nil, namespace)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	defer teardownClient2()
+
+	wg.Wait()
+}

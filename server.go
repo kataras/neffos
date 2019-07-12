@@ -1,6 +1,7 @@
 package neffos
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -62,6 +63,11 @@ type Server struct {
 	disconnect  chan *Conn
 	actions     chan action
 	broadcaster *broadcaster
+	// messages that this server must waits
+	// for a reply from one of its own connections(see `waitMessage`)
+	// or TODO: from cloud (see `StackExchange.PublishAndWait`).
+	waitingMessages      map[string]chan Message
+	waitingMessagesMutex sync.RWMutex
 
 	closed uint32
 
@@ -88,17 +94,18 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 	namespaces := connHandler.GetNamespaces()
 	s := &Server{
-		uuid:         uuid.Must(uuid.NewV4()).String(),
-		upgrader:     upgrader,
-		namespaces:   namespaces,
-		readTimeout:  readTimeout,
-		writeTimeout: writeTimeout,
-		connections:  make(map[*Conn]struct{}),
-		connect:      make(chan *Conn, 1),
-		disconnect:   make(chan *Conn),
-		actions:      make(chan action),
-		broadcaster:  newBroadcaster(),
-		IDGenerator:  DefaultIDGenerator,
+		uuid:            uuid.Must(uuid.NewV4()).String(),
+		upgrader:        upgrader,
+		namespaces:      namespaces,
+		readTimeout:     readTimeout,
+		writeTimeout:    writeTimeout,
+		connections:     make(map[*Conn]struct{}),
+		connect:         make(chan *Conn, 1),
+		disconnect:      make(chan *Conn),
+		actions:         make(chan action),
+		broadcaster:     newBroadcaster(),
+		waitingMessages: make(map[string]chan Message),
+		IDGenerator:     DefaultIDGenerator,
 	}
 
 	//	s.broadcastCond = sync.NewCond(&s.broadcastMu)
@@ -301,13 +308,12 @@ func (s *Server) Upgrade(
 		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
 	}
 
-	if !s.usesStackExchange() {
-		// fire neffos broadcaster when no exchangers are registered.
-		go func(c *Conn) {
-			for s.waitMessage(c) {
-			}
-		}(c)
-	}
+	// TODO: when ask on cloud uncommented:
+	// if !s.usesStackExchange() {
+	go func(c *Conn) {
+		for s.waitMessage(c) {
+		}
+	}(c)
 
 	s.connect <- c
 
@@ -478,6 +484,49 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 	}
 
 	s.broadcaster.broadcast(msg)
+}
+
+// Ask is like `Broadcast` but it blocks until a response
+// from a specific connection if "msg.To" is filled otherwise
+// from the first connection which will reply to this "msg".
+//
+// Accepts a context for deadline as its first input argument.
+// The second argument is the request message
+// which should be sent to a specific namespace:event
+// like the `Conn.Ask`.
+// Note: Currently this expects the remote responder
+// to be connected inside this server neffos instance -
+// StackExchange is not yet implemented to handle this feature, yet -.
+func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
+	msg.wait = genWait(false)
+
+	if ctx == nil {
+		ctx = context.TODO()
+	} else {
+		if deadline, has := ctx.Deadline(); has {
+			if deadline.Before(time.Now().Add(-1 * time.Second)) {
+				return Message{}, context.DeadlineExceeded
+			}
+		}
+	}
+
+	ch := make(chan Message)
+	s.waitingMessagesMutex.Lock()
+	s.waitingMessages[msg.wait] = ch
+	s.waitingMessagesMutex.Unlock()
+
+	s.Broadcast(nil, msg)
+
+	select {
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	case receive := <-ch:
+		s.waitingMessagesMutex.Lock()
+		delete(s.waitingMessages, msg.wait)
+		s.waitingMessagesMutex.Unlock()
+
+		return receive, receive.Err
+	}
 }
 
 // GetConnectionsByNamespace can be used as an alternative way to retrieve
