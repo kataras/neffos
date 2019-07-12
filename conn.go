@@ -37,7 +37,7 @@ type Conn struct {
 	// same server instance. Even if Server#IDGenerator
 	// returns the same ID from the request.
 	serverConnID string
-	//a context-scope storage.
+	// a context-scope storage, initialized on first `Set`.
 	store      map[string]interface{}
 	storeMutex sync.RWMutex
 
@@ -181,7 +181,7 @@ func (c *Conn) Set(key string, value interface{}) {
 }
 
 // Get retruns a value based on the given "key"
-// from this connection's store based on its "key".
+// from this connection's store.
 func (c *Conn) Get(key string) interface{} {
 	c.storeMutex.RLock()
 	if c.store != nil {
