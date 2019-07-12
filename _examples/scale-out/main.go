@@ -10,22 +10,32 @@ import (
 
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gobwas"
+	"github.com/kataras/neffos/stackexchange/nats"
 	"github.com/kataras/neffos/stackexchange/redis"
 )
 
 /*
-	# Download & Install Redis
-	# Start Redis with default configuration.
-	# Start a terminal session on this directory and execute:
+	# Two LOC(lines of code) to scale-out neffos servers.
+	#
+	# Download Redis or Nats.
+	# Start Redis or Nats server with default configuration.
+	#
+	# Start two terminal sessions on this directory and execute:
+	#
 	$ go run main.go server :8080
 	$ go run main.go server :9090
+	#
+	# Or for Nats:
+	#
+	$ go run main.go server :8080 nats
+	$ go run main.go server :9090 nats
 	#
 	# Open some browser tabs at:
 	# http://localhost:8080 and
 	# http://localhost:9090
 	#
 	# Start to send and receive room or private messages
-	# across two different neffos servers and one or more redis instances.
+	# across two different neffos servers.
 */
 
 var addr = "localhost:8080"
@@ -34,6 +44,55 @@ const (
 	endpoint  = "/echo"
 	namespace = "default"
 )
+
+func main() {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		log.Fatalf("expected program to start with 'server' or 'client' argument")
+	}
+	side := args[0]
+
+	if len(args) >= 2 {
+		addr = args[1]
+	}
+
+	scaleOutBackend := "redis"
+	if len(args) == 3 {
+		scaleOutBackend = args[2]
+	}
+
+	switch side {
+	case "server":
+		var stackExchange neffos.StackExchange
+		switch scaleOutBackend {
+		case "redis":
+			redisExc, err := redis.NewStackExchange(redis.Config{}, "MyChatApp")
+			if err != nil {
+				panic(err)
+			}
+
+			stackExchange = redisExc
+		case "nats":
+			natsExc, err := nats.NewStackExchange("0.0.0.0:4222")
+			//                                     ^^^^^
+			// more servers can be used with comma separated url input argument.
+			if err != nil {
+				panic(err)
+			}
+
+			stackExchange = natsExc
+		default:
+			log.Fatalf("unexpected last argument, expected 'redis' or 'nats' but got '%s'", scaleOutBackend)
+		}
+
+		log.Printf("Using %s to scale out", scaleOutBackend)
+		startServer(stackExchange)
+	case "client":
+		startClient()
+	default:
+		log.Fatalf("unexpected argument, expected 'server' or 'client' but got '%s'", side)
+	}
+}
 
 // userMessage implements the `MessageBodyUnmarshaler` and `MessageBodyMarshaler`.
 type userMessage struct {
@@ -134,34 +193,11 @@ var serverAndClientEvents = neffos.Namespaces{
 	},
 }
 
-func main() {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		log.Fatalf("expected program to start with 'server' or 'client' argument")
-	}
-	side := args[0]
-	if len(args) == 2 {
-		addr = args[1]
-	}
-
-	switch side {
-	case "server":
-		startServer()
-	case "client":
-		startClient()
-	default:
-		log.Fatalf("unexpected argument, expected 'server' or 'client' but got '%s'", side)
-	}
-}
-
-func startServer() {
+func startServer(stackExchange neffos.StackExchange) {
 	server := neffos.New(gobwas.DefaultUpgrader, serverAndClientEvents)
 
-	exc, err := redis.NewStackExchange(redis.Config{}, "MyChatApp")
-	if err != nil {
-		panic(err)
-	}
-	server.UseStackExchange(exc)
+	server.UseStackExchange(stackExchange)
+	// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 	// The server.StackExchange field is also exported
 	// so users can directly use or/and test their registered
 	// implementations all together.

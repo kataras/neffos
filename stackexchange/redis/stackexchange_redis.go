@@ -160,14 +160,14 @@ func (exc *StackExchange) run() {
 				sub.pubSub.PSubscribe(sub.msgCh, channel)
 			}
 		case m := <-exc.unsubscribe:
-			channel := exc.getChannel(m.namespace, "", "")
-			// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
 			if sub, ok := exc.subscribers[m.conn]; ok {
+				channel := exc.getChannel(m.namespace, "", "")
+				// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
 				sub.pubSub.PUnsubscribe(sub.msgCh, channel)
 			}
 		case m := <-exc.delSubscriber:
-			// neffos.Debugf("[%s] disconnected", m.conn.ID())
 			if sub, ok := exc.subscribers[m.conn]; ok {
+				// neffos.Debugf("[%s] disconnected", m.conn.ID())
 				sub.pubSub.Close()
 				close(sub.msgCh)
 				delete(exc.subscribers, m.conn)
@@ -188,9 +188,7 @@ func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 		panic("namespace cannot be empty when sending to a namespace's room")
 	}
 
-	channel := exc.channel + "." + namespace + "."
-
-	return channel
+	return exc.channel + "." + namespace + "."
 }
 
 // OnConnect prepares the connection redis subscriber

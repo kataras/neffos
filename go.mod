@@ -9,4 +9,5 @@ require (
 	github.com/gorilla/websocket v1.4.0
 	github.com/iris-contrib/go.uuid v2.0.0+incompatible
 	github.com/mediocregopher/radix/v3 v3.3.0
+	github.com/nats-io/nats.go v1.8.1 // indirect
 )
