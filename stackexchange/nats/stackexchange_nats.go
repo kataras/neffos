@@ -14,7 +14,7 @@ import (
 type StackExchange struct {
 	// options holds the nats options for clients.
 	// Defaults to the `nats.GetDefaultOptions()` which
-	// can be overriden by the `With` function on `NewStackExchange`.
+	// can be overridden by the `With` function on `NewStackExchange`.
 	opts nats.Options
 
 	rootSubject string
