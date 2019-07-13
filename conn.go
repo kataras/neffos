@@ -923,11 +923,11 @@ func (c *Conn) Close() {
 
 		atomic.StoreUint32(c.acknowledged, 0)
 
-		go func() {
-			if !c.IsClient() {
+		if !c.IsClient() {
+			go func() {
 				c.server.disconnect <- c
-			}
-		}()
+			}()
+		}
 
 		close(c.closeCh)
 		c.socket.NetConn().Close()
