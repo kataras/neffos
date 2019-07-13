@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -295,6 +296,57 @@ func (exc *StackExchange) Publish(msg neffos.Message) bool {
 	}
 
 	return true
+}
+
+// Ask implements server Ask for nats. It blocks.
+func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
+	if !msg.IsWait(false) {
+		return response, neffos.ErrInvalidPayload
+	}
+
+	// for some reason we can't use the exc.publisher.Subscribe,
+	// so create a new connection for subscription which will be terminated on message receive or timeout.
+	subConn, err := exc.opts.Connect()
+
+	if err != nil {
+		return
+	}
+
+	ch := make(chan neffos.Message)
+	sub, err := subConn.Subscribe(token, func(m *nats.Msg) {
+		ch <- neffos.DeserializeMessage(nil, m.Data, false, false)
+	})
+
+	if err != nil {
+		return response, err
+	}
+
+	defer sub.Unsubscribe()
+	defer subConn.Close()
+
+	if !exc.Publish(msg) {
+		return response, neffos.ErrWrite
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return response, ctx.Err()
+		case response = <-ch:
+			return response, response.Err
+		}
+	}
+}
+
+// NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
+func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
+	msg.ClearWait()
+	err := exc.publisher.Publish(token, msg.Serialize())
+	if err != nil {
+		return err
+	}
+	exc.publisher.Flush()
+	return exc.publisher.LastError()
 }
 
 // Subscribe subscribes to a specific namespace,

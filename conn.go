@@ -343,8 +343,13 @@ func (c *Conn) handleMessage(msg Message) error {
 		return ns.events.fireEvent(ns, msg)
 	}
 
-	if isClient := c.IsClient(); msg.isWait(isClient) {
+	if isClient := c.IsClient(); msg.IsWait(isClient) {
 		if !isClient {
+			if c.server.usesStackExchange() {
+				// Currently let's not export the wait field, instead
+				// just accept it on the stackexchange.
+				return c.server.StackExchange.NotifyAsk(msg, msg.wait)
+			}
 			c.server.waitingMessagesMutex.RLock()
 			ch, ok := c.server.waitingMessages[msg.wait]
 			c.server.waitingMessagesMutex.RUnlock()
@@ -397,7 +402,7 @@ func (c *Conn) handleMessage(msg Message) error {
 
 // DeserializeMessage returns a Message from the "payload".
 func (c *Conn) DeserializeMessage(payload []byte) Message {
-	return deserializeMessage(nil, payload, c.allowNativeMessages, c.shouldHandleOnlyNativeMessages)
+	return DeserializeMessage(nil, payload, c.allowNativeMessages, c.shouldHandleOnlyNativeMessages)
 }
 
 // HandlePayload fires manually a local event based on the "payload".

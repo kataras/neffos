@@ -122,6 +122,10 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 //
 // Read more at the `StackExchange` type's docs.
 func (s *Server) UseStackExchange(exc StackExchange) error {
+	if exc == nil {
+		return nil
+	}
+
 	if err := stackExchangeInit(exc, s.namespaces); err != nil {
 		return err
 	}
@@ -308,12 +312,12 @@ func (s *Server) Upgrade(
 		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
 	}
 
-	// TODO: when ask on cloud uncommented:
-	// if !s.usesStackExchange() {
-	go func(c *Conn) {
-		for s.waitMessage(c) {
-		}
-	}(c)
+	if !s.usesStackExchange() {
+		go func(c *Conn) {
+			for s.waitMessage(c) {
+			}
+		}(c)
+	}
 
 	s.connect <- c
 
@@ -498,16 +502,14 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 // to be connected inside this server neffos instance -
 // StackExchange is not yet implemented to handle this feature, yet -.
 func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
-	msg.wait = genWait(false)
-
 	if ctx == nil {
 		ctx = context.TODO()
-	} else {
-		if deadline, has := ctx.Deadline(); has {
-			if deadline.Before(time.Now().Add(-1 * time.Second)) {
-				return Message{}, context.DeadlineExceeded
-			}
-		}
+	}
+
+	msg.wait = genWait(false)
+
+	if s.usesStackExchange() {
+		return s.StackExchange.Ask(ctx, msg, msg.wait)
 	}
 
 	ch := make(chan Message)

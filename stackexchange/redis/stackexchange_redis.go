@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"math/rand"
 	"time"
 
@@ -236,6 +237,17 @@ func (exc *StackExchange) Publish(msg neffos.Message) bool {
 	}
 
 	return true
+}
+
+// Ask TODO.
+// Ask will implement the server Ask feature for redis. It will block until response.
+func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (neffos.Message, error) {
+	panic("Not Implemented Yet") // check tomorrow... I am too tired now.
+}
+
+// NotifyAsk TODO.
+func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
+	panic("Not Implemented Yet")
 }
 
 // Subscribe subscribes to a specific namespace,

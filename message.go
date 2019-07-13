@@ -25,7 +25,8 @@ import (
 // <isNoOp(0-1)>;
 // <body||error_message>
 //
-// Internal `serializeMessage` and `deserializeMessage` functions
+// Internal `serializeMessage` and
+// exported `DeserializeMessage` functions
 // do the job on `Conn#Write`, `NSConn#Emit` and `Room#Emit` calls.
 type Message struct {
 	wait string
@@ -186,7 +187,8 @@ const (
 	waitComesFromClientPrefix = '$'
 )
 
-func (m *Message) isWait(isClientConn bool) bool {
+// IsWait reports whether this message waits for a response back.
+func (m *Message) IsWait(isClientConn bool) bool {
 	if m.wait == "" {
 		return false
 	}
@@ -206,11 +208,21 @@ func (m *Message) isWait(isClientConn bool) bool {
 	return true
 }
 
+// ClearWait clears the wait token, rarely used.
+func (m *Message) ClearWait() bool {
+	if m.FromExplicit == "" && m.wait != "" {
+		m.wait = ""
+		return true
+	}
+
+	return false
+}
+
 func genWait(isClientConn bool) string {
 	now := time.Now().UnixNano()
 	wait := strconv.FormatInt(now, 10)
 	if isClientConn {
-		wait = string(waitIsConfirmationPrefix) + wait
+		wait = string(waitComesFromClientPrefix) + wait
 	}
 
 	return wait
@@ -247,7 +259,7 @@ func escape(s string) string {
 	return strings.Replace(s, messageSeparatorString, messageFieldSeparatorReplacement, -1)
 }
 
-// called on `deserializeMessage` to all message's fields except the body (and error).
+// called on `DeserializeMessage` to all message's fields except the body (and error).
 func unescape(s string) string {
 	if len(s) == 0 {
 		return s
@@ -320,8 +332,10 @@ func serializeOutput(wait, namespace, room, event string,
 	return msg
 }
 
-// when allowNativeMessages only Body is filled and check about message format is skipped.
-func deserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
+// DeserializeMessage accepts a serialized message []byte
+// and returns a neffos Message.
+// When allowNativeMessages only Body is filled and check about message format is skipped.
+func DeserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
 	if decrypt != nil {
 		b = decrypt(b)
 	}

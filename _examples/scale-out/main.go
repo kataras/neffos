@@ -111,6 +111,20 @@ func (u *userMessage) Unmarshal(b []byte) error {
 	return json.Unmarshal(b, u)
 }
 
+func askClient(server *neffos.Server, toID string) string {
+	response, err := server.Ask(nil, neffos.Message{
+		To:        toID,
+		Namespace: namespace,
+		Event:     "onAsk",
+		Body:      []byte("how are you?"),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return string(response.Body)
+}
+
 var serverAndClientEvents = neffos.Namespaces{
 	namespace: neffos.Events{
 		neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
@@ -119,6 +133,7 @@ var serverAndClientEvents = neffos.Namespaces{
 		},
 		neffos.OnNamespaceDisconnect: func(c *neffos.NSConn, msg neffos.Message) error {
 			log.Printf("[%s] disconnected from namespace [%s].", c, msg.Namespace)
+
 			return nil
 		},
 
@@ -142,6 +157,13 @@ var serverAndClientEvents = neffos.Namespaces{
 			text := fmt.Sprintf("[%s] left from room [%s].", c, msg.Room)
 			log.Printf("%s", text)
 
+			if !c.Conn.IsClient() && !msg.IsForced {
+				go func(c *neffos.Conn) {
+					reply := askClient(c.Server(), c.ID())
+					log.Printf("Asked client if it's OK but replied: %s", reply)
+				}(c.Conn)
+			}
+
 			// notify others.
 			if !c.Conn.IsClient() {
 				c.Conn.Server().Broadcast(c, neffos.Message{
@@ -154,7 +176,6 @@ var serverAndClientEvents = neffos.Namespaces{
 
 			return nil
 		},
-
 		"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 			var userMsg userMessage
 			err := msg.Unmarshal(&userMsg)
@@ -176,8 +197,10 @@ var serverAndClientEvents = neffos.Namespaces{
 				if userMsg.To != "" {
 					userMsg.From = "private message: " + userMsg.From
 				}
-				fmt.Printf("%s >> [%s] says: %s\n", msg.Room, userMsg.From, userMsg.Text)
+
 			}
+
+			fmt.Printf("%s >> [%s] says: %s\n", msg.Room, userMsg.From, userMsg.Text)
 
 			return nil
 		},
@@ -189,6 +212,15 @@ var serverAndClientEvents = neffos.Namespaces{
 
 			fmt.Println(string(msg.Body))
 			return nil
+		},
+		// client-side only event to reply to server requests.
+		"onAsk": func(c *neffos.NSConn, msg neffos.Message) error {
+			// log.Println("On Ask: " + string(msg.Body))
+
+			if !c.Conn.IsClient() {
+				return nil
+			}
+			return neffos.Reply([]byte("dude, let me alone please"))
 		},
 	},
 }
@@ -223,7 +255,6 @@ func startServer(stackExchange neffos.StackExchange) {
 		}
 
 		log.Printf("[%s] connected to the server.", c)
-
 		// if returns non-nil error then it refuses the client to connect to the server.
 		return nil
 	}
