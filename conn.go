@@ -343,18 +343,17 @@ func (c *Conn) handleMessage(msg Message) error {
 		return ns.events.fireEvent(ns, msg)
 	}
 
-	isClient := c.IsClient()
-	if !isClient {
-		c.server.waitingMessagesMutex.RLock()
-		ch, ok := c.server.waitingMessages[msg.wait]
-		c.server.waitingMessagesMutex.RUnlock()
-		if ok {
-			ch <- msg
-			return nil
+	if isClient := c.IsClient(); msg.isWait(isClient) {
+		if !isClient {
+			c.server.waitingMessagesMutex.RLock()
+			ch, ok := c.server.waitingMessages[msg.wait]
+			c.server.waitingMessagesMutex.RUnlock()
+			if ok {
+				ch <- msg
+				return nil
+			}
 		}
-	}
 
-	if msg.isWait(isClient) {
 		c.waitingMessagesMutex.RLock()
 		ch, ok := c.waitingMessages[msg.wait]
 		c.waitingMessagesMutex.RUnlock()
