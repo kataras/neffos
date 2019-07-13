@@ -288,6 +288,7 @@ func startConnectionManager(ctx context.Context) {
 func pushNotifications() {
 	notifications := database.getNotificationList(connectionIDs)
 	if len(notifications) == 0 {
+		log.Println("no new notification to send...")
 		return
 	}
 
