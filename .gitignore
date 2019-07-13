@@ -3,3 +3,6 @@ _authortools
 /_examples/**/node_modules
 .directory
 *.exe
+*.exe~
+.idea
+/vendor
