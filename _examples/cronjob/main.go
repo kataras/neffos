@@ -29,8 +29,8 @@ const (
 	endpoint  = "/live"
 	namespace = "agent"
 
-	pushNotificationsEvery     = "5s"
-	generateNotificationsEvery = "12s"
+	pushNotificationsEvery     = "10s"
+	generateNotificationsEvery = "14s"
 
 	onNotification           = "OnNotification"
 	removeNotificationOnSeen = true
@@ -287,9 +287,12 @@ func startConnectionManager(ctx context.Context) {
 // See `dbMock.getNotificationList`.
 func pushNotifications() {
 	notifications := database.getNotificationList(connectionIDs)
-	if len(notifications) == 0 {
-		log.Println("no new notification to send...")
+
+	if n := len(notifications); n == 0 {
+		log.Println("no new notification(s) to send...")
 		return
+	} else {
+		log.Printf("sending [%d] notifications...", n)
 	}
 
 	for _, nf := range notifications {
@@ -301,6 +304,12 @@ var (
 	serverEvents = neffos.Namespaces{
 		namespace: neffos.Events{
 			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
+				// Note that we could send notifications pending
+				// for this user here but see the comments above
+				// to understand why we don't do it on this example,
+				// at short: we assume that we are not allowed to get notifications per user
+				// only database and cron managers can retrieve and push notifications.
+
 				log.Printf("[%s] connected to namespace [%s].", c, msg.Namespace)
 				return nil
 			},
