@@ -17,8 +17,9 @@ type StackExchange struct {
 	// Defaults to the `nats.GetDefaultOptions()` which
 	// can be overridden by the `With` function on `NewStackExchange`.
 	opts nats.Options
-
-	rootSubject string
+	// If you use the same nats server instance for multiple neffos apps,
+	// set this to different values across your apps.
+	SubjectPrefix string
 
 	publisher   *nats.Conn
 	subscribers map[*neffos.Conn]*subscriber
@@ -137,9 +138,9 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 	}
 
 	exc := &StackExchange{
-		opts:        opts,
-		rootSubject: "neffos",
-		publisher:   pubConn,
+		opts:          opts,
+		SubjectPrefix: "neffos",
+		publisher:     pubConn,
 
 		subscribers:   make(map[*neffos.Conn]*subscriber),
 		addSubscriber: make(chan *subscriber),
@@ -225,7 +226,7 @@ func (exc *StackExchange) getSubject(namespace, room, connID string) string {
 	if connID != "" {
 		// publish direct and let the server-side do the checks
 		// of valid or invalid message to send on this particular client.
-		return exc.rootSubject + "." + connID
+		return exc.SubjectPrefix + "." + connID
 	}
 
 	if namespace == "" && room != "" {
@@ -233,7 +234,7 @@ func (exc *StackExchange) getSubject(namespace, room, connID string) string {
 		panic("namespace cannot be empty when sending to a namespace's room")
 	}
 
-	return exc.rootSubject + "." + namespace
+	return exc.SubjectPrefix + "." + namespace
 }
 
 func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
