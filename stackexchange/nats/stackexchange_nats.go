@@ -300,10 +300,6 @@ func (exc *StackExchange) Publish(msg neffos.Message) bool {
 
 // Ask implements server Ask for nats. It blocks.
 func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
-	if !msg.IsWait(false) {
-		return response, neffos.ErrInvalidPayload
-	}
-
 	// for some reason we can't use the exc.publisher.Subscribe,
 	// so create a new connection for subscription which will be terminated on message receive or timeout.
 	subConn, err := exc.opts.Connect()
@@ -328,13 +324,11 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 		return response, neffos.ErrWrite
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return response, ctx.Err()
-		case response = <-ch:
-			return response, response.Err
-		}
+	select {
+	case <-ctx.Done():
+		return response, ctx.Err()
+	case response = <-ch:
+		return response, response.Err
 	}
 }
 

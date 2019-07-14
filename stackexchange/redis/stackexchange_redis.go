@@ -227,27 +227,46 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 func (exc *StackExchange) Publish(msg neffos.Message) bool {
 	// channel := exc.getMessageChannel(c.ID(), msg)
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
-	b := msg.Serialize()
 	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(b))
 
+	err := exc.publish(channel, msg.Serialize())
+	return err == nil
+}
+
+func (exc *StackExchange) publish(channel string, b []byte) error {
 	cmd := radix.FlatCmd(nil, "PUBLISH", channel, b)
-	err := exc.pool.Do(cmd)
+	return exc.pool.Do(cmd)
+}
+
+// Ask implements the server Ask feature for redis. It blocks until response.
+func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
+	sub := radix.PersistentPubSub("", "", exc.connFunc)
+	msgCh := make(chan radix.PubSubMessage)
+	err = sub.Subscribe(msgCh, token)
 	if err != nil {
-		return false
+		return
+	}
+	defer sub.Close()
+
+	if !exc.Publish(msg) {
+		return response, neffos.ErrWrite
 	}
 
-	return true
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case redisMsg := <-msgCh:
+		response = neffos.DeserializeMessage(nil, redisMsg.Message, false, false)
+		err = response.Err
+	}
+
+	return
 }
 
-// Ask TODO.
-// Ask will implement the server Ask feature for redis. It will block until response.
-func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (neffos.Message, error) {
-	panic("Not Implemented Yet") // check tomorrow... I am too tired now.
-}
-
-// NotifyAsk TODO.
+// NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
-	panic("Not Implemented Yet")
+	msg.ClearWait()
+	return exc.publish(token, msg.Serialize())
 }
 
 // Subscribe subscribes to a specific namespace,
