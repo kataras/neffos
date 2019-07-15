@@ -498,9 +498,6 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
 // The second argument is the request message
 // which should be sent to a specific namespace:event
 // like the `Conn.Ask`.
-// Note: Currently this expects the remote responder
-// to be connected inside this server neffos instance -
-// StackExchange is not yet implemented to handle this feature, yet -.
 func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 	if ctx == nil {
 		ctx = context.TODO()
