@@ -48,6 +48,12 @@ func (e Events) fireEvent(c *NSConn, msg Message) error {
 	return nil
 }
 
+// On is a shortcut of Events { eventName: msgHandler}.
+// It registers a callback "msgHandler" for an event "eventName"
+func (e Events) On(eventName string, msgHandler MessageHandlerFunc) {
+	e[eventName] = msgHandler
+}
+
 // Namespaces completes the `ConnHandler` interface.
 // Can be used to register one or more namespaces on the `New` and `Dial` functions.
 // The key is the namespace literal and the value is the `Events`,
@@ -58,6 +64,17 @@ type Namespaces map[string]Events
 
 // GetNamespaces just returns the "nss" namespaces.
 func (nss Namespaces) GetNamespaces() Namespaces { return nss }
+
+// On is a shortcut of Namespaces { namespace: Events: { eventName: msgHandler}}.
+// It registers a callback "msgHandler" for an event "eventName" of the particular "namespace".
+func (nss Namespaces) On(namespace, eventName string, msgHandler MessageHandlerFunc) Events {
+	if nss[namespace] == nil {
+		nss[namespace] = make(Events)
+	}
+	nss[namespace][eventName] = msgHandler
+
+	return nss[namespace]
+}
 
 // WithTimeout completes the `ConnHandler` interface.
 // Can be used to register namespaces and events or just events on an empty namespace

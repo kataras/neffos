@@ -200,6 +200,68 @@ func (c *Conn) Get(key string) interface{} {
 	return nil
 }
 
+// Increment works like `Set` method.
+// It's just a helper for incrementing integers values.
+// If value does exist,
+// and it's an integer then it increments it by 1,
+// otherwise the value is overridden to value 1.
+// If value does not exist,
+// then it assumes the default value is 0 and it increments it by one,
+// the result will be 1.
+//
+// Returns the incremented value.
+func (c *Conn) Increment(key string) int {
+	value := c.Get(key)
+
+	if value == nil {
+		c.Set(key, 1)
+		return 1
+	}
+
+	intValue, ok := value.(int)
+	if !ok {
+		// override.
+		c.Set(key, 1)
+		return 1
+	}
+
+	intValue++
+	c.Set(key, intValue)
+	return intValue
+}
+
+// Decrement works like `Set` method.
+// It's just a helper for decrementing integers values.
+// If value does exist,
+// and it's an integer then it decrements it by 1,
+// otherwise the value is overridden to value -1.
+// If value does not exist,
+// then it assumes the default value is 0 and it decrements it by one,
+// the result will be -1.
+//
+// Calling it twice for example it will set the value to -2,
+// even if doesn't exist before.
+//
+// Returns the decremented value.
+func (c *Conn) Decrement(key string) int {
+	value := c.Get(key)
+
+	if value == nil {
+		c.Set(key, -1)
+		return -1
+	}
+
+	intValue, ok := value.(int)
+	if !ok {
+		// override.
+		c.Set(key, -1)
+		return -1
+	}
+	intValue--
+	c.Set(key, intValue)
+	return intValue
+}
+
 // WasReconnected reports whether the current connection is a result of a client-side reconnection.
 // To get the numbers of total retries see the `ReconnectTries` field.
 func (c *Conn) WasReconnected() bool {

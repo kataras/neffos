@@ -371,7 +371,7 @@ func DeserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, s
 
 const validMessageSepCount = 7
 
-var knownErrors = []error{ErrBadNamespace, ErrBadRoom}
+var knownErrors = []error{ErrBadNamespace, ErrBadRoom, ErrWrite, ErrInvalidPayload}
 
 // RegisterKnownError registers an error that it's "known" to both server and client sides.
 // This simply adds an error to a list which, if its static text matches
