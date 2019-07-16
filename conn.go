@@ -201,7 +201,7 @@ func (c *Conn) Get(key string) interface{} {
 }
 
 // Increment works like `Set` method.
-// It's just a helper for incrementing integers values.
+// It's just a helper for incrementing integer values.
 // If value does exist,
 // and it's an integer then it increments it by 1,
 // otherwise the value is overridden to value 1.
@@ -231,7 +231,7 @@ func (c *Conn) Increment(key string) int {
 }
 
 // Decrement works like `Set` method.
-// It's just a helper for decrementing integers values.
+// It's just a helper for decrementing integer values.
 // If value does exist,
 // and it's an integer then it decrements it by 1,
 // otherwise the value is overridden to value -1.
@@ -916,6 +916,10 @@ func (c *Conn) sendConfirmation(wait string) {
 
 // Ask method sends a message to the remote side and blocks until a response or an error received from the specific `Message.Event`.
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
+	return c.ask(ctx, msg, false)
+}
+
+func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage bool) (Message, error) {
 	if c.shouldHandleOnlyNativeMessages {
 		// should panic or...
 		return Message{}, nil
@@ -924,8 +928,6 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 	if c.IsClosed() {
 		return msg, CloseError{Code: -1, error: ErrWrite}
 	}
-
-	msg.wait = genWait(c.IsClient())
 
 	if ctx == nil {
 		ctx = context.TODO()
@@ -938,12 +940,27 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 	}
 
 	ch := make(chan Message)
-	c.waitingMessagesMutex.Lock()
-	c.waitingMessages[msg.wait] = ch
-	c.waitingMessagesMutex.Unlock()
+	msg.wait = genWait(c.IsClient())
+
+	if mustWaitOnlyTheNextMessage {
+		// msg.wait is not required on this state
+		// but we still set it.
+		go func() {
+			b, err := c.Socket().ReadData(c.readTimeout)
+			if err != nil {
+				ch <- Message{Err: err, isError: true}
+				return
+			}
+
+			ch <- c.DeserializeMessage(b)
+		}()
+	} else {
+		c.waitingMessagesMutex.Lock()
+		c.waitingMessages[msg.wait] = ch
+		c.waitingMessagesMutex.Unlock()
+	}
 
 	if !c.Write(msg) {
-		// println("fail to write connect message.")
 		return Message{}, ErrWrite
 	}
 
@@ -954,9 +971,11 @@ func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
 		}
 		return Message{}, ctx.Err()
 	case receive := <-ch:
-		c.waitingMessagesMutex.Lock()
-		delete(c.waitingMessages, msg.wait)
-		c.waitingMessagesMutex.Unlock()
+		if !mustWaitOnlyTheNextMessage {
+			c.waitingMessagesMutex.Lock()
+			delete(c.waitingMessages, msg.wait)
+			c.waitingMessagesMutex.Unlock()
+		}
 
 		return receive, receive.Err
 	}

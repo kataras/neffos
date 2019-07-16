@@ -168,7 +168,7 @@ func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, erro
 		IsLocal:   true,
 	}
 
-	_, err := ns.Conn.Ask(ctx, joinMsg)
+	_, err := ns.Conn.ask(ctx, joinMsg, true)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) erro
 		return ErrBadRoom
 	}
 
-	_, err := ns.Conn.Ask(ctx, msg)
+	_, err := ns.Conn.ask(ctx, msg, true)
 	if err != nil {
 		return err
 	}

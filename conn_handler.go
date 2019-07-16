@@ -48,8 +48,8 @@ func (e Events) fireEvent(c *NSConn, msg Message) error {
 	return nil
 }
 
-// On is a shortcut of Events { eventName: msgHandler}.
-// It registers a callback "msgHandler" for an event "eventName"
+// On is a shortcut of Events { eventName: msgHandler }.
+// It registers a callback "msgHandler" for an event "eventName".
 func (e Events) On(eventName string, msgHandler MessageHandlerFunc) {
 	e[eventName] = msgHandler
 }
@@ -65,7 +65,7 @@ type Namespaces map[string]Events
 // GetNamespaces just returns the "nss" namespaces.
 func (nss Namespaces) GetNamespaces() Namespaces { return nss }
 
-// On is a shortcut of Namespaces { namespace: Events: { eventName: msgHandler}}.
+// On is a shortcut of Namespaces { namespace: Events: { eventName: msgHandler } }.
 // It registers a callback "msgHandler" for an event "eventName" of the particular "namespace".
 func (nss Namespaces) On(namespace, eventName string, msgHandler MessageHandlerFunc) Events {
 	if nss[namespace] == nil {
