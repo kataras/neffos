@@ -74,6 +74,8 @@ type Conn struct {
 	// i.e `askConnect: myNamespace` blocks the `tryNamespace: myNamespace` until finish.
 	processes *processes
 
+	isInsideHandler *uint32
+
 	// messages that this connection waits for a reply.
 	waitingMessages      map[string]chan Message
 	waitingMessagesMutex sync.RWMutex
@@ -98,6 +100,7 @@ func newConn(socket Socket, namespaces Namespaces) *Conn {
 		acknowledged:                   new(uint32),
 		connectedNamespaces:            make(map[string]*NSConn),
 		processes:                      newProcesses(),
+		isInsideHandler:                new(uint32),
 		waitingMessages:                make(map[string]chan Message),
 		allowNativeMessages:            false,
 		shouldHandleOnlyNativeMessages: false,
@@ -327,7 +330,9 @@ func (c *Conn) startReader() {
 			continue
 		}
 
+		atomic.StoreUint32(c.isInsideHandler, 1)
 		c.HandlePayload(b)
+		atomic.StoreUint32(c.isInsideHandler, 0)
 	}
 }
 
@@ -916,7 +921,8 @@ func (c *Conn) sendConfirmation(wait string) {
 
 // Ask method sends a message to the remote side and blocks until a response or an error received from the specific `Message.Event`.
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
-	return c.ask(ctx, msg, false)
+	mustWaitOnlyTheNextMessage := atomic.LoadUint32(c.isInsideHandler) == 1
+	return c.ask(ctx, msg, mustWaitOnlyTheNextMessage)
 }
 
 func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage bool) (Message, error) {
@@ -939,7 +945,7 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 		}
 	}
 
-	ch := make(chan Message)
+	ch := make(chan Message, 1)
 	msg.wait = genWait(c.IsClient())
 
 	if mustWaitOnlyTheNextMessage {
