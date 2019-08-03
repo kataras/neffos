@@ -251,13 +251,13 @@ func genServerConnID(s *Server, c *Conn) string {
 }
 
 // Upgrade handles the connection, same as `ServeHTTP` but it can accept
-// a socket wrapper and a "customID" that overrides the server's IDGenerator
+// a socket wrapper and a "customIDGen" that overrides the server's IDGenerator
 // and it does return the connection or any errors.
 func (s *Server) Upgrade(
 	w http.ResponseWriter,
 	r *http.Request,
 	socketWrapper func(Socket) Socket,
-	customID string,
+	customIDGen IDGenerator,
 ) (*Conn, error) {
 	if atomic.LoadUint32(&s.closed) > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -296,8 +296,8 @@ func (s *Server) Upgrade(
 	}
 
 	c := newConn(socket, s.namespaces)
-	if customID != "" {
-		c.id = customID
+	if customIDGen != nil {
+		c.id = customIDGen(w, r)
 	} else {
 		c.id = s.IDGenerator(w, r)
 	}
@@ -372,7 +372,7 @@ func (s *Server) Upgrade(
 // ServeHTTP completes the `http.Handler` interface, it should be passed on a http server's router
 // to serve this neffos server on a specific endpoint.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.Upgrade(w, r, nil, "")
+	s.Upgrade(w, r, nil, nil)
 }
 
 func (s *Server) waitMessage(c *Conn) bool {
