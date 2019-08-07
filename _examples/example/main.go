@@ -144,6 +144,11 @@ var (
 
 func server(upgrader neffos.Upgrader) {
 	srv := neffos.New(upgrader, handler)
+	// s, err := redis.NewStackExchange(redis.Config{}, "ch")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// srv.UseStackExchange(s)
 
 	srv.OnConnect = func(c *neffos.Conn) error {
 		if dissalowAll {
@@ -166,6 +171,11 @@ func server(upgrader neffos.Upgrader) {
 				Namespace: namespace,
 				Event:     "chat",
 				Body:      []byte(fmt.Sprintf("Client [%s] connected too.", c.ID())),
+			})
+			c.Server().Broadcast(c, neffos.Message{
+				Namespace: namespace,
+				Event:     "chat",
+				Body:      []byte(fmt.Sprintf("SECOND ONE Client [%s] connected too.", c.ID())),
 			})
 		}
 

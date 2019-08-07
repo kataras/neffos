@@ -412,7 +412,7 @@ func (c *Conn) handleMessage(msg Message) error {
 
 	if isClient := c.IsClient(); msg.IsWait(isClient) {
 		if !isClient {
-			if c.server.usesStackExchange() {
+			if msg.FromStackExchange && c.server.usesStackExchange() {
 				// Currently let's not export the wait field, instead
 				// just accept it on the stackexchange.
 				return c.server.StackExchange.NotifyAsk(msg, msg.wait)
@@ -433,6 +433,7 @@ func (c *Conn) handleMessage(msg Message) error {
 			ch <- msg
 			return nil
 		}
+
 	}
 
 	switch msg.Event {

@@ -152,13 +152,15 @@ func (exc *StackExchange) run() {
 	for {
 		select {
 		case s := <-exc.addSubscriber:
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
 			exc.subscribers[s.conn] = s
+			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				channel := exc.getChannel(m.namespace, "", "")
-				// neffos.Debugf("[%s] subscribed to [%s]", m.conn.ID(), channel)
 				sub.pubSub.PSubscribe(sub.msgCh, channel)
+				// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
+			} else {
+				// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
 			}
 		case m := <-exc.unsubscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
@@ -200,10 +202,11 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	redisMsgCh := make(chan radix.PubSubMessage)
 	go func() {
 		for redisMsg := range redisMsgCh {
+			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
+
 			msg := c.DeserializeMessage(redisMsg.Message)
 			msg.FromStackExchange = true
 
-			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
 			c.Write(msg)
 		}
 	}()
@@ -227,7 +230,7 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 func (exc *StackExchange) Publish(msg neffos.Message) bool {
 	// channel := exc.getMessageChannel(c.ID(), msg)
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
-	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(b))
+	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
 
 	err := exc.publish(channel, msg.Serialize())
 	return err == nil

@@ -322,6 +322,16 @@ func (s *Server) Upgrade(
 	s.connect <- c
 
 	go c.startReader()
+
+	// Before `OnConnect` in order to be able
+	// to Broadcast inside the `OnConnect` custom func.
+	if s.usesStackExchange() {
+		if err := s.StackExchange.OnConnect(c); err != nil {
+			c.readiness.unwait(err)
+			return nil, err
+		}
+	}
+
 	// Start the reader before `OnConnect`, remember clients may remotely connect to namespace before `Server#OnConnect`
 	// therefore any `Server:NSConn#OnNamespaceConnected` can write immediately to the client too.
 	// Note also that the `Server#OnConnect` itself can do that as well but if the written Message's Namespace is not locally connected
@@ -351,14 +361,9 @@ func (s *Server) Upgrade(
 			// Done but with a lot of code.... will try to cleanup some things.
 			//println("OnConnect error: " + err.Error())
 			c.readiness.unwait(err)
-			// c.Close()
-			return nil, err
-		}
-	}
+			// No need to disconnect here, connection's .Close will be called on readiness ch errored.
 
-	if s.usesStackExchange() {
-		if err := s.StackExchange.OnConnect(c); err != nil {
-			c.readiness.unwait(err)
+			// c.Close()
 			return nil, err
 		}
 	}
@@ -506,6 +511,7 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 	msg.wait = genWait(false)
 
 	if s.usesStackExchange() {
+		msg.wait = genWaitStackExchange(msg.wait)
 		return s.StackExchange.Ask(ctx, msg, msg.wait)
 	}
 

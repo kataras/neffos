@@ -61,7 +61,11 @@ type Message struct {
 	// It's serialized as the first parameter, instead of wait signal, if incoming starts with 0x.
 	FromExplicit string // the exact Conn's pointer in this server instance.
 	// Reports whether this message is coming from a stackexchange.
-	// This field is not exposed and it's not serialized at all, local-use only.
+	// This field is not exposed and it's not serialized at all, ~local-use only~.
+	//
+	// The "wait" field can determinate if this message is coming from a stackexchange using its second char,
+	// This value set based on "wait" on deserialization when coming from remote side.
+	// Only server-side can actually set it.
 	FromStackExchange bool
 
 	// To is the connection ID of the receiver, used only when `Server#Broadcast` is called, indeed when we only need to send a message to a single connection.
@@ -183,8 +187,9 @@ func (m *Message) Unmarshal(outPtr interface{}) error {
 }
 
 const (
-	waitIsConfirmationPrefix  = '#'
-	waitComesFromClientPrefix = '$'
+	waitIsConfirmationPrefix   = '#'
+	waitComesFromClientPrefix  = '$'
+	waitComesFromStackExchange = '!'
 )
 
 // IsWait reports whether this message waits for a response back.
@@ -221,6 +226,7 @@ func (m *Message) ClearWait() bool {
 func genWait(isClientConn bool) string {
 	now := time.Now().UnixNano()
 	wait := strconv.FormatInt(now, 10)
+
 	if isClientConn {
 		wait = string(waitComesFromClientPrefix) + wait
 	}
@@ -230,6 +236,17 @@ func genWait(isClientConn bool) string {
 
 func genWaitConfirmation(wait string) string {
 	return string(waitIsConfirmationPrefix) + wait
+}
+
+func genWaitStackExchange(wait string) string {
+	if len(wait) < 2 {
+		return ""
+	}
+
+	// This is the second special character.
+	// If found, it is removed on the deserialization
+	// and Message.FromStackExchange is set to true.
+	return string(wait[0]+waitComesFromStackExchange) + wait[1:]
 }
 
 type (
@@ -348,24 +365,32 @@ func DeserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, s
 		wait = ""
 	}
 
+	fromStackExchange := len(wait) > 2 && wait[1] == waitComesFromStackExchange
+	if fromStackExchange {
+		// remove the second special char, we need to reform it,
+		// this wait token is compared to the waiter side as it's without the information about stackexchnage.
+		wait = string(wait[0]) + wait[2:]
+	}
+
 	return Message{
-		wait:         wait,
-		Namespace:    unescape(namespace),
-		Room:         unescape(room),
-		Event:        unescape(event),
-		Body:         body,
-		Err:          err,
-		isError:      err != nil,
-		isNoOp:       isNoOp,
-		isInvalid:    isInvalid,
-		from:         "",
-		FromExplicit: fromExplicit,
-		To:           "",
-		IsForced:     false,
-		IsLocal:      false,
-		IsNative:     allowNativeMessages && event == OnNativeMessage,
-		locked:       false,
-		SetBinary:    false,
+		wait:              wait,
+		Namespace:         unescape(namespace),
+		Room:              unescape(room),
+		Event:             unescape(event),
+		Body:              body,
+		Err:               err,
+		isError:           err != nil,
+		isNoOp:            isNoOp,
+		isInvalid:         isInvalid,
+		from:              "",
+		FromExplicit:      fromExplicit,
+		FromStackExchange: fromStackExchange,
+		To:                "",
+		IsForced:          false,
+		IsLocal:           false,
+		IsNative:          allowNativeMessages && event == OnNativeMessage,
+		locked:            false,
+		SetBinary:         false,
 	}
 }
 

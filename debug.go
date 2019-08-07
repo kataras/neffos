@@ -31,6 +31,10 @@ func EnableDebug(printer interface{}) {
 		return
 	}
 
+	if _, boolean := printer.(bool); boolean {
+		// if for some reason by accident EnableDebug(true) instead of a printer value.
+		printer = nil
+	}
 	if printer == nil {
 		logger := log.New(os.Stderr, "| neffos | ", 0)
 		printer = logger
