@@ -172,11 +172,12 @@ func server(upgrader neffos.Upgrader) {
 				Event:     "chat",
 				Body:      []byte(fmt.Sprintf("Client [%s] connected too.", c.ID())),
 			})
-			c.Server().Broadcast(c, neffos.Message{
-				Namespace: namespace,
-				Event:     "chat",
-				Body:      []byte(fmt.Sprintf("SECOND ONE Client [%s] connected too.", c.ID())),
-			})
+
+			// c.Server().Broadcast(c, neffos.Message{
+			// 	Namespace: namespace,
+			// 	Event:     "chat",
+			// 	Body:      []byte(fmt.Sprintf("SECOND ONE")),
+			// })
 		}
 
 		return nil

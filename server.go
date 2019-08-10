@@ -49,6 +49,17 @@ type Server struct {
 	IDGenerator   IDGenerator
 	StackExchange StackExchange
 
+	// If `StackExchange` is set then this field is ignored.
+	//
+	// It overrides the default behavior(when no StackExchange is not used)
+	// which publishes a message independently.
+	// In short the default behavior doesn't wait for a message to be published to all clients
+	// before any next broadcast call.
+	//
+	// Therefore, if set to true,
+	// each broadcast call will publish its own message(s) by order.
+	SyncBroadcaster bool
+
 	mu         sync.RWMutex
 	namespaces Namespaces
 
@@ -58,14 +69,16 @@ type Server struct {
 
 	count uint64
 
-	connections map[*Conn]struct{}
-	connect     chan *Conn
-	disconnect  chan *Conn
-	actions     chan action
+	connections       map[*Conn]struct{}
+	connect           chan *Conn
+	disconnect        chan *Conn
+	actions           chan action
+	broadcastMessages chan []Message
+
 	broadcaster *broadcaster
+
 	// messages that this server must waits
-	// for a reply from one of its own connections(see `waitMessage`)
-	// or TODO: from cloud (see `StackExchange.PublishAndWait`).
+	// for a reply from one of its own connections(see `waitMessages`).
 	waitingMessages      map[string]chan Message
 	waitingMessagesMutex sync.RWMutex
 
@@ -94,21 +107,20 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 	namespaces := connHandler.GetNamespaces()
 	s := &Server{
-		uuid:            uuid.Must(uuid.NewV4()).String(),
-		upgrader:        upgrader,
-		namespaces:      namespaces,
-		readTimeout:     readTimeout,
-		writeTimeout:    writeTimeout,
-		connections:     make(map[*Conn]struct{}),
-		connect:         make(chan *Conn, 1),
-		disconnect:      make(chan *Conn),
-		actions:         make(chan action),
-		broadcaster:     newBroadcaster(),
-		waitingMessages: make(map[string]chan Message),
-		IDGenerator:     DefaultIDGenerator,
+		uuid:              uuid.Must(uuid.NewV4()).String(),
+		upgrader:          upgrader,
+		namespaces:        namespaces,
+		readTimeout:       readTimeout,
+		writeTimeout:      writeTimeout,
+		connections:       make(map[*Conn]struct{}),
+		connect:           make(chan *Conn, 1),
+		disconnect:        make(chan *Conn),
+		actions:           make(chan action),
+		broadcastMessages: make(chan []Message),
+		broadcaster:       newBroadcaster(),
+		waitingMessages:   make(map[string]chan Message),
+		IDGenerator:       DefaultIDGenerator,
 	}
-
-	//	s.broadcastCond = sync.NewCond(&s.broadcastMu)
 
 	go s.start()
 
@@ -170,6 +182,10 @@ func (s *Server) start() {
 				if s.usesStackExchange() {
 					s.StackExchange.OnDisconnect(c)
 				}
+			}
+		case msgs := <-s.broadcastMessages:
+			for c := range s.connections {
+				publishMessages(c, msgs)
 			}
 		case act := <-s.actions:
 			for c := range s.connections {
@@ -312,9 +328,9 @@ func (s *Server) Upgrade(
 		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
 	}
 
-	if !s.usesStackExchange() {
+	if !s.usesStackExchange() && !s.SyncBroadcaster {
 		go func(c *Conn) {
-			for s.waitMessage(c) {
+			for s.waitMessages(c) {
 			}
 		}(c)
 	}
@@ -380,34 +396,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.Upgrade(w, r, nil, nil)
 }
 
-func (s *Server) waitMessage(c *Conn) bool {
-	s.broadcaster.mu.Lock()
-	defer s.broadcaster.mu.Unlock()
-
-	msg, ok := s.broadcaster.waitUntilClosed(c.closeCh)
-	if !ok {
-		return false
-	}
-
-	if msg.from == c.ID() {
-		// if the message is not supposed to return back to any connection with this ID.
-		return true
-	}
-
-	// if "To" field is given then send to a specific connection.
-	if msg.To != "" && msg.To != c.ID() {
-		return true
-	}
-
-	// c.Write may fail if the message is not supposed to end to this client
-	// but the connection should be still open in order to continue.
-	if !c.Write(msg) && c.IsClosed() {
-		return false
-	}
-
-	return true
-}
-
 // GetTotalConnections returns the total amount of the connected connections to the server, it's fast
 // and can be used as frequently as needed.
 func (s *Server) GetTotalConnections() uint64 {
@@ -438,6 +426,41 @@ func (s *Server) Do(fn func(*Conn), async bool) {
 	}
 }
 
+func publishMessages(c *Conn, msgs []Message) bool {
+	for _, msg := range msgs {
+		if msg.from == c.ID() {
+			// if the message is not supposed to return back to any connection with this ID.
+
+			return true
+		}
+
+		// if "To" field is given then send to a specific connection.
+		if msg.To != "" && msg.To != c.ID() {
+			return true
+		}
+
+		// c.Write may fail if the message is not supposed to end to this client
+		// but the connection should be still open in order to continue.
+		if !c.Write(msg) && c.IsClosed() {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (s *Server) waitMessages(c *Conn) bool {
+	s.broadcaster.mu.Lock()
+	defer s.broadcaster.mu.Unlock()
+
+	msgs, ok := s.broadcaster.waitUntilClosed(c.closeCh)
+	if !ok {
+		return false
+	}
+
+	return publishMessages(c, msgs)
+}
+
 type stringerValue struct{ v string }
 
 func (s stringerValue) String() string { return s.v }
@@ -452,7 +475,7 @@ func (s stringerValue) String() string { return s.v }
 //  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
 func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 
-// Broadcast method is fast and does not block any new incoming connection,
+// Broadcast method is fast and does not block any new incoming connection by-default,
 // it can be used as frequently as needed. Use the "msg"'s Namespace, or/and Event or/and Room to broadcast
 // to a specific type of connection collectives.
 //
@@ -465,34 +488,45 @@ func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 // nsConn.Conn.Server().Broadcast(
 //	nsConn OR nil,
 //  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
-func (s *Server) Broadcast(exceptSender fmt.Stringer, msg Message) {
+//
+// Note that it if `StackExchange` is nil then its default behavior
+// doesn't wait for a publish to complete to all clients before any
+// next broadcast call. To change that behavior set the `Server.SyncBroadcaster` to true
+// before server start.
+func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
+
 	if exceptSender != nil {
+		var fromExplicit, from string
+
 		switch c := exceptSender.(type) {
 		case *Conn:
-			msg.FromExplicit = c.serverConnID
+			fromExplicit = c.serverConnID
 		case *NSConn:
-			msg.FromExplicit = c.Conn.serverConnID
+			fromExplicit = c.Conn.serverConnID
 		default:
-			msg.from = exceptSender.String()
+			from = exceptSender.String()
 		}
 
-		// msg.from = exceptSender.String()
+		for i := range msgs {
+			if from != "" {
+				msgs[i].from = from
+			} else {
+				msgs[i].FromExplicit = fromExplicit
+			}
+		}
 	}
 
-	// s.broadcast <- msg
-
-	// s.broadcastMu.Lock()
-	// s.broadcastMessage = msg
-	// s.broadcastMu.Unlock()
-
-	// s.broadcastCond.Broadcast()
-
 	if s.usesStackExchange() {
-		s.StackExchange.Publish(msg)
+		s.StackExchange.Publish(msgs)
 		return
 	}
 
-	s.broadcaster.broadcast(msg)
+	if s.SyncBroadcaster {
+		s.broadcastMessages <- msgs
+		return
+	}
+
+	s.broadcaster.broadcast(msgs)
 }
 
 // Ask is like `Broadcast` but it blocks until a response

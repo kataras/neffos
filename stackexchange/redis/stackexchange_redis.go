@@ -225,18 +225,28 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	return nil
 }
 
-// Publish publishes a message through redis.
+// Publish publishes messages through redis.
 // It's called automatically on neffos broadcasting.
-func (exc *StackExchange) Publish(msg neffos.Message) bool {
+func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
+	for _, msg := range msgs {
+		if !exc.publish(msg) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (exc *StackExchange) publish(msg neffos.Message) bool {
 	// channel := exc.getMessageChannel(c.ID(), msg)
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
 	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
 
-	err := exc.publish(channel, msg.Serialize())
+	err := exc.publishCommand(channel, msg.Serialize())
 	return err == nil
 }
 
-func (exc *StackExchange) publish(channel string, b []byte) error {
+func (exc *StackExchange) publishCommand(channel string, b []byte) error {
 	cmd := radix.FlatCmd(nil, "PUBLISH", channel, b)
 	return exc.pool.Do(cmd)
 }
@@ -251,7 +261,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 	}
 	defer sub.Close()
 
-	if !exc.Publish(msg) {
+	if !exc.publish(msg) {
 		return response, neffos.ErrWrite
 	}
 
@@ -269,7 +279,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 	msg.ClearWait()
-	return exc.publish(token, msg.Serialize())
+	return exc.publishCommand(token, msg.Serialize())
 }
 
 // Subscribe subscribes to a specific namespace,

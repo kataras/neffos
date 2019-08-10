@@ -283,9 +283,19 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	return nil
 }
 
-// Publish publishes a message through nats.
+// Publish publishes messages through nats.
 // It's called automatically on neffos broadcasting.
-func (exc *StackExchange) Publish(msg neffos.Message) bool {
+func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
+	for _, msg := range msgs {
+		if !exc.publish(msg) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (exc *StackExchange) publish(msg neffos.Message) bool {
 	subject := exc.getSubject(msg.Namespace, msg.Room, msg.To)
 	b := msg.Serialize()
 
@@ -321,7 +331,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 	defer sub.Unsubscribe()
 	defer subConn.Close()
 
-	if !exc.Publish(msg) {
+	if !exc.publish(msg) {
 		return response, neffos.ErrWrite
 	}
 

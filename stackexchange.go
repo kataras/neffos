@@ -23,9 +23,9 @@ type StackExchange interface {
 	// manually by server or client or by network failure.
 	OnDisconnect(c *Conn)
 
-	// Publish should publish a message through a stackexchange.
+	// Publish should publish messages through a stackexchange.
 	// It's called automatically on neffos broadcasting.
-	Publish(msg Message) bool
+	Publish(msgs []Message) bool
 	// Subscribe should subscribe to a specific namespace,
 	// it's called automatically on neffos namespace connected.
 	Subscribe(c *Conn, namespace string)
@@ -91,10 +91,10 @@ func (s *stackExchangeWrapper) OnDisconnect(c *Conn) {
 	s.current.OnDisconnect(c)
 }
 
-func (s *stackExchangeWrapper) Publish(msg Message) bool {
+func (s *stackExchangeWrapper) Publish(msgs []Message) bool {
 	// keep try on the next but return false on any failure.
-	okParent := s.parent.Publish(msg)
-	okCurrent := s.current.Publish(msg)
+	okParent := s.parent.Publish(msgs)
+	okCurrent := s.current.Publish(msgs)
 
 	return okParent && okCurrent
 }

@@ -1,17 +1,17 @@
 package neffos
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 )
 
+// async broadcaster, doesn't wait for a publish to complete to all clients before any
+// next broadcast call.
 type broadcaster struct {
-	message Message
-	mu      *sync.Mutex
-	awaiter unsafe.Pointer
+	messages []Message
+	mu       *sync.Mutex
+	awaiter  unsafe.Pointer
 }
 
 func newBroadcaster() *broadcaster {
@@ -28,9 +28,9 @@ func (b *broadcaster) getAwaiter() <-chan struct{} {
 	return *((*chan struct{})(ptr))
 }
 
-func (b *broadcaster) broadcast(msg Message) {
+func (b *broadcaster) broadcast(msgs []Message) {
 	b.mu.Lock()
-	b.message = msg
+	b.messages = msgs
 	b.mu.Unlock()
 
 	ch := make(chan struct{})
@@ -38,62 +38,16 @@ func (b *broadcaster) broadcast(msg Message) {
 	close(*(*chan struct{})(old))
 }
 
-// lock required.
-func (b *broadcaster) wait() (msg Message) {
+func (b *broadcaster) waitUntilClosed(closeCh <-chan struct{}) (msgs []Message, ok bool) {
 	ch := b.getAwaiter()
 	b.mu.Unlock()
-	<-ch
-	msg = b.message
+	select {
+	case <-ch:
+		msgs = b.messages[:]
+		ok = true
+	case <-closeCh:
+	}
+
 	b.mu.Lock()
-
-	return
-}
-
-func (b *broadcaster) subscribe(fn func(<-chan struct{})) {
-	ch := b.getAwaiter()
-	b.mu.Unlock()
-	fn(ch)
-	b.mu.Lock()
-}
-
-func (b *broadcaster) waitUntilClosed(closeCh <-chan struct{}) (msg Message, ok bool) {
-	b.subscribe(func(ch <-chan struct{}) {
-		select {
-		case <-ch:
-			msg = b.message
-			ok = true
-		case <-closeCh:
-		}
-	})
-
-	return
-}
-
-func (b *broadcaster) waitUntil(timeout time.Duration) (msg Message, ok bool) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	b.subscribe(func(ch <-chan struct{}) {
-		select {
-		case <-ch:
-			msg = b.message
-			ok = true
-		case <-timer.C:
-		}
-	})
-
-	return
-}
-
-func (b *broadcaster) waitWithContext(ctx context.Context) (msg Message, err error) {
-	b.subscribe(func(ch <-chan struct{}) {
-		select {
-		case <-ch:
-			msg = b.message
-		case <-ctx.Done():
-			err = ctx.Err()
-		}
-	})
-
 	return
 }

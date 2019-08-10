@@ -88,7 +88,7 @@ type Conn struct {
 
 	// used to fire `conn#Close` once.
 	closed *uint32
-	// useful to terminate the broadcaster, see `Server#ServeHTTP.waitMessage`.
+	// useful to terminate the broadcaster, see `Server#ServeHTTP.waitMessages`.
 	closeCh chan struct{}
 }
 

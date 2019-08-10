@@ -71,7 +71,6 @@ var (
 )
 
 func main() {
-
 	// connect all and then start cron.
 	server := startServer()
 	time.Sleep(200 * time.Millisecond)
@@ -104,6 +103,7 @@ func startServer() *neffos.Server {
 
 		return username
 	}
+	server.SyncBroadcaster = true
 
 	go func() {
 		log.Fatal(http.ListenAndServe(":8080", server))
