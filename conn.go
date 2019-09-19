@@ -282,6 +282,13 @@ const (
 	ackNotOKBinary = 'H' // byte(0x4) // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 )
 
+var (
+	ackBinaryB      = []byte{ackBinary}
+	ackIDBinaryB    = []byte{ackIDBinary}
+	ackOKBinaryB    = []byte{ackOKBinary}
+	ackNotOKBinaryB = []byte{ackNotOKBinary}
+)
+
 func (c *Conn) sendClientACK() error {
 	// if neffos client used but in reality nor of its features are used
 	// because end-dev set it as native only sender and receiver so any webscoket client can be used
@@ -290,7 +297,7 @@ func (c *Conn) sendClientACK() error {
 		return nil
 	}
 
-	ok := c.write([]byte{ackBinary}, false)
+	ok := c.write(ackBinaryB, false)
 	if !ok {
 		c.Close()
 		return ErrWrite
@@ -336,7 +343,6 @@ func (c *Conn) startReader() {
 	}
 }
 
-// ack uses binary, bytebuffer messages type, after this client/server can still use binary if `Message#SetBinary` or text message by-default.
 func (c *Conn) handleACK(b []byte) bool {
 	switch typ := b[0]; typ {
 	case ackBinary:
@@ -344,14 +350,14 @@ func (c *Conn) handleACK(b []byte) bool {
 		err := c.readiness.wait()
 		if err != nil {
 			// it's not Ok, send error which client's Dial should return.
-			c.write(append([]byte{ackNotOKBinary}, []byte(err.Error())...), false)
+			c.write(append(ackNotOKBinaryB, []byte(err.Error())...), false)
 			return false
 		}
 		atomic.StoreUint32(c.acknowledged, 1)
 		c.handleQueue()
 
 		// it's ok send ID.
-		return c.write(append([]byte{ackIDBinary}, []byte(c.id)...), false)
+		return c.write(append(ackIDBinaryB, []byte(c.id)...), false)
 
 	// case ackOKBinary:
 	// 	// from client to server.
