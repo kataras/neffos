@@ -31,16 +31,18 @@ function handleNamespaceConnectedConn(nsConn) {
         userMsg.setText(input);
 
         const body = userMsg.serializeBinary()
-        let msg = new neffos.Message();
-        msg.Namespace = "default";
-        msg.Event = "chat";
-        msg.Body = body;
-        msg.SetBinary = true;
-        nsConn.conn.write(msg);
+        // let msg = new neffos.Message();
+        // msg.Namespace = "default";
+        // msg.Event = "chat";
+        // msg.Body = body;
+        // msg.SetBinary = true;
+        // nsConn.conn.write(msg);
+        // ^ == 
+        nsConn.emitBinary("chat", body);
         //
         // OR: javascript side will check if body is binary,
         // and if it's it will convert it to valid utf-8 text before sending.
-        // To keep the data as they are, please prefer the above commented code (msg.SetBinary = true).
+        // To keep the data as they are, please prefer `emitBinary`.
         // nsConn.emit("chat", body);
         addMessage("Me: " + input);
     };

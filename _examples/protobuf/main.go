@@ -169,7 +169,7 @@ func startClient() {
 	userMsg := &UserMessage{
 		Username: string(usernameBytes),
 		// only `Text` field is dynamic, therefore we can reuse this instance value,
-		// the `Text` field can be filled right before the `Conn#Write`, check below.
+		// the `Text` field can be filled right before the `c#EmitBinary`, check below.
 	}
 
 	fmt.Fprint(os.Stdout, ">> ")
@@ -199,12 +199,7 @@ func startClient() {
 			log.Fatal(err)
 		}
 
-		c.Conn.Write(neffos.Message{
-			Namespace: namespace,
-			Event:     "chat",
-			Body:      body,
-			SetBinary: true,
-		})
+		c.EmitBinary("chat", body)
 
 		fmt.Fprint(os.Stdout, ">> ")
 	}

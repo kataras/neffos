@@ -49,11 +49,21 @@ func (ns *NSConn) String() string {
 // Emit method sends a message to the remote side
 // with its `Message.Namespace` filled to this specific namespace.
 func (ns *NSConn) Emit(event string, body []byte) bool {
-	if ns == nil { // if for any reason Namespace() called without be available.
+	if ns == nil {
 		return false
 	}
 
 	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body})
+}
+
+// EmitBinary acts like `Emit` but it sets the `Message.SetBinary` to true
+// and sends the data as binary, the receiver's Message in javascript-side is Uint8Array.
+func (ns *NSConn) EmitBinary(event string, body []byte) bool {
+	if ns == nil {
+		return false
+	}
+
+	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body, SetBinary: true})
 }
 
 // Ask method writes a message to the remote side and blocks until a response or an error received.
