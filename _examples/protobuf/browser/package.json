@@ -4,11 +4,12 @@
     "scripts": {
         "browserify": "browserify ./app.js -o ./bundle.js",
         "minifyES6": "minify ./bundle.js --outFile ./bundle.js",
-        "build": "npm run-script browserify && npm run-script minifyES6"
+        "build": "npm run-script browserify && npm run-script minifyES6",
+        "build-fast": "npm run-script browserify"
     },
     "dependencies": {
-        "google-protobuf": "^3.8.0",
-        "neffos.js": "latest",
+        "google-protobuf": "^3.11.1",
+        "neffos.js": "^0.1.24",
         "protobufjs": "~6.8.8"
     },
     "devDependencies": {

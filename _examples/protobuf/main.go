@@ -64,17 +64,20 @@ var serverAndClientEvents = neffos.Namespaces{
 		},
 		"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 			if msg.Err != nil {
-				log.Printf("remote error: %v\n", msg.Err)
+				log.Printf("remote error: %v from [%s]\n", msg.Err, c)
 				return nil
 			}
 
 			if !c.Conn.IsClient() {
+				// fmt.Printf("[%s] sending message to everyone... [%v:%s]\n", c, msg.SetBinary, string(msg.Body))
 				// broadcast to all clients except this one, when first parameter is not nil.
 				c.Conn.Server().Broadcast(c, msg)
 			} else {
 				// client received from server's broadcast.
 				var userMsg UserMessage
+
 				if err := proto.Unmarshal(msg.Body, &userMsg); err != nil {
+					fmt.Printf("[example] error on proto.Unmarshal: %v\nFor msg.Body equals to: %s", err, string(msg.Body))
 					return err
 				}
 				fmt.Printf("[%s] says: %s\n", userMsg.Username, userMsg.Text)
@@ -82,6 +85,15 @@ var serverAndClientEvents = neffos.Namespaces{
 
 			// if returns an error then the remote side's `msg.Err` will be filled with
 			// this error's text.
+			return nil
+		},
+		"chat_test": func(c *neffos.NSConn, msg neffos.Message) error {
+			if !c.Conn.IsClient() {
+				c.Conn.Server().Broadcast(c, msg)
+				return nil
+			}
+
+			fmt.Printf("[%s] says: %s\n", c, string(msg.Body))
 			return nil
 		},
 	},
@@ -123,9 +135,11 @@ func startServer() {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
+const testHelloBinaryWithSeps = false
+
 func startClient() {
 	// init the websocket connection by dialing the server.
-	client, err := neffos.Dial(nil, gorilla.DefaultDialer, endpoint, serverAndClientEvents)
+	client, err := neffos.Dial(nil, gorilla.DefaultDialer, addr+endpoint, serverAndClientEvents)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -141,12 +155,21 @@ func startClient() {
 		log.Fatal(err)
 	}
 
+	if testHelloBinaryWithSeps {
+		c.Conn.Write(neffos.Message{
+			Namespace: namespace,
+			Event:     "chat_test",
+			Body:      []byte{';', ';', ';', ';', 'h', 'e', 'l', 'l', 'o', ';'},
+			SetBinary: true,
+		})
+	}
+
 	fmt.Fprintf(os.Stdout, "Please specify a username: ")
 	usernameBytes, _, _ := bufio.NewReader(os.Stdin).ReadLine()
 	userMsg := &UserMessage{
 		Username: string(usernameBytes),
 		// only `Text` field is dynamic, therefore we can reuse this instance value,
-		// the `Text` field can be filled right before the namespace's `Emit`, check below.
+		// the `Text` field can be filled right before the `Conn#Write`, check below.
 	}
 
 	fmt.Fprint(os.Stdout, ">> ")
@@ -175,7 +198,13 @@ func startClient() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		c.Emit("chat", body)
+
+		c.Conn.Write(neffos.Message{
+			Namespace: namespace,
+			Event:     "chat",
+			Body:      body,
+			SetBinary: true,
+		})
 
 		fmt.Fprint(os.Stdout, ">> ")
 	}

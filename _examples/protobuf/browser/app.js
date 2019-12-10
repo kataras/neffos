@@ -6,6 +6,7 @@ var port = document.location.port ? ":" + document.location.port : "";
 var wsURL = scheme + "://" + document.location.hostname + port + "/echo";
 
 var outputTxt = document.getElementById("output");
+
 function addMessage(msg) {
     outputTxt.innerHTML += msg + "\n";
 }
@@ -28,7 +29,19 @@ function handleNamespaceConnectedConn(nsConn) {
         const userMsg = new protos.UserMessage();
         userMsg.setUsername(username);
         userMsg.setText(input);
-        nsConn.emit("chat", userMsg.serializeBinary());
+
+        const body = userMsg.serializeBinary()
+        let msg = new neffos.Message();
+        msg.Namespace = "default";
+        msg.Event = "chat";
+        msg.Body = body;
+        msg.SetBinary = true;
+        nsConn.conn.write(msg);
+        //
+        // OR: javascript side will check if body is binary,
+        // and if it's it will convert it to valid utf-8 text before sending.
+        // To keep the data as they are, please prefer the above commented code (msg.SetBinary = true).
+        // nsConn.emit("chat", body);
         addMessage("Me: " + input);
     };
 }
@@ -47,9 +60,12 @@ async function runExample() {
                     addMessage("disconnected from namespace: " + msg.Namespace);
                 },
                 chat: function (nsConn, msg) { // "chat" event.
-                    var serialized = new Uint8Array(msg.Body.split(","));
-                    const userMsg = protos.UserMessage.deserializeBinary(serialized);
+                    console.log(msg);
+                    const userMsg = protos.UserMessage.deserializeBinary(msg.Body);
                     addMessage(userMsg.getUsername() + ": " + userMsg.getText());
+                },
+                chat_test:  function (nsConn, msg) {
+                    addMessage(new TextDecoder("utf-8").decode(msg.Body));
                 }
             }
         });

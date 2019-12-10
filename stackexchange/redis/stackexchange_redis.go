@@ -203,8 +203,7 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	go func() {
 		for redisMsg := range redisMsgCh {
 			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
-
-			msg := c.DeserializeMessage(redisMsg.Message)
+			msg := c.DeserializeMessage(neffos.TextMessage, redisMsg.Message)
 			msg.FromStackExchange = true
 
 			c.Write(msg)
@@ -269,7 +268,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 	case <-ctx.Done():
 		err = ctx.Err()
 	case redisMsg := <-msgCh:
-		response = neffos.DeserializeMessage(nil, redisMsg.Message, false, false)
+		response = neffos.DeserializeMessage(neffos.TextMessage, redisMsg.Message, false, false)
 		err = response.Err
 	}
 

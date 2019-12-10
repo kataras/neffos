@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kataras/neffos"
+
 	gobwas "github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -65,7 +67,7 @@ func (s *Socket) Request() *http.Request {
 }
 
 // ReadData reads binary or text messages from the remote connection.
-func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
+func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, error) {
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -74,19 +76,19 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 		hdr, err := s.reader.NextFrame()
 		if err != nil {
 			if err == io.EOF {
-				return nil, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
+				return nil, 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
 			}
-			return nil, err
+			return nil, 0, err
 		}
 
 		if hdr.OpCode == gobwas.OpClose {
-			return nil, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
+			return nil, 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
 		}
 
 		if hdr.OpCode.IsControl() {
 			err = s.controlHandler(hdr, s.reader)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			continue
 		}
@@ -94,12 +96,17 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 		if hdr.OpCode&gobwas.OpBinary == 0 && hdr.OpCode&gobwas.OpText == 0 {
 			err = s.reader.Discard()
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 			continue
 		}
 
-		return ioutil.ReadAll(s.reader)
+		b, err := ioutil.ReadAll(s.reader)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		return b, neffos.MessageType(hdr.OpCode), nil
 	}
 
 	// for {

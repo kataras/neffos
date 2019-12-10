@@ -83,30 +83,30 @@ func TestMessageSerialization(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		got := serializeMessage(nil, tt.msg)
+		got := serializeMessage(tt.msg)
 		if !bytes.Equal(got, tt.serialized) {
 			t.Fatalf("[%d] serialize: expected %s but got %s", i, tt.serialized, got)
 		}
 
-		msg := DeserializeMessage(nil, got, false, false)
+		msg := DeserializeMessage(TextMessage, got, false, false)
 		if !reflect.DeepEqual(msg, tt.msg) {
 			t.Fatalf("[%d] deserialize: expected\n%#+v but got\n%#+v", i, tt.msg, msg)
 		}
 	}
 
-	msg := DeserializeMessage(nil, []byte("default;chat;"), false, false)
+	msg := DeserializeMessage(TextMessage, []byte("default;chat;"), false, false)
 	if !msg.isInvalid {
 		t.Fatalf("expected message to be invalid but it seems that it is a valid one")
 	}
 
 	nativeMessage := []byte("a native websocket message")
-	msg = DeserializeMessage(nil, nativeMessage, true, false)
+	msg = DeserializeMessage(TextMessage, nativeMessage, true, false)
 	if msg.isInvalid {
 		t.Fatalf("expected message to be valid native/raw websocket messageeven")
 	}
 
 	nativeMessage = []byte("0;if;we;have;same;number;of;message;tokens;this should pass")
-	msg = DeserializeMessage(nil, nativeMessage, true, true)
+	msg = DeserializeMessage(TextMessage, nativeMessage, true, true)
 	if msg.isInvalid {
 		t.Fatalf("expected message to be valid native/raw websocket messageeven")
 	}
@@ -129,13 +129,13 @@ func TestMessageSerialization(t *testing.T) {
 	expectedSerialized := []byte(fmt.Sprintf(";contains%ssemi;%sthis%sfor sure%s;thatdoesnot;0;0;",
 		messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement))
 
-	gotSerialized := serializeMessage(nil, msg)
+	gotSerialized := serializeMessage(msg)
 
 	if !bytes.Equal(expectedSerialized, gotSerialized) {
 		t.Fatalf("expected escaped serialized to be: %s but got: %s", string(expectedSerialized), string(gotSerialized))
 	}
 
-	msgGot := DeserializeMessage(nil, gotSerialized, false, false)
+	msgGot := DeserializeMessage(TextMessage, gotSerialized, false, false)
 	if !reflect.DeepEqual(msg, msgGot) {
 		t.Fatalf("expected a unescaped message to be:\n%#+v\n\tbut got:\n%#+v", msg, msgGot)
 	}

@@ -18,12 +18,22 @@ type (
 		// Request returns the http request value.
 		Request() *http.Request
 		// ReadData reads binary or text messages from the remote connection.
-		ReadData(timeout time.Duration) (body []byte, err error)
+		ReadData(timeout time.Duration) (body []byte, typ MessageType, err error)
 		// WriteBinary sends a binary message to the remote connection.
 		WriteBinary(body []byte, timeout time.Duration) error
 		// WriteText sends a text message to the remote connection.
 		WriteText(body []byte, timeout time.Duration) error
 	}
+
+	// MessageType is a type for readen and to-send data, helpful to set `msg.SetBinary`
+	// to the rest of the clients through a Broadcast, as SetBinary is not part of the deserialization.
+	MessageType uint8
+)
+
+// See `MessageType` definition for details.
+const (
+	TextMessage = iota + 1
+	BinaryMessage
 )
 
 // Conn contains the websocket connection and the neffos communication functionality.
@@ -83,7 +93,7 @@ type Conn struct {
 	allowNativeMessages            bool
 	shouldHandleOnlyNativeMessages bool
 
-	queue      [][]byte
+	queue      map[MessageType][][]byte
 	queueMutex sync.Mutex
 
 	// used to fire `conn#Close` once.
@@ -320,7 +330,7 @@ func (c *Conn) startReader() {
 	// CLIENT is ready when ACK done
 	// SERVER is ready when ACK is done AND `Server#OnConnected` returns with nil error.
 	for {
-		b, err := c.socket.ReadData(c.readTimeout)
+		b, msgTyp, err := c.socket.ReadData(c.readTimeout)
 		if err != nil {
 			c.readiness.unwait(err)
 			return
@@ -331,19 +341,19 @@ func (c *Conn) startReader() {
 		}
 
 		if !c.isAcknowledged() {
-			if !c.handleACK(b) {
+			if !c.handleACK(msgTyp, b) {
 				return
 			}
 			continue
 		}
 
 		atomic.StoreUint32(c.isInsideHandler, 1)
-		c.HandlePayload(b)
+		c.HandlePayload(msgTyp, b)
 		atomic.StoreUint32(c.isInsideHandler, 0)
 	}
 }
 
-func (c *Conn) handleACK(b []byte) bool {
+func (c *Conn) handleACK(msgTyp MessageType, b []byte) bool {
 	switch typ := b[0]; typ {
 	case ackBinary:
 		// from client startup to server.
@@ -383,7 +393,10 @@ func (c *Conn) handleACK(b []byte) bool {
 		return false
 	default:
 		c.queueMutex.Lock()
-		c.queue = append(c.queue, b)
+		if c.queue == nil {
+			c.queue = make(map[MessageType][][]byte)
+		}
+		c.queue[msgTyp] = append(c.queue[msgTyp], b)
 		c.queueMutex.Unlock()
 	}
 
@@ -395,11 +408,13 @@ func (c *Conn) handleQueue() {
 	c.queueMutex.Lock()
 	defer c.queueMutex.Unlock()
 
-	for _, b := range c.queue {
-		c.HandlePayload(b)
-	}
+	for msgTyp, q := range c.queue {
+		for _, b := range q {
+			c.HandlePayload(msgTyp, b)
+		}
 
-	c.queue = c.queue[0:0]
+		delete(c.queue, msgTyp)
+	}
 }
 
 // ErrInvalidPayload can be returned by the internal `handleMessage`.
@@ -475,13 +490,13 @@ func (c *Conn) handleMessage(msg Message) error {
 }
 
 // DeserializeMessage returns a Message from the "payload".
-func (c *Conn) DeserializeMessage(payload []byte) Message {
-	return DeserializeMessage(nil, payload, c.allowNativeMessages, c.shouldHandleOnlyNativeMessages)
+func (c *Conn) DeserializeMessage(msgTyp MessageType, payload []byte) Message {
+	return DeserializeMessage(msgTyp, payload, c.allowNativeMessages, c.shouldHandleOnlyNativeMessages)
 }
 
 // HandlePayload fires manually a local event based on the "payload".
-func (c *Conn) HandlePayload(payload []byte) error {
-	return c.handleMessage(c.DeserializeMessage(payload))
+func (c *Conn) HandlePayload(msgTyp MessageType, payload []byte) error {
+	return c.handleMessage(c.DeserializeMessage(msgTyp, payload))
 }
 
 const syncWaitDur = 15 * time.Millisecond
@@ -902,8 +917,7 @@ func (c *Conn) Write(msg Message) bool {
 	}
 
 	msg.FromExplicit = ""
-	b := serializeMessage(nil, msg)
-	return c.write(b, msg.SetBinary)
+	return c.write(serializeMessage(msg), msg.SetBinary)
 }
 
 // used when `Ask` caller cares only for successful call and not the message, for performance reasons we just use raw bytes.
@@ -959,13 +973,13 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 		// msg.wait is not required on this state
 		// but we still set it.
 		go func() {
-			b, err := c.Socket().ReadData(c.readTimeout)
+			b, msgTyp, err := c.Socket().ReadData(c.readTimeout)
 			if err != nil {
 				ch <- Message{Err: err, isError: true}
 				return
 			}
 
-			ch <- c.DeserializeMessage(b)
+			ch <- c.DeserializeMessage(msgTyp, b)
 		}()
 	} else {
 		c.waitingMessagesMutex.Lock()

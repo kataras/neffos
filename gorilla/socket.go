@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kataras/neffos"
+
 	gorilla "github.com/gorilla/websocket"
 )
 
@@ -39,7 +41,7 @@ func (s *Socket) Request() *http.Request {
 }
 
 // ReadData reads binary or text messages from the remote connection.
-func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
+func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, error) {
 	for {
 		if timeout > 0 {
 			s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
@@ -47,7 +49,7 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 
 		opCode, data, err := s.UnderlyingConn.ReadMessage()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		if opCode != gorilla.BinaryMessage && opCode != gorilla.TextMessage {
@@ -55,7 +57,7 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, error) {
 			continue
 		}
 
-		return data, err
+		return data, neffos.MessageType(opCode), err
 	}
 }
 

@@ -1,3 +1,4 @@
+// source: user_message.proto
 /**
  * @fileoverview
  * @enhanceable
@@ -166,9 +167,12 @@ proto.main.UserMessage.prototype.getUsername = function() {
 };
 
 
-/** @param {string} value */
+/**
+ * @param {string} value
+ * @return {!proto.main.UserMessage} returns this
+ */
 proto.main.UserMessage.prototype.setUsername = function(value) {
-  jspb.Message.setProto3StringField(this, 1, value);
+  return jspb.Message.setProto3StringField(this, 1, value);
 };
 
 
@@ -181,9 +185,12 @@ proto.main.UserMessage.prototype.getText = function() {
 };
 
 
-/** @param {string} value */
+/**
+ * @param {string} value
+ * @return {!proto.main.UserMessage} returns this
+ */
 proto.main.UserMessage.prototype.setText = function(value) {
-  jspb.Message.setProto3StringField(this, 2, value);
+  return jspb.Message.setProto3StringField(this, 2, value);
 };
 
 

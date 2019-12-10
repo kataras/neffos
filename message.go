@@ -96,8 +96,7 @@ type Message struct {
 	// If true then the writer's checks will not lock connectedNamespacesMutex or roomsMutex again. May be useful in the future, keep that solution.
 	locked bool
 
-	// if server or client should write using Binary message.
-	// This field is not filled on sending/receiving.
+	// if server or client should write using Binary message or if the incoming message was readen as binary.
 	SetBinary bool
 }
 
@@ -119,7 +118,7 @@ func (m *Message) isRoomLeft() bool {
 
 // Serialize returns this message's transport format.
 func (m Message) Serialize() []byte {
-	return serializeMessage(nil, m)
+	return serializeMessage(m)
 }
 
 type (
@@ -249,13 +248,6 @@ func genWaitStackExchange(wait string) string {
 	return string(wait[0]+waitComesFromStackExchange) + wait[1:]
 }
 
-type (
-	// MessageEncrypt type kept for future use when serializing a message.
-	MessageEncrypt func(out []byte) []byte
-	// MessageDecrypt type kept for future use when deserializing a message.
-	MessageDecrypt func(in []byte) []byte
-)
-
 var (
 	trueByte  = []byte{'1'}
 	falseByte = []byte{'0'}
@@ -285,7 +277,7 @@ func unescape(s string) string {
 	return strings.Replace(s, messageFieldSeparatorReplacement, messageSeparatorString, -1)
 }
 
-func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
+func serializeMessage(msg Message) (out []byte) {
 	if msg.IsNative && msg.wait == "" {
 		out = msg.Body
 	} else {
@@ -298,10 +290,6 @@ func serializeMessage(encrypt MessageEncrypt, msg Message) (out []byte) {
 			msg.wait = msg.FromExplicit
 		}
 		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
-	}
-
-	if encrypt != nil {
-		out = encrypt(out)
 	}
 
 	return out
@@ -352,11 +340,7 @@ func serializeOutput(wait, namespace, room, event string,
 // DeserializeMessage accepts a serialized message []byte
 // and returns a neffos Message.
 // When allowNativeMessages only Body is filled and check about message format is skipped.
-func DeserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
-	if decrypt != nil {
-		b = decrypt(b)
-	}
-
+func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
 	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
 
 	fromExplicit := ""
@@ -390,7 +374,7 @@ func DeserializeMessage(decrypt MessageDecrypt, b []byte, allowNativeMessages, s
 		IsLocal:           false,
 		IsNative:          allowNativeMessages && event == OnNativeMessage,
 		locked:            false,
-		SetBinary:         false,
+		SetBinary:         msgTyp == BinaryMessage,
 	}
 }
 

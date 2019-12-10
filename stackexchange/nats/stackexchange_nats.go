@@ -239,7 +239,7 @@ func (exc *StackExchange) getSubject(namespace, room, connID string) string {
 
 func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
 	return func(m *nats.Msg) {
-		msg := c.DeserializeMessage(m.Data)
+		msg := c.DeserializeMessage(neffos.TextMessage, m.Data)
 		msg.FromStackExchange = true
 
 		c.Write(msg)
@@ -321,7 +321,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 
 	ch := make(chan neffos.Message)
 	sub, err := subConn.Subscribe(token, func(m *nats.Msg) {
-		ch <- neffos.DeserializeMessage(nil, m.Data, false, false)
+		ch <- neffos.DeserializeMessage(neffos.TextMessage, m.Data, false, false)
 	})
 
 	if err != nil {

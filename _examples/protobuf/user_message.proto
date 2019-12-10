@@ -3,6 +3,6 @@ syntax="proto3";
 package main;
 
 message UserMessage {
-    string Username =1;
+    string Username = 1;
     string Text = 2;
 }
