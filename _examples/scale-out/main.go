@@ -34,6 +34,9 @@ import (
 	# http://localhost:8080 and
 	# http://localhost:9090
 	#
+	# Optionally, start Go client(s):
+	# go run main.go client :8080
+	#
 	# Start to send and receive room or private messages
 	# across two different neffos servers.
 */
@@ -47,16 +50,26 @@ const (
 
 func main() {
 	args := os.Args[1:]
-	if len(args) == 0 {
-		log.Fatalf("expected program to start with 'server' or 'client' argument")
-	}
-	side := args[0]
-
-	if len(args) >= 2 {
-		addr = args[1]
+	side := "server"
+	if len(args) >= 1 {
+		// log.Fatalf("expected program to start with 'server' or 'client' argument")
+		side = args[0]
 	}
 
 	scaleOutBackend := "redis"
+	port := os.Getenv("PORT")
+	if port != "" {
+		addr = ":" + port
+	}
+
+	if len(args) >= 2 {
+		if a := args[1]; a == "redis" || a == "nats" {
+			scaleOutBackend = a
+		} else {
+			addr = a
+		}
+	}
+
 	if len(args) == 3 {
 		scaleOutBackend = args[2]
 	}
@@ -64,16 +77,22 @@ func main() {
 	switch side {
 	case "server":
 		var stackExchange neffos.StackExchange
+
 		switch scaleOutBackend {
 		case "redis":
-			redisExc, err := redis.NewStackExchange(redis.Config{}, "MyChatApp")
+			redisAddr := os.Getenv("REDIS_ADDR")
+			redisExc, err := redis.NewStackExchange(redis.Config{Addr: redisAddr}, "MyChatApp")
 			if err != nil {
 				panic(err)
 			}
 
 			stackExchange = redisExc
 		case "nats":
-			natsExc, err := nats.NewStackExchange("0.0.0.0:4222")
+			natsAddr := os.Getenv("NATS_ADDR")
+			if natsAddr == "" {
+				natsAddr = "0.0.0.0:4222"
+			}
+			natsExc, err := nats.NewStackExchange(natsAddr)
 			//                                     ^^^^^
 			// more servers can be used with comma separated url input argument.
 			if err != nil {
@@ -277,6 +296,10 @@ func startClient() {
 		return
 	}
 	username := scanner.Text()
+
+	if addr[0] == ':' {
+		addr = "127.0.0.1" + addr
+	}
 
 	// init the websocket connection by dialing the server.
 	client, err := neffos.Dial(
