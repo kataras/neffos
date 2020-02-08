@@ -203,10 +203,7 @@ func (m *Message) IsWait(isClientConn bool) bool {
 	}
 
 	if m.wait[0] == waitComesFromClientPrefix {
-		if isClientConn {
-			return true
-		}
-		return false
+		return isClientConn
 	}
 
 	return true
@@ -233,9 +230,9 @@ func genWait(isClientConn bool) string {
 	return wait
 }
 
-func genWaitConfirmation(wait string) string {
-	return string(waitIsConfirmationPrefix) + wait
-}
+// func genWaitConfirmation(wait string) string {
+// 	return string(waitIsConfirmationPrefix) + wait
+// }
 
 func genWaitStackExchange(wait string) string {
 	if len(wait) < 2 {

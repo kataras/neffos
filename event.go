@@ -104,11 +104,8 @@ func IsCloseError(err error) bool {
 		}
 
 		if sysErr, ok := netErr.Err.(*os.SyscallError); ok {
-			if sysErr.Err == nil {
-				return false
-			}
+			return sysErr != nil
 			// return strings.HasSuffix(sysErr.Err.Error(), "closed by the remote host.")
-			return true
 		}
 
 		return strings.HasSuffix(err.Error(), "use of closed network connection")

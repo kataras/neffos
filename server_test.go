@@ -2,6 +2,8 @@ package neffos_test
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -12,6 +14,8 @@ import (
 
 	gobwas "github.com/kataras/neffos/gobwas"
 	gorilla "github.com/kataras/neffos/gorilla"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func runTestServer(addr string, connHandler neffos.ConnHandler, configureServer ...func(*neffos.Server)) func() error {
@@ -91,7 +95,7 @@ func TestServerBroadcastTo(t *testing.T) {
 
 	teardownClient1 := runTestClient("localhost:8080", events,
 		func(dialer string, client *neffos.Client) {
-			_, err := client.Connect(nil, namespace)
+			_, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -102,7 +106,7 @@ func TestServerBroadcastTo(t *testing.T) {
 
 	teardownClient2 := runTestClient("localhost:8080", events,
 		func(dialer string, client *neffos.Client) {
-			c, err := client.Connect(nil, namespace)
+			c, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,6 +136,8 @@ func TestServerAsk(t *testing.T) {
 		}
 	)
 
+	g := new(errgroup.Group)
+
 	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{}}, func(wsServer *neffos.Server) {
 		once := new(uint32)
 		wsServer.IDGenerator = func(w http.ResponseWriter, r *http.Request) string {
@@ -149,26 +155,28 @@ func TestServerAsk(t *testing.T) {
 			return nil
 		}
 
-		go func(wsServer *neffos.Server) {
+		worker := func() error {
 			wgWaitToAllConnect.Wait()
 
-			response, err := wsServer.Ask(nil, neffos.Message{
+			response, err := wsServer.Ask(context.TODO(), neffos.Message{
 				Namespace: "default",
 				Event:     "ask",
 				To:        to,
 			})
 
 			if err != nil {
-				t.Fatal(err)
+				return err
 			}
 
 			if !bytes.Equal(response.Body, expectResponse) {
-				t.Fatalf("expected response with body: %s but got: %s", string(expectResponse), string(response.Body))
+				return fmt.Errorf("expected response with body: %s but got: %s", string(expectResponse), string(response.Body))
 			}
 
 			wg.Done()
-		}(wsServer)
+			return nil
+		}
 
+		g.Go(worker)
 	})
 	defer teardownServer()
 
@@ -176,7 +184,7 @@ func TestServerAsk(t *testing.T) {
 
 	teardownClient1 := runTestClient("localhost:8080", clientEvents,
 		func(dialer string, client *neffos.Client) {
-			_, err := client.Connect(nil, namespace)
+			_, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,7 +194,7 @@ func TestServerAsk(t *testing.T) {
 
 	teardownClient2 := runTestClient("localhost:8080", clientEvents,
 		func(dialer string, client *neffos.Client) {
-			_, err := client.Connect(nil, namespace)
+			_, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -194,4 +202,7 @@ func TestServerAsk(t *testing.T) {
 	defer teardownClient2()
 
 	wg.Wait()
+	if err := g.Wait(); err != nil {
+		t.Fatal(err)
+	}
 }

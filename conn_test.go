@@ -2,6 +2,7 @@ package neffos_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"reflect"
 	"sync"
@@ -55,33 +56,33 @@ func TestConnect(t *testing.T) {
 			defer client.Close()
 
 			// should success, empty namespace naming is allowed and it's defined on both server and client-side.
-			c, err := client.Connect(nil, "")
+			_, err := client.Connect(context.TODO(), "")
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			// should success, namespace exists in server-side and it's defined on client-side.
-			c, err = client.Connect(nil, namespace)
+			_, err = client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			c, err = client.Connect(nil, onlyOnServer)
+			c, err := client.Connect(context.TODO(), onlyOnServer)
 			if err == nil || c != nil {
 				t.Fatalf("%s namespace connect should fail, namespace exists on server but not defined at client-side", onlyOnServer)
 			}
 
-			c, err = client.Connect(nil, onlyOnClient)
+			c, err = client.Connect(context.TODO(), onlyOnClient)
 			if err == nil || c != nil {
 				t.Fatalf("%s namespace connect should fail, namespace defined on client but not exists at server-side.", onlyOnClient)
 			}
 
-			c, err = client.Connect(nil, namespaceThatShouldErrOnServer)
+			_, err = client.Connect(context.TODO(), namespaceThatShouldErrOnServer)
 			if err != neffos.ErrBadNamespace {
 				t.Fatalf("%s namespace connect should give a remote error by the server of the neffos.ErrBadNamespace exactly (it's a typed error which its text is converted to error when deserialized) but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
-			c, err = client.Connect(nil, namespaceThatShouldErrOnClient)
+			_, err = client.Connect(context.TODO(), namespaceThatShouldErrOnClient)
 			if err != neffos.ErrBadNamespace {
 				t.Fatalf("%s namespace connect should give a local event's error by the client of the neffos.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
 			}
@@ -123,20 +124,20 @@ func TestAsk(t *testing.T) {
 	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: neffos.Events{}}, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
-		c, err := client.Connect(nil, namespace)
+		c, err := client.Connect(context.TODO(), namespace)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		for i := 1; i <= 5; i++ {
-			msg, err := c.Ask(nil, pingEvent, nil)
+			msg, err := c.Ask(context.TODO(), pingEvent, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			testMessage(dialer, i, msg)
 		}
 
-		msg, err := c.Ask(nil, pingEvent, nil)
+		msg, err := c.Ask(context.TODO(), pingEvent, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +187,7 @@ func TestOnAnyEvent(t *testing.T) {
 	}}, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
-		c, err := client.Connect(nil, namespace)
+		c, err := client.Connect(context.TODO(), namespace)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,7 +196,7 @@ func TestOnAnyEvent(t *testing.T) {
 		c.Emit(expectedMessage.Event, expectedMessage.Body)
 		wg.Wait()
 
-		msg, err := c.Ask(nil, expectedMessage.Event, expectedMessage.Body)
+		msg, err := c.Ask(context.TODO(), expectedMessage.Event, expectedMessage.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,7 +263,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 	err := runTestClient("localhost:8080", clientHandler, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
-		c, err := client.Connect(nil, namespace)
+		c, err := client.Connect(context.TODO(), namespace)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -315,7 +316,7 @@ func TestOnNativeMessageOnly(t *testing.T) {
 	err := runTestClient("localhost:8080", events, func(dialer string, client *neffos.Client) {
 		defer client.Close()
 
-		c, err := client.Connect(nil, namespace)
+		c, err := client.Connect(context.TODO(), namespace)
 		if err != nil {
 			t.Fatal(err)
 		}

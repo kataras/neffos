@@ -300,13 +300,9 @@ func (exc *StackExchange) publish(msg neffos.Message) bool {
 	b := msg.Serialize()
 
 	err := exc.publisher.Publish(subject, b)
-	if err != nil {
-		// Let's not add logging options, let
-		// any custom nats error handler alone.
-		return false
-	}
-
-	return true
+	// Let's not add logging options, let
+	// any custom nats error handler alone.
+	return err == nil
 }
 
 // Ask implements server Ask for nats. It blocks.

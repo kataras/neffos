@@ -226,7 +226,7 @@ func nameOf(structType reflect.Type) string {
 }
 
 func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, injector StructInjector) Events {
-	events := make(Events, 0)
+	events := make(Events)
 
 	typ := v.Type()
 
@@ -289,11 +289,9 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 			// set the NSConn dynamic field.
 			cacheElem.Field(nsConnFieldIndex).Set(reflect.ValueOf(c))
 
-			if staticFields != nil {
-				// set any static fields if default injector (see above).
-				for findex, fvalue := range staticFields {
-					cacheElem.Field(findex).Set(fvalue)
-				}
+			// set any static fields if default injector (see above).
+			for findex, fvalue := range staticFields {
+				cacheElem.Field(findex).Set(fvalue)
 			}
 
 			// Store it for the rest of the events inside

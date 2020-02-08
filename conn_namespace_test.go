@@ -2,6 +2,7 @@ package neffos_test
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"testing"
 
@@ -59,12 +60,12 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 
 	err := runTestClient("localhost:8080", events,
 		func(dialer string, client *neffos.Client) {
-			c, err := client.Connect(nil, namespace)
+			c, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			room, err := c.JoinRoom(nil, roomName)
+			room, err := c.JoinRoom(context.TODO(), roomName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +119,7 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 
 						wg.Done()
 					} else {
-						room, err := c.JoinRoom(nil, roomName)
+						room, err := c.JoinRoom(context.TODO(), roomName)
 						if err != nil {
 							return err
 						}
@@ -147,7 +148,7 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 
 	err := runTestClient("localhost:8080", events,
 		func(dialer string, client *neffos.Client) {
-			c, err := client.Connect(nil, namespace)
+			c, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
 			}

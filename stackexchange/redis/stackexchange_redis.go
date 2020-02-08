@@ -159,7 +159,7 @@ func (exc *StackExchange) run() {
 				channel := exc.getChannel(m.namespace, "", "")
 				sub.pubSub.PSubscribe(sub.msgCh, channel)
 				// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
-			} else {
+				//	} else {
 				// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
 			}
 		case m := <-exc.unsubscribe:

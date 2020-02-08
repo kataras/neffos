@@ -286,16 +286,15 @@ func (c *Conn) isAcknowledged() bool {
 }
 
 const (
-	ackBinary      = 'M' // byte(0x1) // comes from client to server at startup.
-	ackIDBinary    = 'A' // byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
-	ackOKBinary    = 'K' // byte(0x3) // comes from client to server when id received and set-ed.
+	ackBinary   = 'M' // byte(0x1) // comes from client to server at startup.
+	ackIDBinary = 'A' // byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
+	// ackOKBinary    = 'K' // byte(0x3) // comes from client to server when id received and set-ed.
 	ackNotOKBinary = 'H' // byte(0x4) // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 )
 
 var (
 	ackBinaryB      = []byte{ackBinary}
 	ackIDBinaryB    = []byte{ackIDBinary}
-	ackOKBinaryB    = []byte{ackOKBinary}
 	ackNotOKBinaryB = []byte{ackNotOKBinary}
 )
 
@@ -521,7 +520,7 @@ func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 		t := maxSyncWaitDur
 		for !c.isAcknowledged() {
 			time.Sleep(syncWaitDur)
-			t = -syncWaitDur
+			t -= syncWaitDur
 
 			if t <= maxSyncWaitDur/2 { // check once after 5 seconds if closed.
 				if c.IsClosed() {
@@ -925,20 +924,20 @@ func (c *Conn) writeEmptyReply(wait string) bool {
 	return c.write(genEmptyReplyToWait(wait), false)
 }
 
-func (c *Conn) waitConfirmation(wait string) {
-	wait = genWaitConfirmation(wait)
+// func (c *Conn) waitConfirmation(wait string) {
+// 	wait = genWaitConfirmation(wait)
 
-	ch := make(chan Message)
-	c.waitingMessagesMutex.Lock()
-	c.waitingMessages[wait] = ch
-	c.waitingMessagesMutex.Unlock()
-	<-ch
-}
+// 	ch := make(chan Message)
+// 	c.waitingMessagesMutex.Lock()
+// 	c.waitingMessages[wait] = ch
+// 	c.waitingMessagesMutex.Unlock()
+// 	<-ch
+// }
 
-func (c *Conn) sendConfirmation(wait string) {
-	wait = genWaitConfirmation(wait)
-	c.writeEmptyReply(wait)
-}
+// func (c *Conn) sendConfirmation(wait string) {
+// 	wait = genWaitConfirmation(wait)
+// 	c.writeEmptyReply(wait)
+// }
 
 // Ask method sends a message to the remote side and blocks until a response or an error received from the specific `Message.Event`.
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
