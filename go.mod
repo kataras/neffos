@@ -2,7 +2,7 @@ module github.com/kataras/neffos
 
 go 1.13
 
-replace github.com/mediocregopher/radix/v3 => github.com/neffos-contrib/radix/v3 v3.4.3
+replace github.com/mediocregopher/radix => github.com/neffos-contrib/radix/v3 v3.4.3
 
 require (
 	github.com/gobwas/httphead v0.0.0-20180130184737-2c6c146eadee // indirect
