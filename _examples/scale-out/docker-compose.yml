@@ -6,6 +6,8 @@ services:
     image: redis
   app1:
     build: .
+    depends_on:
+      - redis-server
     ports:
       - 8080:8080
     environment: 
@@ -13,6 +15,8 @@ services:
       - REDIS_ADDR=redis-server:6379
   app2:
     build: .
+    depends_on:
+      - redis-server
     ports:
       - 9090:9090
     environment: 
