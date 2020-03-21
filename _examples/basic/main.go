@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -169,26 +170,34 @@ func startServer() {
 }
 
 func startClient() {
-	scanner := bufio.NewScanner(os.Stdin)
+	var username string
+	fmt.Print("Please specify a unique name: ")
+	fmt.Scanln(&username)
 
-	fmt.Print("Please specify a username: ")
-	if !scanner.Scan() {
-		return
+	// init a gobwas(could use a gorilla one instead) Dialer.
+	options := gobwas.Options{
+		Header: gobwas.Header{
+			"X-Username": []string{username},
+		},
 	}
-	username := scanner.Text()
+	dialer := gobwas.Dialer(options)
 
 	// init the websocket connection by dialing the server.
 	client, err := neffos.Dial(
 		// Optional context cancelation and deadline for dialing.
-		nil,
+		context.TODO(),
 		// The underline dialer, can be also a gobwas.Dialer/DefautlDialer or a gorilla.Dialer/DefaultDialer.
 		// Here we wrap a custom gobwas dialer in order to send the username among, on the handshake state,
 		// see `startServer().server.IDGenerator`.
-		gobwas.Dialer(gobwas.Options{Header: gobwas.Header{"X-Username": []string{username}}}),
+		dialer,
 		// The endpoint, i.e ws://localhost:8080/path.
 		addr+endpoint,
 		// The namespaces and events, can be optionally shared with the server's.
-		serverAndClientEvents)
+		serverAndClientEvents,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	if err != nil {
 		log.Fatal(err)
@@ -208,6 +217,8 @@ func startClient() {
 	}
 
 	var room *neffos.Room
+
+	scanner := bufio.NewScanner(os.Stdin)
 
 askRoom:
 	if !serverJoinRoom {
