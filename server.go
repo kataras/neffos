@@ -430,7 +430,6 @@ func publishMessages(c *Conn, msgs []Message) bool {
 	for _, msg := range msgs {
 		if msg.from == c.ID() {
 			// if the message is not supposed to return back to any connection with this ID.
-
 			return true
 		}
 

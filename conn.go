@@ -588,9 +588,8 @@ func (c *Conn) Namespace(namespace string) *NSConn {
 }
 
 func (c *Conn) tryNamespace(in Message) (*NSConn, bool) {
-	// for atomic.LoadUint32(c.isConnectingProcess) > 0 {
-	// }
-	c.processes.get(in.Namespace).wait() // wait any `askConnect` process (if any) of that "in.Namespace".
+	c.processes.get(in.Namespace).Wait() // wait any `askConnect` process (if any) of that "in.Namespace".
+
 	ns := c.Namespace(in.Namespace)
 	if ns == nil {
 		// if _, canConnect := c.namespaces[msg.Namespace]; !canConnect {
@@ -610,8 +609,9 @@ func (c *Conn) tryNamespace(in Message) (*NSConn, bool) {
 // client#Connect
 func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error) {
 	p := c.processes.get(namespace)
-	p.start()      // block any `tryNamespace` with that "namespace".
-	defer p.stop() // unblock.
+	p.Start() // block any `tryNamespace` with that "namespace".
+
+	defer p.Done() // unblock.
 
 	//	defer c.processes.get(namespace).run()()
 	// for !atomic.CompareAndSwapUint32(c.isConnectingProcess, 0, 1) {

@@ -25,8 +25,9 @@ func (p *processes) get(name string) *process {
 
 	if entry == nil {
 		entry = &process{
-			v: new(uint32),
+			finished: make(chan struct{}),
 		}
+
 		p.locker.Lock()
 		p.entries[name] = entry
 		p.locker.Unlock()
@@ -38,30 +39,50 @@ func (p *processes) get(name string) *process {
 // process is used on connections on specific actions that needs to wait for an answer from the other side.
 // Take for example the `Conn#handleMessage.tryNamespace` which waits for `Conn#askConnect` to finish on the specific namespace.
 type process struct {
-	v *uint32
+	done uint32
+
+	finished chan struct{}
+	waiting  sync.WaitGroup
 }
 
-// func (p *process) run() func() {
-// 	p.start()
-// 	return p.stop
-// }
+// Signal closes the channel.
+func (p *process) Signal() {
+	// if !atomic.CompareAndSwapUint32(&p.running, 1, 0) {
+	// 	return // already finished.
+	// }
 
-func (p *process) start() {
-	for !atomic.CompareAndSwapUint32(p.v, 0, 1) {
-		// if already started then wait to finish.
+	close(p.finished)
+}
+
+// Finished returns the read-only channel of `finished`.
+// It gets fired when `Signal` is called.
+func (p *process) Finished() <-chan struct{} {
+	return p.finished
+}
+
+// Done calls the internal WaitGroup's `Done` method.
+func (p *process) Done() {
+	if !atomic.CompareAndSwapUint32(&p.done, 0, 1) {
+		return
 	}
+
+	p.waiting.Done()
 }
 
-func (p *process) stop() {
-	atomic.StoreUint32(p.v, 0)
-}
-
-func (p *process) wait() {
-	for p.isRunning() {
+// Wait waits on the internal `WaitGroup`. See `Done` too.
+func (p *process) Wait() {
+	if atomic.LoadUint32(&p.done) == 1 {
+		return
 	}
+	p.waiting.Wait()
 }
 
-// returns true if process didn't start yet or if stopped running.
-func (p *process) isRunning() bool {
-	return atomic.LoadUint32(p.v) > 0
+// Start makes future `Wait` calls to hold until `Done`.
+func (p *process) Start() {
+	p.waiting.Add(1)
+}
+
+// isDone reports whether process is finished.
+func (p *process) isDone() bool {
+	return atomic.LoadUint32(&p.done) == 1
 }

@@ -10,7 +10,7 @@ assignees: kataras
 **Describe the bug**
 A clear and concise description of what the bug is.
 
-> Note, if that bugs is a browser relative please report it at the [neffos.js](https://github.com/kataras/neffos.js) repository instead.
+> Note that if a bug is a browser-relative please report it at the [neffos.js](https://github.com/kataras/neffos.js) repository instead. Thanks!
 
 **To Reproduce**
 Steps to reproduce the behavior:
