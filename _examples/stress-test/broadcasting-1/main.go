@@ -10,7 +10,7 @@ import (
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gorilla"
 
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 )
 
 /*
