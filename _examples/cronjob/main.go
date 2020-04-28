@@ -17,11 +17,11 @@ import (
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gobwas"
 
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 )
 
 /*
-	$ go get github.com/robfig/cron
+	$ go get github.com/robfig/cron/v3@v3.0.1
 */
 
 const (
@@ -400,7 +400,7 @@ func startClient() {
 		userID = os.Args[2]
 	} else {
 		fmt.Print("Please specify a User ID: ")
-		fmt.Scanln(userID)
+		fmt.Scanf("%s", &userID)
 	}
 
 	client, err := neffos.Dial(

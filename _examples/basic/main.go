@@ -172,7 +172,7 @@ func startServer() {
 func startClient() {
 	var username string
 	fmt.Print("Please specify a unique name: ")
-	fmt.Scanln(&username)
+	fmt.Scanf("%s", &username)
 
 	// init a gobwas(could use a gorilla one instead) Dialer.
 	options := gobwas.Options{

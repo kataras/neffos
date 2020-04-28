@@ -116,7 +116,7 @@ func runClient() {
     for {
         fmt.Print(">> ")
         var date string
-        fmt.Scanln(&date)
+        fmt.Scanf("%s", &date)
 
         // Send to the server and wait reply to this message.
         response, err := c.Ask(ctx, "workday", []byte(date))
