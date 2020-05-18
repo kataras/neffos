@@ -155,6 +155,14 @@ func startServer() {
 
 		log.Printf("[%s] connected to the server.", c)
 
+		// If you want to close the connection immediately
+		// from server's OnConnect event then you should
+		// set the `FireDisconnectAlways` option to true.
+		// ws.FireDisconnectAlways = true:
+		//
+		// return fmt.Errorf("custome rror")
+		// c.Close()
+
 		// if returns non-nil error then it refuses the client to connect to the server.
 		return nil
 	}

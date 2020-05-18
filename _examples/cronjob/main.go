@@ -38,7 +38,7 @@ const (
 
 var (
 	// all these fields should located to your app's structure and designing
-	// however, for the shake of the example we will declare them as package-level variables here.
+	// however, for the sake of the example we will declare them as package-level variables here.
 	database        *dbMock
 	websocketServer *neffos.Server
 )
@@ -171,7 +171,7 @@ func (db *dbMock) removeNotification(nfID string) {
 }
 
 // Accept user ids and get all of their notifications as one notification slice.
-// Why? For the shake of the example, see the comments on the `pushNotifications`.
+// Why? For the sake of the example, see the comments on the `pushNotifications`.
 func (db *dbMock) getNotificationList(userIDs []string) (list []notification) {
 	db.mu.RLock()
 	for _, userID := range userIDs {
@@ -219,7 +219,7 @@ func upsertNotificationHandler(db *dbMock) http.HandlerFunc {
 }
 
 // Declare them on a custom struct of course,
-// they are exposed like that for the shake of the example.
+// they are exposed like that for the sake of the example.
 var (
 	// write access on websocketServer.OnConnect and OnDisconnect callbacks.
 	// read access on pushNotifications() function.

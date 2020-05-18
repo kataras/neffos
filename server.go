@@ -59,6 +59,13 @@ type Server struct {
 	// Therefore, if set to true,
 	// each broadcast call will publish its own message(s) by order.
 	SyncBroadcaster bool
+	// FireDisconnectAlways will allow firing the `OnDisconnect` server's
+	// event even if the connection wasimmediately closed from the `OnConnect` server's event
+	// through `Close()` or non-nil error.
+	// See https://github.com/kataras/neffos/issues/41
+	//
+	// Defaults to false.
+	FireDisconnectAlways bool
 
 	mu         sync.RWMutex
 	namespaces Namespaces
@@ -173,7 +180,7 @@ func (s *Server) start() {
 				// println("disconnect...")
 				if s.OnDisconnect != nil {
 					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
-					if !c.readiness.isReady() || (c.readiness.err != nil) {
+					if !s.FireDisconnectAlways && (!c.readiness.isReady() || (c.readiness.err != nil)) {
 						continue
 					}
 					s.OnDisconnect(c)

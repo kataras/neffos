@@ -57,7 +57,7 @@ func (s *clientConn) ChatResponse(msg neffos.Message) error {
 // $ go run main.go server
 // $ go run main.go client
 // # expected output:
-// # Echo back from server: Hello from client!Static Response Suffix for shake of the example.
+// # Echo back from server: Hello from client!Static Response Suffix for sake of the example.
 func main() {
 	neffos.EnableDebug(nil)
 
@@ -80,7 +80,7 @@ func main() {
 
 func startServer() {
 	controller := new(serverConn)
-	controller.SuffixResponse = "Static Response Suffix for shake of the example"
+	controller.SuffixResponse = "Static Response Suffix for sake of the example"
 
 	// This will convert a structure to neffos.Namespaces based on the struct's methods.
 	// The methods can be func(msg neffos.Message) error if the structure contains a *neffos.NSConn field,
