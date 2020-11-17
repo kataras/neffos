@@ -194,23 +194,16 @@ func (c *Conn) Set(key string, value interface{}) {
 }
 
 // Get retruns a value based on the given "key"
-// from this connection's store.
 func (c *Conn) Get(key string) interface{} {
 	c.storeMutex.RLock()
-	if c.store != nil {
-		// We could use reflection to receive a pointer and perform some type checks
-		// but let that for the caller, it knows better.
-		if v, ok := c.store[key]; ok {
-			c.storeMutex.RUnlock()
-			if v == nil {
-				return nil
-			}
-			return v
-		}
+	if c.store == nil {
+		c.storeMutex.RUnlock()
+		return nil
 	}
 
+	v := c.store[key]
 	c.storeMutex.RUnlock()
-	return nil
+	return v
 }
 
 // Increment works like `Set` method.
