@@ -1042,3 +1042,8 @@ func (c *Conn) Close() {
 func (c *Conn) IsClosed() bool {
 	return atomic.LoadUint32(c.closed) > 0
 }
+
+// GetServerConnID method gets connection's serverConnID
+func (c *Conn) GetServerConnID() string {
+	return c.serverConnID
+}
