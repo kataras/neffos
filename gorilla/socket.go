@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kataras/neffos"
+	neffos "github.com/WolffunGame/wolfsocket"
 
 	gorilla "github.com/gorilla/websocket"
 )
