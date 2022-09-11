@@ -1,4 +1,4 @@
-package neffos
+package wolfsocket
 
 import (
 	"context"

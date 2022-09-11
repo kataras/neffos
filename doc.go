@@ -10,4 +10,4 @@ Examples
    https://github.com/kataras/neffos/tree/master/_examples
 */
 
-package neffos
+package wolfsocket
