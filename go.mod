@@ -1,4 +1,4 @@
-module github.com/kataras/neffos
+module github.com/WolffunGame/wolfsocket
 
 go 1.18
 
