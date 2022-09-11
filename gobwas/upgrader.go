@@ -3,7 +3,7 @@ package gobwas
 import (
 	"net/http"
 
-	"github.com/kataras/neffos"
+	neffos "github.com/WolffunGame/wolfsocket"
 
 	gobwas "github.com/gobwas/ws"
 )
