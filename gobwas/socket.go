@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kataras/neffos"
+	neffos "github.com/WolffunGame/wolfsocket"
 
 	gobwas "github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"

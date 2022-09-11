@@ -5,24 +5,24 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kataras/neffos"
+	"github.com/WolffunGame/wolfsocket"
 
 	"github.com/nats-io/nats.go"
 )
 
-// StackExchange is a `neffos.StackExchange` for nats
+// StackExchange is a `wolfsocket.StackExchange` for nats
 // based on https://nats-io.github.io/docs/developer/tutorials/pubsub.html.
 type StackExchange struct {
 	// options holds the nats options for clients.
 	// Defaults to the `nats.GetDefaultOptions()` which
 	// can be overridden by the `With` function on `NewStackExchange`.
 	opts nats.Options
-	// If you use the same nats server instance for multiple neffos apps,
+	// If you use the same nats server instance for multiple wolfsocket apps,
 	// set this to different values across your apps.
 	SubjectPrefix string
 
 	publisher   *nats.Conn
-	subscribers map[*neffos.Conn]*subscriber
+	subscribers map[*wolfsocket.Conn]*subscriber
 
 	addSubscriber chan *subscriber
 	subscribe     chan subscribeAction
@@ -30,32 +30,32 @@ type StackExchange struct {
 	delSubscriber chan closeAction
 }
 
-var _ neffos.StackExchange = (*StackExchange)(nil)
+var _ wolfsocket.StackExchange = (*StackExchange)(nil)
 
 type (
 	subscriber struct {
-		conn    *neffos.Conn
+		conn    *wolfsocket.Conn
 		subConn *nats.Conn
 
 		// To unsubscribe a connection per namespace, set on subscribe channel.
 		// Key is the subject pattern, with lock for any case, although
-		// they shouldn't execute in parallel from neffos conn itself.
+		// they shouldn't execute in parallel from wolfsocket conn itself.
 		subscriptions map[string]*nats.Subscription
 		mu            sync.RWMutex
 	}
 
 	subscribeAction struct {
-		conn      *neffos.Conn
+		conn      *wolfsocket.Conn
 		namespace string
 	}
 
 	unsubscribeAction struct {
-		conn      *neffos.Conn
+		conn      *wolfsocket.Conn
 		namespace string
 	}
 
 	closeAction struct {
-		conn *neffos.Conn
+		conn *wolfsocket.Conn
 	}
 )
 
@@ -108,7 +108,7 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 		url = nats.DefaultURL
 	}
 	opts.Url = url
-	// TODO: export the neffos.debugEnabled
+	// TODO: export the wolfsocket.debugEnabled
 	// and set that:
 	// opts.Verbose = true
 
@@ -139,10 +139,10 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 
 	exc := &StackExchange{
 		opts:          opts,
-		SubjectPrefix: "neffos",
+		SubjectPrefix: "wolfsocket",
 		publisher:     pubConn,
 
-		subscribers:   make(map[*neffos.Conn]*subscriber),
+		subscribers:   make(map[*wolfsocket.Conn]*subscriber),
 		addSubscriber: make(chan *subscriber),
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
@@ -158,25 +158,25 @@ func (exc *StackExchange) run() {
 	for {
 		select {
 		case s := <-exc.addSubscriber:
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
+			// wolfsocket.Debugf("[%s] added to potential subscribers", s.conn.ID())
 			exc.subscribers[s.conn] = s
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				if sub.subConn.IsClosed() {
-					// neffos.Debugf("[%s] has an unexpected nats connection closing on subscribe", m.conn.ID())
+					// wolfsocket.Debugf("[%s] has an unexpected nats connection closing on subscribe", m.conn.ID())
 					delete(exc.subscribers, m.conn)
 					continue
 				}
 
 				subject := exc.getSubject(m.namespace, "", "")
-				// neffos.Debugf("[%s] subscribed to [%s]", m.conn.ID(), subject)
+				// wolfsocket.Debugf("[%s] subscribed to [%s]", m.conn.ID(), subject)
 				subscription, err := sub.subConn.Subscribe(subject, makeMsgHandler(sub.conn))
 				if err != nil {
 					continue
 				}
 				sub.subConn.Flush()
 				if err = sub.subConn.LastError(); err != nil {
-					// neffos.Debugf("[%s] OnSubscribe [%s] Last Error: %v", m.conn, subject, err)
+					// wolfsocket.Debugf("[%s] OnSubscribe [%s] Last Error: %v", m.conn, subject, err)
 					continue
 				}
 
@@ -190,13 +190,13 @@ func (exc *StackExchange) run() {
 		case m := <-exc.unsubscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				if sub.subConn.IsClosed() {
-					// neffos.Debugf("[%s] has an unexpected nats connection closing on unsubscribe", m.conn.ID())
+					// wolfsocket.Debugf("[%s] has an unexpected nats connection closing on unsubscribe", m.conn.ID())
 					delete(exc.subscribers, m.conn)
 					continue
 				}
 
 				subject := exc.getSubject(m.namespace, "", "")
-				// neffos.Debugf("[%s] unsubscribed from [%s]", subject)
+				// wolfsocket.Debugf("[%s] unsubscribed from [%s]", subject)
 				if sub.subscriptions == nil {
 					continue
 				}
@@ -210,7 +210,7 @@ func (exc *StackExchange) run() {
 			}
 		case m := <-exc.delSubscriber:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				// neffos.Debugf("[%s] disconnected", m.conn.ID())
+				// wolfsocket.Debugf("[%s] disconnected", m.conn.ID())
 				if sub.subConn.IsConnected() {
 					sub.subConn.Close()
 				}
@@ -237,9 +237,9 @@ func (exc *StackExchange) getSubject(namespace, room, connID string) string {
 	return exc.SubjectPrefix + "." + namespace
 }
 
-func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
+func makeMsgHandler(c *wolfsocket.Conn) nats.MsgHandler {
 	return func(m *nats.Msg) {
-		msg := c.DeserializeMessage(neffos.TextMessage, m.Data)
+		msg := c.DeserializeMessage(wolfsocket.TextMessage, m.Data)
 		msg.FromStackExchange = true
 
 		c.Write(msg)
@@ -247,13 +247,13 @@ func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
 }
 
 // OnConnect prepares the connection nats subscriber
-// and subscribes to itself for direct neffos messages.
-// It's called automatically after the neffos server's OnConnect (if any)
+// and subscribes to itself for direct wolfsocket messages.
+// It's called automatically after the wolfsocket server's OnConnect (if any)
 // on incoming client connections.
-func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
+func (exc *StackExchange) OnConnect(c *wolfsocket.Conn) error {
 	subConn, err := exc.opts.Connect()
 	if err != nil {
-		// neffos.Debugf("[%s] OnConnect Error: %v", c, err)
+		// wolfsocket.Debugf("[%s] OnConnect Error: %v", c, err)
 		return err
 	}
 
@@ -261,7 +261,7 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	// unsubscribes automatically on close.
 	_, err = subConn.Subscribe(selfSubject, makeMsgHandler(c))
 	if err != nil {
-		// neffos.Debugf("[%s] OnConnect.SelfSubscribe Error: %v", c, err)
+		// wolfsocket.Debugf("[%s] OnConnect.SelfSubscribe Error: %v", c, err)
 		return err
 	}
 
@@ -269,7 +269,7 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 
 	if err = subConn.LastError(); err != nil {
 		// maybe an invalid subject, send back to the client which will window.alert it.
-		// neffos.Debugf("[%s] OnConnect.SelfSubscribe Last Error: %v", c, err)
+		// wolfsocket.Debugf("[%s] OnConnect.SelfSubscribe Last Error: %v", c, err)
 		return err
 	}
 
@@ -284,8 +284,8 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 }
 
 // Publish publishes messages through nats.
-// It's called automatically on neffos broadcasting.
-func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
+// It's called automatically on wolfsocket broadcasting.
+func (exc *StackExchange) Publish(msgs []wolfsocket.Message) bool {
 	for _, msg := range msgs {
 		if !exc.publish(msg) {
 			return false
@@ -295,7 +295,7 @@ func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	return true
 }
 
-func (exc *StackExchange) publish(msg neffos.Message) bool {
+func (exc *StackExchange) publish(msg wolfsocket.Message) bool {
 	subject := exc.getSubject(msg.Namespace, msg.Room, msg.To)
 	b := msg.Serialize()
 
@@ -306,7 +306,7 @@ func (exc *StackExchange) publish(msg neffos.Message) bool {
 }
 
 // Ask implements server Ask for nats. It blocks.
-func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
+func (exc *StackExchange) Ask(ctx context.Context, msg wolfsocket.Message, token string) (response wolfsocket.Message, err error) {
 	// for some reason we can't use the exc.publisher.Subscribe,
 	// so create a new connection for subscription which will be terminated on message receive or timeout.
 	subConn, err := exc.opts.Connect()
@@ -315,9 +315,9 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 		return
 	}
 
-	ch := make(chan neffos.Message)
+	ch := make(chan wolfsocket.Message)
 	sub, err := subConn.Subscribe(token, func(m *nats.Msg) {
-		ch <- neffos.DeserializeMessage(neffos.TextMessage, m.Data, false, false)
+		ch <- wolfsocket.DeserializeMessage(wolfsocket.TextMessage, m.Data, false, false)
 	})
 
 	if err != nil {
@@ -328,7 +328,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 	defer subConn.Close()
 
 	if !exc.publish(msg) {
-		return response, neffos.ErrWrite
+		return response, wolfsocket.ErrWrite
 	}
 
 	select {
@@ -340,7 +340,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 }
 
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
-func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
+func (exc *StackExchange) NotifyAsk(msg wolfsocket.Message, token string) error {
 	msg.ClearWait()
 	err := exc.publisher.Publish(token, msg.Serialize())
 	if err != nil {
@@ -351,8 +351,8 @@ func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 }
 
 // Subscribe subscribes to a specific namespace,
-// it's called automatically on neffos namespace connected.
-func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
+// it's called automatically on wolfsocket namespace connected.
+func (exc *StackExchange) Subscribe(c *wolfsocket.Conn, namespace string) {
 	exc.subscribe <- subscribeAction{
 		conn:      c,
 		namespace: namespace,
@@ -360,8 +360,8 @@ func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
-// it's called automatically on neffos namespace disconnect.
-func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
+// it's called automatically on wolfsocket namespace disconnect.
+func (exc *StackExchange) Unsubscribe(c *wolfsocket.Conn, namespace string) {
 	exc.unsubscribe <- unsubscribeAction{
 		conn:      c,
 		namespace: namespace,
@@ -374,6 +374,6 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // closes the internal read messages channel.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
-func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
+func (exc *StackExchange) OnDisconnect(c *wolfsocket.Conn) {
 	exc.delSubscriber <- closeAction{conn: c}
 }
