@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/kataras/neffos"
+	"github.com/WolffunGame/wolfsocket"
 
 	"github.com/mediocregopher/radix/v3"
 )
@@ -32,14 +32,14 @@ type Config struct {
 	MaxActive int
 }
 
-// StackExchange is a `neffos.StackExchange` for redis.
+// StackExchange is a `wolfsocket.StackExchange` for redis.
 type StackExchange struct {
 	channel string
 
 	pool     *radix.Pool
 	connFunc radix.ConnFunc
 
-	subscribers map[*neffos.Conn]*subscriber
+	subscribers map[*wolfsocket.Conn]*subscriber
 
 	addSubscriber chan *subscriber
 	subscribe     chan subscribeAction
@@ -49,27 +49,27 @@ type StackExchange struct {
 
 type (
 	subscriber struct {
-		conn   *neffos.Conn
+		conn   *wolfsocket.Conn
 		pubSub radix.PubSubConn
 		msgCh  chan<- radix.PubSubMessage
 	}
 
 	subscribeAction struct {
-		conn      *neffos.Conn
+		conn      *wolfsocket.Conn
 		namespace string
 	}
 
 	unsubscribeAction struct {
-		conn      *neffos.Conn
+		conn      *wolfsocket.Conn
 		namespace string
 	}
 
 	closeAction struct {
-		conn *neffos.Conn
+		conn *wolfsocket.Conn
 	}
 )
 
-var _ neffos.StackExchange = (*StackExchange)(nil)
+var _ wolfsocket.StackExchange = (*StackExchange)(nil)
 
 // NewStackExchange returns a new redis StackExchange.
 // The "channel" input argument is the channel prefix for publish and subscribe.
@@ -129,14 +129,14 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 	exc := &StackExchange{
 		pool:     pool,
 		connFunc: connFunc,
-		// If you are using one redis server for multiple nefos servers,
-		// use a different channel for each neffos server.
+		// If you are using one redis server for multiple wolfsocket servers,
+		// use a different channel for each wolfsocket server.
 		// Otherwise a message sent from one server to all of its own clients will go
-		// to all clients of all nefos servers that use the redis server.
+		// to all clients of all wolfsocket servers that use the redis server.
 		// We could use multiple channels but overcomplicate things here.
 		channel: channel,
 
-		subscribers:   make(map[*neffos.Conn]*subscriber),
+		subscribers:   make(map[*wolfsocket.Conn]*subscriber),
 		addSubscriber: make(chan *subscriber),
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
@@ -153,24 +153,24 @@ func (exc *StackExchange) run() {
 		select {
 		case s := <-exc.addSubscriber:
 			exc.subscribers[s.conn] = s
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
+			// wolfsocket.Debugf("[%s] added to potential subscribers", s.conn.ID())
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				channel := exc.getChannel(m.namespace, "", "")
 				sub.pubSub.PSubscribe(sub.msgCh, channel)
-				// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
+				// wolfsocket.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
 				//	} else {
-				// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
+				// wolfsocket.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
 			}
 		case m := <-exc.unsubscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				channel := exc.getChannel(m.namespace, "", "")
-				// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
+				// wolfsocket.Debugf("[%s] unsubscribed from [%s]", channel)
 				sub.pubSub.PUnsubscribe(sub.msgCh, channel)
 			}
 		case m := <-exc.delSubscriber:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				// neffos.Debugf("[%s] disconnected", m.conn.ID())
+				// wolfsocket.Debugf("[%s] disconnected", m.conn.ID())
 				sub.pubSub.Close()
 				close(sub.msgCh)
 				delete(exc.subscribers, m.conn)
@@ -195,15 +195,15 @@ func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 }
 
 // OnConnect prepares the connection redis subscriber
-// and subscribes to itself for direct neffos messages.
-// It's called automatically after the neffos server's OnConnect (if any)
+// and subscribes to itself for direct wolfsocket messages.
+// It's called automatically after the wolfsocket server's OnConnect (if any)
 // on incoming client connections.
-func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
+func (exc *StackExchange) OnConnect(c *wolfsocket.Conn) error {
 	redisMsgCh := make(chan radix.PubSubMessage)
 	go func() {
 		for redisMsg := range redisMsgCh {
-			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
-			msg := c.DeserializeMessage(neffos.TextMessage, redisMsg.Message)
+			// wolfsocket.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
+			msg := c.DeserializeMessage(wolfsocket.TextMessage, redisMsg.Message)
 			msg.FromStackExchange = true
 
 			c.Write(msg)
@@ -225,8 +225,8 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 }
 
 // Publish publishes messages through redis.
-// It's called automatically on neffos broadcasting.
-func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
+// It's called automatically on wolfsocket broadcasting.
+func (exc *StackExchange) Publish(msgs []wolfsocket.Message) bool {
 	for _, msg := range msgs {
 		if !exc.publish(msg) {
 			return false
@@ -236,10 +236,10 @@ func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	return true
 }
 
-func (exc *StackExchange) publish(msg neffos.Message) bool {
+func (exc *StackExchange) publish(msg wolfsocket.Message) bool {
 	// channel := exc.getMessageChannel(c.ID(), msg)
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
-	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
+	// wolfsocket.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
 
 	err := exc.publishCommand(channel, msg.Serialize())
 	return err == nil
@@ -251,7 +251,7 @@ func (exc *StackExchange) publishCommand(channel string, b []byte) error {
 }
 
 // Ask implements the server Ask feature for redis. It blocks until response.
-func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
+func (exc *StackExchange) Ask(ctx context.Context, msg wolfsocket.Message, token string) (response wolfsocket.Message, err error) {
 	sub := radix.PersistentPubSub("", "", exc.connFunc)
 	msgCh := make(chan radix.PubSubMessage)
 	err = sub.Subscribe(msgCh, token)
@@ -261,14 +261,14 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 	defer sub.Close()
 
 	if !exc.publish(msg) {
-		return response, neffos.ErrWrite
+		return response, wolfsocket.ErrWrite
 	}
 
 	select {
 	case <-ctx.Done():
 		err = ctx.Err()
 	case redisMsg := <-msgCh:
-		response = neffos.DeserializeMessage(neffos.TextMessage, redisMsg.Message, false, false)
+		response = wolfsocket.DeserializeMessage(wolfsocket.TextMessage, redisMsg.Message, false, false)
 		err = response.Err
 	}
 
@@ -276,14 +276,14 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 }
 
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
-func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
+func (exc *StackExchange) NotifyAsk(msg wolfsocket.Message, token string) error {
 	msg.ClearWait()
 	return exc.publishCommand(token, msg.Serialize())
 }
 
 // Subscribe subscribes to a specific namespace,
-// it's called automatically on neffos namespace connected.
-func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
+// it's called automatically on wolfsocket namespace connected.
+func (exc *StackExchange) Subscribe(c *wolfsocket.Conn, namespace string) {
 	exc.subscribe <- subscribeAction{
 		conn:      c,
 		namespace: namespace,
@@ -291,8 +291,8 @@ func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
-// it's called automatically on neffos namespace disconnect.
-func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
+// it's called automatically on wolfsocket namespace disconnect.
+func (exc *StackExchange) Unsubscribe(c *wolfsocket.Conn, namespace string) {
 	exc.unsubscribe <- unsubscribeAction{
 		conn:      c,
 		namespace: namespace,
@@ -305,6 +305,6 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // closes the internal read messages channel.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
-func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
+func (exc *StackExchange) OnDisconnect(c *wolfsocket.Conn) {
 	exc.delSubscriber <- closeAction{conn: c}
 }
