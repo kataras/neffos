@@ -203,7 +203,7 @@ func (exc *StackExchange) OnConnect(c *wolfsocket.Conn) error {
 	go func() {
 		for redisMsg := range redisMsgCh {
 			// wolfsocket.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
-			msg := c.DeserializeMessage(wolfsocket.TextMessage, redisMsg.Message)
+			msg := c.DeserializeMessage(wolfsocket.BinaryMessage, redisMsg.Message)
 			msg.FromStackExchange = true
 
 			c.Write(msg)
