@@ -6,7 +6,7 @@
 
 ## About neffos
 
-Neffos is a cross-platform real-time framework with expressive, elegant API written in [Go](https://golang.org). Neffos takes the pain out of development by easing common tasks used in real-time backend and frontend applications such as:
+Neffos is a cross-platform real-time framework with expressive, elegant API written in [Go](https://go.dev). Neffos takes the pain out of development by easing common tasks used in real-time backend and frontend applications such as:
 
 - Scale-out using redis or nats[*](_examples/scale-out)
 - Adaptive request upgradation and server dialing

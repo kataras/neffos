@@ -3,7 +3,7 @@
 ## Requirements
 
 - [NPM](https://nodejs.org)
-- [Go Programming Language](https://golang.org/dl)
+- [Go Programming Language](https://go.dev/dl/)
 
 ## How to run
 
