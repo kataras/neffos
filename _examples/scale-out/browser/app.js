@@ -1,4 +1,4 @@
-const neffos = require('neffos.js');
+import * as neffos from "neffos.js";
 
 var scheme = document.location.protocol == "https:" ? "wss" : "ws";
 var port = document.location.port ? ":" + document.location.port : "";

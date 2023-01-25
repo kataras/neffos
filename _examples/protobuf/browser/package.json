@@ -1,19 +1,20 @@
 {
     "name": "neffos.js.example.browserify.protobuf",
     "version": "0.0.1",
+    "type": "commonjs",
     "scripts": {
-        "browserify": "browserify ./app.js -o ./bundle.js",
-        "minifyES6": "minify ./bundle.js --outFile ./bundle.js",
-        "build": "npm run-script browserify && npm run-script minifyES6",
-        "build-fast": "npm run-script browserify"
+        "browserify": "browserify ./app.js -p esmify -o ./bundle.js",
+        "minifyES6": "minify --sourceType=module ./bundle.js --outFile ./bundle.js",
+        "build": "npm run-script browserify && npm run-script minifyES6"
     },
     "dependencies": {
-        "google-protobuf": "^3.11.1",
-        "neffos.js": "^0.1.25",
-        "protobufjs": "~6.8.8"
+        "google-protobuf": "latest",
+        "neffos.js": "^0.1.29",
+        "protobufjs": "latest"
     },
     "devDependencies": {
-        "browserify": "^16.2.3",
-        "babel-minify": "^0.5.0"
+        "babel-minify": "latest",
+        "browserify": "latest",
+        "esmify": "^2.1.1"
     }
 }

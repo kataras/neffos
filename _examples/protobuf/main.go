@@ -14,7 +14,6 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-//
 // Generate proto for Go:
 // protoc --go_out=. user_message.proto
 // go build
@@ -31,7 +30,6 @@ import (
 // users of this library can use any format to unmarshal on read and marshal to send;
 // protocolbuffers, encoding/json, encoding/xml and etc.
 //
-//
 // Browser support:
 // https://github.com/protocolbuffers/protobuf/tree/master/js#commonjs-imports
 // https://github.com/protobufjs/protobuf.js#nodejs (with browserify, we use that in ./browser example)
@@ -40,7 +38,6 @@ import (
 // Generate proto for JavaScript:
 // protoc --js_out=import_style=commonjs,binary:./browser user_message.proto
 // See `./browser/app.js` for more.
-//
 const (
 	addr      = "localhost:8080"
 	endpoint  = "/echo"

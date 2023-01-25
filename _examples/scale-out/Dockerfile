@@ -2,7 +2,7 @@ FROM golang:latest AS builder
 RUN apt-get update
 # Install nodejs.
 RUN apt-get install curl && \
-    curl -sL https://deb.nodesource.com/setup_13.x | bash && \
+    curl -sL https://deb.nodesource.com/setup_19.x | bash && \
     apt-get install nodejs
 WORKDIR /go/src/app
 # Caching node modules.

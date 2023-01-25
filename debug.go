@@ -95,10 +95,11 @@ type dargs []interface{}
 // to the printer defined on `EnableDebug`.
 // Runs only on debug mode.
 // Usage:
-// DebugEach(staticFields, func(idx int, f reflect.Value) {
-// 	fval := f.Interface()
-// 	Debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", typ.Name(), typ.Field(idx).Name, fval, fval)
-// })
+//
+//	DebugEach(staticFields, func(idx int, f reflect.Value) {
+//		fval := f.Interface()
+//		Debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", typ.Name(), typ.Field(idx).Name, fval, fval)
+//	})
 func DebugEach(mapOrSlice interface{}, onDebugVisitor interface{}) {
 	if !debugEnabled() || onDebugVisitor == nil {
 		return

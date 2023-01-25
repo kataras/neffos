@@ -1,4 +1,4 @@
-const neffos = require('neffos.js');
+import * as neffos from "neffos.js";
 
 var scheme = document.location.protocol == "https:" ? "wss" : "ws";
 var port = document.location.port ? ":" + document.location.port : "";
@@ -42,7 +42,7 @@ async function handleNamespaceConnectedConn(nsConn) {
                 roomToJoin = "";
                 break;
             default:
-                const userMsg = new UserMessage(nsConn.conn.ID, toID, input);
+                const userMsg = new UserMessage(nsConn.conn.ID, input);
 
                 if (roomToJoin !== "") {
                     nsConn.room(roomToJoin).emit("chat", neffos.marshal(userMsg))

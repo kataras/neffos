@@ -477,8 +477,9 @@ func (s stringerValue) String() string { return s.v }
 //
 // Example Code:
 // nsConn.Conn.Server().Broadcast(
-//	neffos.Exclude("connection_id_here"),
-//  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
+//
+//		neffos.Exclude("connection_id_here"),
+//	 neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
 func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 
 // Broadcast method is fast and does not block any new incoming connection by-default,
@@ -492,8 +493,9 @@ func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 //
 // Example Code:
 // nsConn.Conn.Server().Broadcast(
-//	nsConn OR nil,
-//  neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
+//
+//		nsConn OR nil,
+//	 neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
 //
 // Note that it if `StackExchange` is nil then its default behavior
 // doesn't wait for a publish to complete to all clients before any
