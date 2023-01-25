@@ -9,7 +9,7 @@
     },
     "dependencies": {
         "google-protobuf": "latest",
-        "neffos.js": "^0.1.29",
+        "neffos.js": "^0.1.31",
         "protobufjs": "latest"
     },
     "devDependencies": {

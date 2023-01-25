@@ -9,7 +9,7 @@
         "build": "npm run-script browserify && npm run-script minifyES6"
     },
     "dependencies": {
-        "neffos.js": "^0.1.29"
+        "neffos.js": "^0.1.31"
     },
     "devDependencies": {
         "babel-minify": "^0.5.2",
