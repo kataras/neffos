@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -115,12 +116,12 @@ func startClient() {
 		// or leave it empty for empty namespace.
 		SetNamespace("default")
 
-	client, err := neffos.Dial(nil, gobwas.DefaultDialer, "ws://localhost:8080", events)
+	client, err := neffos.Dial(context.TODO(), gobwas.DefaultDialer, "ws://localhost:8080", events)
 	if err != nil {
 		panic(err)
 	}
 
-	c, err := client.Connect(nil, "default")
+	c, err := client.Connect(context.TODO(), "default")
 	if err != nil {
 		panic(err)
 	}

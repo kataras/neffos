@@ -950,6 +950,7 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 
 	if ctx == nil {
 		ctx = context.TODO()
+	} else if ctx == context.TODO() {
 	} else {
 		if deadline, has := ctx.Deadline(); has {
 			if deadline.Before(time.Now().Add(-1 * time.Second)) {

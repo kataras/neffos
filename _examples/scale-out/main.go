@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -131,7 +132,7 @@ func (u *userMessage) Unmarshal(b []byte) error {
 }
 
 func askClient(server *neffos.Server, toID string) string {
-	response, err := server.Ask(nil, neffos.Message{
+	response, err := server.Ask(context.TODO(), neffos.Message{
 		To:        toID,
 		Namespace: namespace,
 		Event:     "onAsk",
@@ -304,7 +305,7 @@ func startClient() {
 	// init the websocket connection by dialing the server.
 	client, err := neffos.Dial(
 		// Optional context cancelation and deadline for dialing.
-		nil,
+		context.TODO(),
 		// The underline dialer, can be also a gobwas.Dialer/DefautlDialer or a gorilla.Dialer/DefaultDialer.
 		// Here we wrap a custom gobwas dialer in order to send the username among, on the handshake state,
 		// see `startServer().server.IDGenerator`.
@@ -326,7 +327,7 @@ func startClient() {
 	}()
 
 	// connect to the "default" namespace.
-	c, err := client.Connect(nil, namespace)
+	c, err := client.Connect(context.TODO(), namespace)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -337,7 +338,7 @@ askRoom:
 	}
 	roomToJoin := scanner.Text()
 
-	room, err := c.JoinRoom(nil, roomToJoin)
+	room, err := c.JoinRoom(context.TODO(), roomToJoin)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -357,7 +358,7 @@ askRoom:
 		}
 
 		if text == "leave" {
-			room.Leave(nil)
+			room.Leave(context.TODO())
 			goto askRoom
 		}
 

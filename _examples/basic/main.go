@@ -49,7 +49,7 @@ var serverAndClientEvents = neffos.Namespaces{
 			log.Printf("[%s] connected to namespace [%s].", c, msg.Namespace)
 
 			if !c.Conn.IsClient() && serverJoinRoom {
-				c.JoinRoom(nil, serverRoomName)
+				c.JoinRoom(context.TODO(), serverRoomName)
 			}
 
 			return nil
@@ -171,8 +171,8 @@ func startServer() {
 		log.Printf("[%s] disconnected from the server.", c)
 	}
 
-	log.Printf("Listening on: %s\nPress CTRL/CMD+C to interrupt.", addr)
-	http.Handle("/", http.FileServer(http.Dir("./browser")))
+	log.Printf("Listening on: http://%s/browserify\nPress CTRL/CMD+C to interrupt.", addr)
+	http.Handle("/", http.FileServer(http.Dir("./browserify")))
 	http.Handle(endpoint, server)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
@@ -219,7 +219,7 @@ func startClient() {
 	}()
 
 	// connect to the "default" namespace.
-	c, err := client.Connect(nil, namespace)
+	c, err := client.Connect(context.TODO(), namespace)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -236,7 +236,7 @@ askRoom:
 		}
 		roomToJoin := scanner.Text()
 
-		room, err = c.JoinRoom(nil, roomToJoin)
+		room, err = c.JoinRoom(context.TODO(), roomToJoin)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -262,7 +262,7 @@ askRoom:
 		}
 
 		if text == "leave" {
-			room.Leave(nil)
+			room.Leave(context.TODO())
 			if !serverJoinRoom {
 				goto askRoom
 			}

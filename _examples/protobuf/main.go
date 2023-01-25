@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,11 +12,11 @@ import (
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gorilla"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 // Generate proto for Go:
-// protoc --go_out=. user_message.proto
+// protoc --go_out=. --go_opt=paths=source_relative user_message.proto
 // go build
 //
 // Windows
@@ -136,7 +137,7 @@ const testHelloBinaryWithSeps = false
 
 func startClient() {
 	// init the websocket connection by dialing the server.
-	client, err := neffos.Dial(nil, gorilla.DefaultDialer, addr+endpoint, serverAndClientEvents)
+	client, err := neffos.Dial(context.TODO(), gorilla.DefaultDialer, addr+endpoint, serverAndClientEvents)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func startClient() {
 	}()
 
 	// connect to the "default" namespace.
-	c, err := client.Connect(nil, namespace)
+	c, err := client.Connect(context.TODO(), namespace)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -6,3 +6,5 @@ message UserMessage {
     string Username = 1;
     string Text = 2;
 }
+
+option go_package = "/main";

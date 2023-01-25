@@ -32,7 +32,7 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 							t.Fatalf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
 						}
 
-						room.Leave(nil)
+						room.Leave(context.TODO())
 
 						wg.Done()
 					} else {
@@ -115,7 +115,7 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 							t.Fatalf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
 						}
 
-						room.Leave(nil)
+						room.Leave(context.TODO())
 
 						wg.Done()
 					} else {

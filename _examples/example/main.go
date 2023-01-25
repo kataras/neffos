@@ -38,13 +38,12 @@ var handler = neffos.WithTimeout{
 					return nil
 				}
 
-				err := fmt.Errorf("Server says that you are not allowed here")
-				/* comment this to see that the server-side will
+				/* Uncomment this to see that the server-side will
 				no allow to for this socket to be connected to the "default" namespace
 				and an error will be logged to the client. */
-				err = nil
+				// return fmt.Errorf("Server says that you are not allowed here")
 
-				return err
+				return nil
 			},
 			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
 				if !c.Conn.IsClient() {
@@ -61,22 +60,18 @@ var handler = neffos.WithTimeout{
 					return nil
 				}
 
-				err := fmt.Errorf("Server says that you are not allowed to be disconnected yet")
-				/* here if you comment this, the return error will mean that
+				/* here if you uncomment this, the return error will mean that
 				the disconnect message from client-side will be ignored from the server
 				and the connection would be still available to send message to the "default" namespace
 				it will not be disconnected.*/
-				err = nil
+				// return fmt.Errorf("Server says that you are not allowed to be disconnected yet")
 
-				if err == nil {
-					log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
-				}
-
+				log.Printf("[%s] disconnected from [%s].", c.Conn.ID(), msg.Namespace)
 				if c.Conn.IsClient() {
 					os.Exit(0)
 				}
 
-				return err
+				return nil
 			},
 			"chat": func(c *neffos.NSConn, msg neffos.Message) error {
 				if !c.Conn.IsClient() {
@@ -158,7 +153,7 @@ func server(upgrader neffos.Upgrader) {
 		log.Printf("[%s] connected to server.", c.ID())
 
 		if serverHandlesConnectNamespace {
-			ns, err := c.Connect(nil, namespace)
+			ns, err := c.Connect(context.TODO(), namespace)
 			if err != nil {
 				panic(err)
 			}
@@ -205,7 +200,7 @@ func server(upgrader neffos.Upgrader) {
 		text := scanner.Bytes()
 		if bytes.Equal(text, []byte("force disconnect")) {
 			srv.Do(func(c *neffos.Conn) {
-				c.DisconnectAll(nil)
+				c.DisconnectAll(context.TODO())
 				//	c.Namespace(namespace).Disconnect(nil)
 			}, false)
 		} else {
@@ -254,9 +249,9 @@ func client(dialer neffos.Dialer) {
 		text := scanner.Bytes()
 
 		if bytes.Equal(text, []byte("exit")) {
-			if err := c.Disconnect(nil); err != nil {
-				// log.Printf("from server: %v", err)
-			}
+			// if err := c.Disconnect(context.TODO()); err != nil {
+			// log.Printf("from server: %v", err)
+			// }
 			continue
 		}
 

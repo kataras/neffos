@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"sync"
@@ -140,12 +141,12 @@ var dialer = gorilla.Dialer(&gorilla.Options{}, http.Header{"X-Username": []stri
 var connectedN uint32
 
 func startClient(wg *sync.WaitGroup, wgClose *sync.WaitGroup) {
-	client, err := neffos.Dial(nil, dialer, "ws://localhost:8080", clientEvents)
+	client, err := neffos.Dial(context.TODO(), dialer, "ws://localhost:8080", clientEvents)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	_, err = client.Connect(nil, namespace)
+	_, err = client.Connect(context.TODO(), namespace)
 	if err != nil {
 		log.Fatal(err)
 	}
