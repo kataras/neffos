@@ -3,7 +3,7 @@ module github.com/kataras/neffos
 go 1.19
 
 require (
-	github.com/gobwas/ws v1.2.0
+	github.com/gobwas/ws v1.2.1
 	github.com/gorilla/websocket v1.5.0
 	github.com/iris-contrib/go.uuid v2.0.0+incompatible
 	github.com/mediocregopher/radix/v3 v3.8.1
