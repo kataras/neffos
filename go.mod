@@ -7,7 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.0
 	github.com/iris-contrib/go.uuid v2.0.0+incompatible
 	github.com/mediocregopher/radix/v3 v3.8.1
-	github.com/nats-io/nats.go v1.27.1
+	github.com/nats-io/nats.go v1.28.0
 	golang.org/x/sync v0.3.0
 )
 
