@@ -158,7 +158,7 @@ For a more detailed technical documentation you can head over to our [godocs](ht
 
 You can [download](https://www.iris-go.com/neffos-book.pdf) a PDF version of the **E-Book** today and be participated in the development of neffos.
 
-[![https://iris-go.com/images/neffos-book-overview.png](https://iris-go.com/images/neffos-book-overview.png)](https://forms.gle/7jzLUEuSALc3b8u9A)
+[![https://iris-go.com/images/neffos-book-overview.png](https://iris-go.com/images/neffos-book-overview.png)](https://www.iris-go.com/neffos-book.pdf)
 
 ## Contributing
 
