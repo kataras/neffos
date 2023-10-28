@@ -156,7 +156,7 @@ For a more detailed technical documentation you can head over to our [godocs](ht
 
 ### Do you like to read while traveling?
 
-You can [request](https://forms.gle/7jzLUEuSALc3b8u9A) a PDF version of the **E-Book** today and be participated in the development of neffos.
+You can [download](https://www.iris-go.com/neffos-book.pdf) a PDF version of the **E-Book** today and be participated in the development of neffos.
 
 [![https://iris-go.com/images/neffos-book-overview.png](https://iris-go.com/images/neffos-book-overview.png)](https://forms.gle/7jzLUEuSALc3b8u9A)
 
