@@ -418,7 +418,7 @@ func (c *Conn) handleMessage(msg Message) error {
 		return ErrInvalidPayload
 	}
 
-	if msg.IsNative && c.allowNativeMessages {
+	if msg.IsNative && c.shouldHandleOnlyNativeMessages {
 		ns := c.Namespace("")
 		return ns.events.fireEvent(ns, msg)
 	}
