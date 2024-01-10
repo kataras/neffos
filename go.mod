@@ -8,7 +8,7 @@ require (
 	github.com/iris-contrib/go.uuid v2.0.0+incompatible
 	github.com/mediocregopher/radix/v3 v3.8.1
 	github.com/nats-io/nats.go v1.31.0
-	golang.org/x/sync v0.4.0
+	golang.org/x/sync v0.6.0
 )
 
 require (
