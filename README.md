@@ -26,7 +26,7 @@ Neffos is a cross-platform real-time framework with expressive, elegant API writ
 ## Learning neffos
 
 <details>
-<summary>Qick View</summary>
+<summary>Quick View</summary>
 
 ## Server
 
