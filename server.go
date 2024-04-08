@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	uuid "github.com/iris-contrib/go.uuid"
+	"github.com/google/uuid"
 )
 
 // Upgrader is the definition type of a protocol upgrader, gorilla or gobwas or custom.
@@ -27,7 +27,7 @@ type IDGenerator func(w http.ResponseWriter, r *http.Request) string
 // DefaultIDGenerator returns a universal unique identifier for a new connection.
 // It's the default `IDGenerator` for `Server`.
 var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
-	id, err := uuid.NewV4()
+	id, err := uuid.NewRandom()
 	if err != nil {
 		return strconv.FormatInt(time.Now().Unix(), 10)
 	}
@@ -114,7 +114,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	readTimeout, writeTimeout := getTimeouts(connHandler)
 	namespaces := connHandler.GetNamespaces()
 	s := &Server{
-		uuid:              uuid.Must(uuid.NewV4()).String(),
+		uuid:              uuid.NewString(),
 		upgrader:          upgrader,
 		namespaces:        namespaces,
 		readTimeout:       readTimeout,

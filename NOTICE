@@ -20,10 +20,7 @@ Revision ID: f63a528211ca90f8854600f44f92aac8fbcb34e0
 -----------------   -----------------   ------------------------------------------
  go                  e369490fb7db5f2     https://github.com/golang/go             
                      d42bb0e8ee19b48                                              
-                     378dee0ebf                                                   
- go.uuid             36e9d2ebbde5e3f     https://github.com/iris-contrib/go.uuid  
-                     13ab2e25625fd45                                              
-                     3271d6522e                                                   
+                     378dee0ebf                                                                                                   
  websocket           80c2d40e9b91f2e     https://github.com/gorilla/websocket     
                      f7a9c1a403aeec6                                              
                      4d1b89a9a6                                                   
