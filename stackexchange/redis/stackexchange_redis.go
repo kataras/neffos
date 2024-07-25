@@ -206,7 +206,13 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 			msg := c.DeserializeMessage(neffos.TextMessage, redisMsg.Message)
 			msg.FromStackExchange = true
 
-			c.Write(msg)
+			if len(msg.Namespace) > 0 && len(msg.Room) > 0 {
+				if room := c.Namespace(msg.Namespace).Room(msg.Room); room != nil {
+					c.Write(msg)
+				}
+			} else {
+				c.Write(msg)
+			}
 		}
 	}()
 
