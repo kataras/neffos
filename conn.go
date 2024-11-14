@@ -706,7 +706,7 @@ func (c *Conn) notifyNamespaceConnected(ns *NSConn, connectMsg Message) {
 	}
 }
 
-func (c *Conn) notifyNamespaceDisconnect(ns *NSConn, disconnectMsg Message) {
+func (c *Conn) notifyNamespaceDisconnect(_ *NSConn, disconnectMsg Message) {
 	if !c.IsClient() && c.server.usesStackExchange() {
 		c.server.StackExchange.Unsubscribe(c, disconnectMsg.Namespace)
 	}

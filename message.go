@@ -338,7 +338,7 @@ func serializeOutput(wait, namespace, room, event string,
 // and returns a neffos Message.
 // When allowNativeMessages only Body is filled and check about message format is skipped.
 func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
-	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
+	wait, namespace, room, event, body, isNoOp, isInvalid, err := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
 
 	fromExplicit := ""
 	if isServerConnID(wait) {
@@ -421,9 +421,9 @@ func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessa
 	room,
 	event string,
 	body []byte,
-	err error,
 	isNoOp bool,
 	isInvalid bool,
+	err error,
 ) {
 
 	if len(b) == 0 {

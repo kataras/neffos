@@ -3,7 +3,7 @@ package neffos_test
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -236,7 +236,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 	serverHandler := neffos.JoinConnHandlers(neffos.Namespaces{namespace: events},
 		neffos.Events{
 			eventThatWillGiveErrorByServer: func(c *neffos.NSConn, msg neffos.Message) error {
-				return fmt.Errorf(eventErrorText)
+				return errors.New(eventErrorText)
 			},
 		})
 	teardownServer := runTestServer("localhost:8080", serverHandler)

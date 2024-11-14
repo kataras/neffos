@@ -46,6 +46,16 @@ func (ns *NSConn) String() string {
 	return ns.Conn.String()
 }
 
+// Broadcast method sends a message to all connections, including this one.
+func (ns *NSConn) Broadcast(msgs ...Message) {
+	ns.Conn.server.Broadcast(nil, msgs...)
+}
+
+// Broadcast method sends a message to all connections except this one.
+func (ns *NSConn) BroadcastOthers(msgs ...Message) {
+	ns.Conn.server.Broadcast(ns.Conn, msgs...)
+}
+
 // Emit method sends a message to the remote side
 // with its `Message.Namespace` filled to this specific namespace.
 func (ns *NSConn) Emit(event string, body []byte) bool {
