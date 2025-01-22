@@ -3,8 +3,12 @@ package redis
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"time"
 
+	"github.com/bytedance/gopkg/collection/skipmap"
+	"github.com/bytedance/gopkg/collection/zset"
+	uuid "github.com/iris-contrib/go.uuid"
 	"github.com/kataras/neffos"
 
 	"github.com/mediocregopher/radix/v3"
@@ -30,6 +34,9 @@ type Config struct {
 	// MaxActive defines the size connection pool.
 	// Defaults to 10.
 	MaxActive int
+
+	// the limit number of websocket connections per redis connection (default: 1)
+	WsNumPerRedisConn int
 }
 
 // StackExchange is a `neffos.StackExchange` for redis.
@@ -45,6 +52,14 @@ type StackExchange struct {
 	subscribe     chan subscribeAction
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
+
+	multiplexAddSubscriber chan multiplexSubscriber
+	wsNumPerRedisConn      int                // the limit number of websocket connections per redis connection
+	subscriberZset         *zset.Float64Set   // value: subscriberID, score: number of websocket connections
+	subscriberSkipMap      *skipmap.StringMap // key: subscriberID, value: *subscriber
+
+	allowNativeMessages            bool
+	shouldHandleOnlyNativeMessages bool
 }
 
 type (
@@ -52,6 +67,13 @@ type (
 		conn   *neffos.Conn
 		pubSub radix.PubSubConn
 		msgCh  chan<- radix.PubSubMessage
+
+		isMultiplex  bool           // indicates if this subscriber is multiplexed
+		subscribedNs map[string]int // key: the namespaces that this subscriber subscribed to. value: number of websocket connections
+		closing      bool           // indicates if the subscriber is closing
+		id           string         // the subscriberID
+		conns        *sync.Map      // the websocket connections that subscribed. key: connID, value: *neffos.Conn
+		mu           *sync.RWMutex  // the mutex that used to sync the subscriber status
 	}
 
 	subscribeAction struct {
@@ -66,6 +88,11 @@ type (
 
 	closeAction struct {
 		conn *neffos.Conn
+	}
+
+	multiplexSubscriber struct {
+		conn       *neffos.Conn
+		subscriber *subscriber
 	}
 )
 
@@ -88,6 +115,10 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 
 	if cfg.MaxActive == 0 {
 		cfg.MaxActive = 10
+	}
+
+	if cfg.WsNumPerRedisConn < 1 {
+		cfg.WsNumPerRedisConn = 1
 	}
 
 	var dialOptions []radix.DialOpt
@@ -141,6 +172,11 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
 		unsubscribe:   make(chan unsubscribeAction),
+
+		multiplexAddSubscriber: make(chan multiplexSubscriber),
+		wsNumPerRedisConn:      cfg.WsNumPerRedisConn,
+		subscriberZset:         zset.NewFloat64(),
+		subscriberSkipMap:      skipmap.NewString(),
 	}
 
 	go exc.run()
@@ -154,26 +190,66 @@ func (exc *StackExchange) run() {
 		case s := <-exc.addSubscriber:
 			exc.subscribers[s.conn] = s
 			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
+		case s := <-exc.multiplexAddSubscriber:
+			exc.subscribers[s.conn] = s.subscriber
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				channel := exc.getChannel(m.namespace, "", "")
-				sub.pubSub.PSubscribe(sub.msgCh, channel)
-				// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
-				//	} else {
-				// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
+				if !sub.isMultiplex {
+					channel := exc.getChannel(m.namespace, "", "")
+					sub.pubSub.PSubscribe(sub.msgCh, channel)
+					// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
+					//	} else {
+					// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
+				} else {
+					if count, has := sub.subscribedNs[m.namespace]; !has {
+						channel := exc.getChannel(m.namespace, "", "")
+						sub.pubSub.PSubscribe(sub.msgCh, channel)
+						sub.subscribedNs[m.namespace] = 1
+					} else {
+						sub.subscribedNs[m.namespace] = count + 1
+					}
+				}
 			}
 		case m := <-exc.unsubscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				channel := exc.getChannel(m.namespace, "", "")
-				// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
-				sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+				if !sub.isMultiplex {
+					channel := exc.getChannel(m.namespace, "", "")
+					// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
+					sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+				} else {
+					count := sub.subscribedNs[m.namespace]
+					if count < 2 {
+						delete(sub.subscribedNs, m.namespace)
+						channel := exc.getChannel(m.namespace, "", "")
+						sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+					} else {
+						sub.subscribedNs[m.namespace] = count - 1
+					}
+				}
 			}
 		case m := <-exc.delSubscriber:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				// neffos.Debugf("[%s] disconnected", m.conn.ID())
-				sub.pubSub.Close()
-				close(sub.msgCh)
-				delete(exc.subscribers, m.conn)
+				if !sub.isMultiplex {
+					// neffos.Debugf("[%s] disconnected", m.conn.ID())
+					sub.pubSub.Close()
+					close(sub.msgCh)
+					delete(exc.subscribers, m.conn)
+				} else {
+					sub.mu.Lock()
+					sub.conns.Delete(m.conn.ID())
+					if left, _ := exc.subscriberZset.IncrBy(-1, sub.id); left < 1 {
+						sub.pubSub.Close()
+						close(sub.msgCh)
+						sub.closing = true
+						exc.subscriberZset.Remove(sub.id)
+						exc.subscriberSkipMap.Delete(sub.id)
+					} else {
+						channel := exc.getChannel("", "", m.conn.ID())
+						sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+					}
+					delete(exc.subscribers, m.conn)
+					sub.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -199,6 +275,18 @@ func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 // It's called automatically after the neffos server's OnConnect (if any)
 // on incoming client connections.
 func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
+	if exc.wsNumPerRedisConn == 1 {
+		return exc.onConnect(c)
+	} else {
+		return exc.multiplexOnConnect(c)
+	}
+}
+
+// OnConnect prepares the connection redis subscriber
+// and subscribes to itself for direct neffos messages.
+// It's called automatically after the neffos server's OnConnect (if any)
+// on incoming client connections.
+func (exc *StackExchange) onConnect(c *neffos.Conn) error {
 	redisMsgCh := make(chan radix.PubSubMessage)
 	go func() {
 		for redisMsg := range redisMsgCh {
@@ -226,6 +314,121 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	pubSub.PSubscribe(redisMsgCh, selfChannel)
 
 	exc.addSubscriber <- s
+
+	return nil
+}
+
+func (exc *StackExchange) multiplexOnConnect(c *neffos.Conn) error {
+	subs := exc.subscriberZset.Range(0, 0)
+	if len(subs) > 0 && subs[0].Score > 0 && subs[0].Score < float64(exc.wsNumPerRedisConn) {
+		// reuse existing subscriber
+		if existing, has := exc.subscriberSkipMap.Load(subs[0].Value); has {
+			if s, ok := existing.(*subscriber); ok && !s.closing {
+				s.mu.RLock()
+				if !s.closing {
+					// still avalible
+					var err error
+					selfChannel := exc.getChannel("", "", c.ID())
+					if e := s.pubSub.PSubscribe(s.msgCh, selfChannel); e != nil {
+						err = e
+					} else {
+						s.conns.Store(c.ID(), c)
+						exc.subscriberZset.IncrBy(1, s.id)
+
+						multiplexSub := multiplexSubscriber{
+							conn:       c,
+							subscriber: s,
+						}
+						exc.multiplexAddSubscriber <- multiplexSub
+					}
+
+					s.mu.RUnlock()
+					return err
+				}
+				s.mu.RUnlock()
+			}
+		}
+	}
+
+	redisMsgCh := make(chan radix.PubSubMessage)
+	uid, _ := uuid.NewV4()
+	s := &subscriber{
+		// conn:   c,
+		// pubSub: pubSub,
+		msgCh:        redisMsgCh,
+		conns:        &sync.Map{},
+		id:           uid.String(),
+		mu:           &sync.RWMutex{},
+		isMultiplex:  true,
+		subscribedNs: make(map[string]int),
+	}
+
+	go func() {
+		for redisMsg := range redisMsgCh {
+			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
+			msg := neffos.DeserializeMessage(neffos.TextMessage, redisMsg.Message, exc.allowNativeMessages, exc.shouldHandleOnlyNativeMessages)
+			msg.FromStackExchange = true
+
+			if len(msg.To) > 0 {
+				// specify client
+				if spConn, has := s.conns.Load(msg.To); has {
+					if conn, ok := spConn.(*neffos.Conn); ok {
+						conn.Write(msg)
+					}
+				}
+			} else {
+				// broadcast
+				if len(msg.Namespace) > 0 {
+					if len(msg.Room) > 0 {
+						// broadcast to specify room
+						s.conns.Range(func(key, value interface{}) bool {
+							if conn, ok := value.(*neffos.Conn); ok {
+								if room := conn.Namespace(msg.Namespace).Room(msg.Room); room != nil {
+									conn.Write(msg)
+								}
+							}
+							return true
+						})
+					} else {
+						// broadcast to specify namespace
+						s.conns.Range(func(key, value interface{}) bool {
+							if conn, ok := value.(*neffos.Conn); ok {
+								if ns := conn.Namespace(msg.Namespace); ns != nil {
+									conn.Write(msg)
+								}
+							}
+							return true
+						})
+					}
+				} else {
+					// broadcast to all
+					s.conns.Range(func(key, value interface{}) bool {
+						if conn, ok := value.(*neffos.Conn); ok {
+							conn.Write(msg)
+						}
+						return true
+					})
+				}
+			}
+		}
+	}()
+
+	pubSub := radix.PersistentPubSub("", "", exc.connFunc)
+	s.pubSub = pubSub
+	selfChannel := exc.getChannel("", "", c.ID())
+	if err := pubSub.PSubscribe(redisMsgCh, selfChannel); err != nil {
+		return err
+	} else {
+		s.conns.Store(c.ID(), c)
+		exc.subscriberSkipMap.Store(s.id, s)
+		exc.subscriberZset.IncrBy(1, s.id)
+	}
+
+	multiplexSub := multiplexSubscriber{
+		conn:       c,
+		subscriber: s,
+	}
+	exc.multiplexAddSubscriber <- multiplexSub
 
 	return nil
 }
@@ -313,4 +516,20 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
 	exc.delSubscriber <- closeAction{conn: c}
+}
+
+// OnStackExchangeInit is called automatically when the server is initialized.
+func (exc *StackExchange) OnStackExchangeInit(namespaces neffos.Namespaces) {
+	if emptyNamespace := namespaces[""]; emptyNamespace != nil && emptyNamespace[neffos.OnNativeMessage] != nil {
+		exc.allowNativeMessages = true
+
+		// if allow native messages and only this namespace empty namespaces is registered (via Events{} for example)
+		// and the only one event is the `OnNativeMessage`
+		// then no need to call Connect(...) because:
+		// client-side can use raw websocket without the neffos.js library
+		// so no access to connect to a namespace.
+		if len(namespaces) == 1 && len(emptyNamespace) == 1 {
+			exc.shouldHandleOnlyNativeMessages = true
+		}
+	}
 }

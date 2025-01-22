@@ -28,6 +28,9 @@ type StackExchange struct {
 	subscribe     chan subscribeAction
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
+
+	allowNativeMessages            bool
+	shouldHandleOnlyNativeMessages bool
 }
 
 var _ neffos.StackExchange = (*StackExchange)(nil)
@@ -376,4 +379,20 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
 	exc.delSubscriber <- closeAction{conn: c}
+}
+
+// OnStackExchangeInit is called automatically when the server is initialized.
+func (exc *StackExchange) OnStackExchangeInit(namespaces neffos.Namespaces) {
+	if emptyNamespace := namespaces[""]; emptyNamespace != nil && emptyNamespace[neffos.OnNativeMessage] != nil {
+		exc.allowNativeMessages = true
+
+		// if allow native messages and only this namespace empty namespaces is registered (via Events{} for example)
+		// and the only one event is the `OnNativeMessage`
+		// then no need to call Connect(...) because:
+		// client-side can use raw websocket without the neffos.js library
+		// so no access to connect to a namespace.
+		if len(namespaces) == 1 && len(emptyNamespace) == 1 {
+			exc.shouldHandleOnlyNativeMessages = true
+		}
+	}
 }

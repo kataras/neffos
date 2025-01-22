@@ -39,6 +39,9 @@ type StackExchange interface {
 	// NotifyAsk should notify and unblock a subscribed connection for this
 	// specific message, "token" is the neffos wait signal for this message.
 	NotifyAsk(msg Message, token string) error
+
+	// OnStackExchangeInit is called automatically when the server is initialized.
+	OnStackExchangeInit(namespaces Namespaces)
 }
 
 // StackExchangeInitializer is an optional interface for a `StackExchange`.
@@ -53,6 +56,8 @@ type StackExchangeInitializer interface {
 
 func stackExchangeInit(s StackExchange, namespaces Namespaces) error {
 	if s != nil {
+		s.OnStackExchangeInit(namespaces)
+
 		if sinit, ok := s.(StackExchangeInitializer); ok {
 			return sinit.Init(namespaces)
 		}
@@ -126,4 +131,10 @@ func (s *stackExchangeWrapper) Subscribe(c *Conn, namespace string) {
 func (s *stackExchangeWrapper) Unsubscribe(c *Conn, namespace string) {
 	s.parent.Unsubscribe(c, namespace)
 	s.current.Unsubscribe(c, namespace)
+}
+
+// OnStackExchangeInit is called automatically when the server is initialized.
+func (s *stackExchangeWrapper) OnStackExchangeInit(namespaces Namespaces) {
+	s.parent.OnStackExchangeInit(namespaces)
+	s.current.OnStackExchangeInit(namespaces)
 }
