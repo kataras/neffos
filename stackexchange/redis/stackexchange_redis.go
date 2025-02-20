@@ -87,7 +87,8 @@ type (
 	}
 
 	closeAction struct {
-		conn *neffos.Conn
+		conn       *neffos.Conn
+		namespaces []string
 	}
 
 	multiplexSubscriber struct {
@@ -237,6 +238,19 @@ func (exc *StackExchange) run() {
 				} else {
 					sub.mu.Lock()
 					sub.conns.Delete(m.conn.ID())
+
+					for _, ns := range m.namespaces {
+						if count, has := sub.subscribedNs[ns]; has {
+							if count < 2 {
+								delete(sub.subscribedNs, ns)
+								channel := exc.getChannel(ns, "", "")
+								sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+							} else {
+								sub.subscribedNs[ns] = count - 1
+							}
+						}
+					}
+
 					if left, _ := exc.subscriberZset.IncrBy(-1, sub.id); left < 1 {
 						sub.pubSub.Close()
 						close(sub.msgCh)
@@ -514,8 +528,8 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // closes the internal read messages channel.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
-func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	exc.delSubscriber <- closeAction{conn: c}
+func (exc *StackExchange) OnDisconnect(c *neffos.Conn, namespaces []string) {
+	exc.delSubscriber <- closeAction{conn: c, namespaces: namespaces}
 }
 
 // OnStackExchangeInit is called automatically when the server is initialized.

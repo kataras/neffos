@@ -58,7 +58,8 @@ type (
 	}
 
 	closeAction struct {
-		conn *neffos.Conn
+		conn       *neffos.Conn
+		namespaces []string
 	}
 )
 
@@ -377,8 +378,8 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // closes the internal read messages channel.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
-func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	exc.delSubscriber <- closeAction{conn: c}
+func (exc *StackExchange) OnDisconnect(c *neffos.Conn, namespaces []string) {
+	exc.delSubscriber <- closeAction{conn: c, namespaces: namespaces}
 }
 
 // OnStackExchangeInit is called automatically when the server is initialized.

@@ -1006,6 +1006,7 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 // After this method call the `Conn` is not usable anymore, a new `Dial` call is required.
 func (c *Conn) Close() {
 	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
+		var disconnectNamspaces []string
 		if !c.shouldHandleOnlyNativeMessages {
 			disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
 			c.connectedNamespacesMutex.Lock()
@@ -1016,6 +1017,7 @@ func (c *Conn) Close() {
 				disconnectMsg.Namespace = ns.namespace
 				ns.events.fireEvent(ns, disconnectMsg)
 				delete(c.connectedNamespaces, namespace)
+				disconnectNamspaces = append(disconnectNamspaces, namespace)
 			}
 			c.connectedNamespacesMutex.Unlock()
 
@@ -1030,7 +1032,7 @@ func (c *Conn) Close() {
 
 		if !c.IsClient() {
 			go func() {
-				c.server.disconnect <- c
+				c.server.disconnect <- disconnectAction{conn: c, namespaces: disconnectNamspaces}
 			}()
 		}
 

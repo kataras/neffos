@@ -21,7 +21,7 @@ type StackExchange interface {
 	// created on the `OnConnect` method.
 	// It's called automatically when a connection goes offline,
 	// manually by server or client or by network failure.
-	OnDisconnect(c *Conn)
+	OnDisconnect(c *Conn, namespaces []string)
 
 	// Publish should publish messages through a stackexchange.
 	// It's called automatically on neffos broadcasting.
@@ -91,9 +91,9 @@ func (s *stackExchangeWrapper) OnConnect(c *Conn) error {
 	return s.current.OnConnect(c)
 }
 
-func (s *stackExchangeWrapper) OnDisconnect(c *Conn) {
-	s.parent.OnDisconnect(c)
-	s.current.OnDisconnect(c)
+func (s *stackExchangeWrapper) OnDisconnect(c *Conn, namespaces []string) {
+	s.parent.OnDisconnect(c, namespaces)
+	s.current.OnDisconnect(c, namespaces)
 }
 
 func (s *stackExchangeWrapper) Publish(msgs []Message) bool {

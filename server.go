@@ -78,7 +78,7 @@ type Server struct {
 
 	connections       map[*Conn]struct{}
 	connect           chan *Conn
-	disconnect        chan *Conn
+	disconnect        chan disconnectAction
 	actions           chan action
 	broadcastMessages chan []Message
 
@@ -103,6 +103,13 @@ type Server struct {
 	OnDisconnect func(c *Conn)
 }
 
+type (
+	disconnectAction struct {
+		conn       *Conn
+		namespaces []string
+	}
+)
+
 // New constructs and returns a new neffos server.
 // Listens to incoming connections automatically, no further action is required from the caller.
 // The second parameter is the "connHandler", it can be
@@ -121,7 +128,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		writeTimeout:      writeTimeout,
 		connections:       make(map[*Conn]struct{}),
 		connect:           make(chan *Conn, 1),
-		disconnect:        make(chan *Conn),
+		disconnect:        make(chan disconnectAction),
 		actions:           make(chan action),
 		broadcastMessages: make(chan []Message),
 		broadcaster:       newBroadcaster(),
@@ -172,7 +179,8 @@ func (s *Server) start() {
 		case c := <-s.connect:
 			s.connections[c] = struct{}{}
 			atomic.AddUint64(&s.count, 1)
-		case c := <-s.disconnect:
+		case dc := <-s.disconnect:
+			c := dc.conn
 			if _, ok := s.connections[c]; ok {
 				// close(c.out)
 				delete(s.connections, c)
@@ -187,7 +195,7 @@ func (s *Server) start() {
 				}
 
 				if s.usesStackExchange() {
-					s.StackExchange.OnDisconnect(c)
+					s.StackExchange.OnDisconnect(c, dc.namespaces)
 				}
 			}
 		case msgs := <-s.broadcastMessages:
