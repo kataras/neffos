@@ -909,7 +909,7 @@ func (c *Conn) Write(msg Message) bool {
 	}
 
 	msg.FromExplicit = ""
-	return c.write(serializeMessage(msg), msg.SetBinary)
+	return c.write(serializeMessage(msg, false), msg.SetBinary)
 }
 
 // used when `Ask` caller cares only for successful call and not the message, for performance reasons we just use raw bytes.

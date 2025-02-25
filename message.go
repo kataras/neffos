@@ -117,8 +117,8 @@ func (m *Message) isRoomLeft() bool {
 }
 
 // Serialize returns this message's transport format.
-func (m Message) Serialize() []byte {
-	return serializeMessage(m)
+func (m Message) Serialize(publishToMultiplexStackExchange bool) []byte {
+	return serializeMessage(m, publishToMultiplexStackExchange)
 }
 
 type (
@@ -274,7 +274,7 @@ func unescape(s string) string {
 	return strings.Replace(s, messageFieldSeparatorReplacement, messageSeparatorString, -1)
 }
 
-func serializeMessage(msg Message) (out []byte) {
+func serializeMessage(msg Message, publishToMultiplexStackExchange bool) (out []byte) {
 	if msg.IsNative && msg.wait == "" {
 		out = msg.Body
 	} else {
@@ -286,13 +286,19 @@ func serializeMessage(msg Message) (out []byte) {
 
 			msg.wait = msg.FromExplicit
 		}
-		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
+
+		var to string
+		if publishToMultiplexStackExchange && msg.To != "" {
+			to = msg.To
+		}
+
+		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(to), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
 	}
 
 	return out
 }
 
-func serializeOutput(wait, namespace, room, event string,
+func serializeOutput(wait, namespace, room, to, event string,
 	body []byte,
 	err error,
 	isNoOp bool,
@@ -321,15 +327,29 @@ func serializeOutput(wait, namespace, room, event string,
 		waitByte = []byte(wait)
 	}
 
-	msg := bytes.Join([][]byte{ // this number of fields should match the deserializer's, see `validMessageSepCount`.
-		waitByte,
-		[]byte(namespace),
-		[]byte(room),
-		[]byte(event),
-		isErrorByte,
-		isNoOpByte,
-		body,
-	}, messageSeparator)
+	var msg []byte
+	if to == "" {
+		msg = bytes.Join([][]byte{ // this number of fields should match the deserializer's, see `validMessageSepCount`.
+			waitByte,
+			[]byte(namespace),
+			[]byte(room),
+			[]byte(event),
+			isErrorByte,
+			isNoOpByte,
+			body,
+		}, messageSeparator)
+	} else {
+		msg = bytes.Join([][]byte{ // this number of fields should match the deserializer's, see `validMessageSepCount`.
+			waitByte,
+			[]byte(namespace),
+			[]byte(room),
+			[]byte(to),
+			[]byte(event),
+			isErrorByte,
+			isNoOpByte,
+			body,
+		}, messageSeparator)
+	}
 
 	return msg
 }
@@ -338,7 +358,7 @@ func serializeOutput(wait, namespace, room, event string,
 // and returns a neffos Message.
 // When allowNativeMessages only Body is filled and check about message format is skipped.
 func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
-	wait, namespace, room, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
+	wait, namespace, room, to, event, body, err, isNoOp, isInvalid := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
 
 	fromExplicit := ""
 	if isServerConnID(wait) {
@@ -366,7 +386,7 @@ func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shoul
 		from:              "",
 		FromExplicit:      fromExplicit,
 		FromStackExchange: fromStackExchange,
-		To:                "",
+		To:                unescape(to),
 		IsForced:          false,
 		IsLocal:           false,
 		IsNative:          allowNativeMessages && event == OnNativeMessage,
@@ -419,6 +439,7 @@ func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessa
 	wait,
 	namespace,
 	room,
+	to,
 	event string,
 	body []byte,
 	err error,
@@ -438,8 +459,8 @@ func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessa
 	}
 
 	// Note: Go's SplitN returns the remainder in[6] but JavasSript's string.split behaves differently.
-	dts := bytes.SplitN(b, messageSeparator, validMessageSepCount)
-	if len(dts) != validMessageSepCount {
+	dts := bytes.SplitN(b, messageSeparator, validMessageSepCount+1)
+	if len(dts) != validMessageSepCount && len(dts) != validMessageSepCount+1 {
 		if !allowNativeMessages {
 			isInvalid = true
 			return
@@ -450,18 +471,36 @@ func deserializeInput(b []byte, allowNativeMessages, shouldHandleOnlyNativeMessa
 		return
 	}
 
-	wait = string(dts[0])
-	namespace = string(dts[1])
-	room = string(dts[2])
-	event = string(dts[3])
-	isError := bytes.Equal(dts[4], trueByte)
-	isNoOp = bytes.Equal(dts[5], trueByte)
-	if b := dts[6]; len(b) > 0 {
-		if isError {
-			errorText := string(b)
-			err = resolveError(errorText)
-		} else {
-			body = b // keep it like that.
+	if len(dts) == validMessageSepCount {
+		wait = string(dts[0])
+		namespace = string(dts[1])
+		room = string(dts[2])
+		event = string(dts[3])
+		isError := bytes.Equal(dts[4], trueByte)
+		isNoOp = bytes.Equal(dts[5], trueByte)
+		if b := dts[6]; len(b) > 0 {
+			if isError {
+				errorText := string(b)
+				err = resolveError(errorText)
+			} else {
+				body = b // keep it like that.
+			}
+		}
+	} else {
+		wait = string(dts[0])
+		namespace = string(dts[1])
+		room = string(dts[2])
+		to = string(dts[3])
+		event = string(dts[4])
+		isError := bytes.Equal(dts[5], trueByte)
+		isNoOp = bytes.Equal(dts[6], trueByte)
+		if b := dts[7]; len(b) > 0 {
+			if isError {
+				errorText := string(b)
+				err = resolveError(errorText)
+			} else {
+				body = b // keep it like that.
+			}
 		}
 	}
 

@@ -301,7 +301,7 @@ func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 
 func (exc *StackExchange) publish(msg neffos.Message) bool {
 	subject := exc.getSubject(msg.Namespace, msg.Room, msg.To)
-	b := msg.Serialize()
+	b := msg.Serialize(false)
 
 	err := exc.publisher.Publish(subject, b)
 	// Let's not add logging options, let
@@ -346,7 +346,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 	msg.ClearWait()
-	err := exc.publisher.Publish(token, msg.Serialize())
+	err := exc.publisher.Publish(token, msg.Serialize(false))
 	if err != nil {
 		return err
 	}

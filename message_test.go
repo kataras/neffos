@@ -83,7 +83,7 @@ func TestMessageSerialization(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		got := serializeMessage(tt.msg)
+		got := serializeMessage(tt.msg, false)
 		if !bytes.Equal(got, tt.serialized) {
 			t.Fatalf("[%d] serialize: expected %s but got %s", i, tt.serialized, got)
 		}
@@ -129,7 +129,7 @@ func TestMessageSerialization(t *testing.T) {
 	expectedSerialized := []byte(fmt.Sprintf(";contains%ssemi;%sthis%sfor sure%s;thatdoesnot;0;0;",
 		messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement, messageFieldSeparatorReplacement))
 
-	gotSerialized := serializeMessage(msg)
+	gotSerialized := serializeMessage(msg, false)
 
 	if !bytes.Equal(expectedSerialized, gotSerialized) {
 		t.Fatalf("expected escaped serialized to be: %s but got: %s", string(expectedSerialized), string(gotSerialized))

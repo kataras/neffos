@@ -464,7 +464,7 @@ func (exc *StackExchange) publish(msg neffos.Message) bool {
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
 	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
 
-	err := exc.publishCommand(channel, msg.Serialize())
+	err := exc.publishCommand(channel, msg.Serialize(exc.wsNumPerRedisConn > 1))
 	return err == nil
 }
 
@@ -501,7 +501,7 @@ func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token str
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 	msg.ClearWait()
-	return exc.publishCommand(token, msg.Serialize())
+	return exc.publishCommand(token, msg.Serialize(exc.wsNumPerRedisConn > 1))
 }
 
 // Subscribe subscribes to a specific namespace,
