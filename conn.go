@@ -3,6 +3,7 @@ package neffos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -325,6 +326,7 @@ func (c *Conn) startReader() {
 		b, msgTyp, err := c.socket.ReadData(c.readTimeout)
 		if err != nil {
 			c.readiness.unwait(err)
+			c.server.Logger.Error(fmt.Errorf("read data err. id:%s, err:%s", c.ID(), err.Error()))
 			return
 		}
 
@@ -346,6 +348,7 @@ func (c *Conn) startReader() {
 }
 
 func (c *Conn) handleACK(msgTyp MessageType, b []byte) bool {
+	c.server.Logger.Debug(fmt.Sprintf("handle ACK, id:%s, msgTyp:%d, b:%s", c.ID(), msgTyp, string(b)))
 	switch typ := b[0]; typ {
 	case ackBinary:
 		// from client startup to server.
@@ -353,6 +356,7 @@ func (c *Conn) handleACK(msgTyp MessageType, b []byte) bool {
 		if err != nil {
 			// it's not Ok, send error which client's Dial should return.
 			c.write(append(ackNotOKBinaryB, []byte(err.Error())...), false)
+			c.server.Logger.Error(fmt.Errorf("ackBinary err. id:%s, err:%s", c.ID(), err.Error()))
 			return false
 		}
 		atomic.StoreUint32(c.acknowledged, 1)
@@ -488,7 +492,18 @@ func (c *Conn) DeserializeMessage(msgTyp MessageType, payload []byte) Message {
 
 // HandlePayload fires manually a local event based on the "payload".
 func (c *Conn) HandlePayload(msgTyp MessageType, payload []byte) error {
-	return c.handleMessage(c.DeserializeMessage(msgTyp, payload))
+	msg := c.DeserializeMessage(msgTyp, payload)
+	if err := c.handleMessage(msg); err != nil {
+		if err == ErrInvalidPayload {
+			c.server.Logger.Error(fmt.Errorf("handle payload err. id:%s, msgType:%d, payload:%s, err:%s", c.ID(), msgTyp, string(payload), err.Error()))
+		} else {
+			c.server.Logger.Error(fmt.Errorf("handle payload err. id:%s, msgType:%d, namespace:%s, room:%s, event:%s, body:%s, err:%s", c.ID(), msgTyp, msg.Namespace, msg.Room, msg.Event, string(msg.Body), err.Error()))
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 const syncWaitDur = 15 * time.Millisecond

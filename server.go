@@ -91,6 +91,8 @@ type Server struct {
 
 	closed uint32
 
+	Logger logger
+
 	// OnUpgradeError can be optionally registered to catch upgrade errors.
 	OnUpgradeError func(err error)
 	// OnConnect can be optionally registered to be notified for any new neffos client connection,
@@ -139,6 +141,11 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	go s.start()
 
 	return s
+}
+
+// WithLogger set a logger to server
+func (s *Server) WithLogger(logger logger) {
+	s.Logger = logger
 }
 
 // UseStackExchange can be used to add one or more StackExchange
@@ -359,6 +366,7 @@ func (s *Server) Upgrade(
 	if s.usesStackExchange() {
 		if err := s.StackExchange.OnConnect(c); err != nil {
 			c.readiness.unwait(err)
+			s.Logger.Error(err)
 			return nil, err
 		}
 	}
