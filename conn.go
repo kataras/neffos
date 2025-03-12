@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type (
@@ -326,7 +328,11 @@ func (c *Conn) startReader() {
 		b, msgTyp, err := c.socket.ReadData(c.readTimeout)
 		if err != nil {
 			c.readiness.unwait(err)
-			c.server.Logger.Error(fmt.Errorf("read data err. id:%s, err:%s", c.ID(), err.Error()))
+			if websocket.IsCloseError(err, websocket.CloseNoStatusReceived) {
+				c.server.Logger.Debug(fmt.Sprintf("read data err. id:%s, err:%s", c.ID(), err.Error()))
+			} else {
+				c.server.Logger.Error(fmt.Errorf("read data err. id:%s, err:%s", c.ID(), err.Error()))
+			}
 			return
 		}
 
