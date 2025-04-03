@@ -366,7 +366,9 @@ func (s *Server) Upgrade(
 	if s.usesStackExchange() {
 		if err := s.StackExchange.OnConnect(c); err != nil {
 			c.readiness.unwait(err)
-			s.Logger.Error(err)
+			if s.Logger != nil {
+				s.Logger.Error(err)
+			}
 			return nil, err
 		}
 	}
