@@ -5,9 +5,7 @@ import (
 	"math/rand"
 	"sync"
 	"time"
-	"unsafe"
 
-	"github.com/bytedance/gopkg/collection/lscq"
 	"github.com/bytedance/gopkg/collection/skipmap"
 	"github.com/bytedance/gopkg/collection/zset"
 	uuid "github.com/iris-contrib/go.uuid"
@@ -48,18 +46,19 @@ type StackExchange struct {
 	pool     *radix.Pool
 	connFunc radix.ConnFunc
 
-	subscribers map[*neffos.Conn]*subscriber
+	// subscribers map[*neffos.Conn]*subscriber
+	subscribers *sync.Map // key: *neffos.Conn, value: *subscriber
 
-	addSubscriber chan *subscriber
+	// addSubscriber chan *subscriber
 	subscribe     chan subscribeAction
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
 
-	multiplexAddSubscriber   chan *multiplexSubscriber
-	wsNumPerRedisConn        int                // the limit number of websocket connections per redis connection
-	subscriberZset           *zset.Float64Set   // value: subscriberID, score: number of websocket connections
-	subscriberSkipMap        *skipmap.StringMap // key: subscriberID, value: *subscriber
-	multiplexSubscriberQueue *lscq.PointerQueue // the concurrency safe FIFO queue that used to add multiplex subscriber
+	// multiplexAddSubscriber   chan *multiplexSubscriber
+	wsNumPerRedisConn int                // the limit number of websocket connections per redis connection
+	subscriberZset    *zset.Float64Set   // value: subscriberID, score: number of websocket connections
+	subscriberSkipMap *skipmap.StringMap // key: subscriberID, value: *subscriber
+	// multiplexSubscriberQueue *lscq.PointerQueue // the concurrency safe FIFO queue that used to add multiplex subscriber
 
 	allowNativeMessages            bool
 	shouldHandleOnlyNativeMessages bool
@@ -94,10 +93,10 @@ type (
 		namespaces []string
 	}
 
-	multiplexSubscriber struct {
-		conn       *neffos.Conn
-		subscriber *subscriber
-	}
+	// multiplexSubscriber struct {
+	// 	conn       *neffos.Conn
+	// 	subscriber *subscriber
+	// }
 )
 
 var _ neffos.StackExchange = (*StackExchange)(nil)
@@ -171,46 +170,48 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		// We could use multiple channels but overcomplicate things here.
 		channel: channel,
 
-		subscribers:   make(map[*neffos.Conn]*subscriber),
-		addSubscriber: make(chan *subscriber),
+		// subscribers:   make(map[*neffos.Conn]*subscriber),
+		subscribers: &sync.Map{},
+		// addSubscriber: make(chan *subscriber),
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
 		unsubscribe:   make(chan unsubscribeAction),
 
-		multiplexAddSubscriber:   make(chan *multiplexSubscriber),
-		wsNumPerRedisConn:        cfg.WsNumPerRedisConn,
-		subscriberZset:           zset.NewFloat64(),
-		subscriberSkipMap:        skipmap.NewString(),
-		multiplexSubscriberQueue: lscq.NewPointer(),
+		// multiplexAddSubscriber:   make(chan *multiplexSubscriber),
+		wsNumPerRedisConn: cfg.WsNumPerRedisConn,
+		subscriberZset:    zset.NewFloat64(),
+		subscriberSkipMap: skipmap.NewString(),
+		// multiplexSubscriberQueue: lscq.NewPointer(),
 	}
 
 	go exc.run()
-	go exc.readMultiplexSubscriber()
+	// go exc.readMultiplexSubscriber()
 
 	return exc, nil
 }
 
-func (exc *StackExchange) readMultiplexSubscriber() {
-	for {
-		if p, ok := exc.multiplexSubscriberQueue.Dequeue(); ok {
-			multiplexSub := (*multiplexSubscriber)(p)
-			exc.multiplexAddSubscriber <- multiplexSub
-		} else {
-			time.Sleep(time.Millisecond * 100)
-		}
-	}
-}
+// func (exc *StackExchange) readMultiplexSubscriber() {
+// 	for {
+// 		if p, ok := exc.multiplexSubscriberQueue.Dequeue(); ok {
+// 			multiplexSub := (*multiplexSubscriber)(p)
+// 			exc.multiplexAddSubscriber <- multiplexSub
+// 		} else {
+// 			time.Sleep(time.Millisecond * 100)
+// 		}
+// 	}
+// }
 
 func (exc *StackExchange) run() {
 	for {
 		select {
-		case s := <-exc.addSubscriber:
-			exc.subscribers[s.conn] = s
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
-		case s := <-exc.multiplexAddSubscriber:
-			exc.subscribers[s.conn] = s.subscriber
+		// case s := <-exc.addSubscriber:
+		// 	exc.subscribers[s.conn] = s
+		// 	// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
+		// case s := <-exc.multiplexAddSubscriber:
+		// 	exc.subscribers[s.conn] = s.subscriber
 		case m := <-exc.subscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
+			if sub, ok := exc.subscribers.Load(m.conn); ok {
+				sub := sub.(*subscriber)
 				if !sub.isMultiplex {
 					channel := exc.getChannel(m.namespace, "", "")
 					sub.pubSub.PSubscribe(sub.msgCh, channel)
@@ -228,7 +229,8 @@ func (exc *StackExchange) run() {
 				}
 			}
 		case m := <-exc.unsubscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
+			if sub, ok := exc.subscribers.Load(m.conn); ok {
+				sub := sub.(*subscriber)
 				if !sub.isMultiplex {
 					channel := exc.getChannel(m.namespace, "", "")
 					// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
@@ -245,12 +247,14 @@ func (exc *StackExchange) run() {
 				}
 			}
 		case m := <-exc.delSubscriber:
-			if sub, ok := exc.subscribers[m.conn]; ok {
+			if sub, ok := exc.subscribers.Load(m.conn); ok {
+				sub := sub.(*subscriber)
 				if !sub.isMultiplex {
 					// neffos.Debugf("[%s] disconnected", m.conn.ID())
 					sub.pubSub.Close()
 					close(sub.msgCh)
-					delete(exc.subscribers, m.conn)
+					// delete(exc.subscribers, m.conn)
+					exc.subscribers.Delete(m.conn)
 				} else {
 					sub.mu.Lock()
 					sub.conns.Delete(m.conn.ID())
@@ -277,7 +281,8 @@ func (exc *StackExchange) run() {
 						channel := exc.getChannel("", "", m.conn.ID())
 						sub.pubSub.PUnsubscribe(sub.msgCh, channel)
 					}
-					delete(exc.subscribers, m.conn)
+					// delete(exc.subscribers, m.conn)
+					exc.subscribers.Delete(m.conn)
 					sub.mu.Unlock()
 				}
 			}
@@ -343,7 +348,8 @@ func (exc *StackExchange) onConnect(c *neffos.Conn) error {
 	selfChannel := exc.getChannel("", "", c.ID())
 	pubSub.PSubscribe(redisMsgCh, selfChannel)
 
-	exc.addSubscriber <- s
+	// exc.addSubscriber <- s
+	exc.subscribers.Store(c, s)
 
 	return nil
 }
@@ -365,12 +371,13 @@ func (exc *StackExchange) multiplexOnConnect(c *neffos.Conn) error {
 						s.conns.Store(c.ID(), c)
 						exc.subscriberZset.IncrBy(1, s.id)
 
-						multiplexSub := multiplexSubscriber{
-							conn:       c,
-							subscriber: s,
-						}
+						// multiplexSub := multiplexSubscriber{
+						// 	conn:       c,
+						// 	subscriber: s,
+						// }
 						// exc.multiplexAddSubscriber <- multiplexSub
-						exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
+						// exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
+						exc.subscribers.Store(c, s)
 					}
 
 					s.mu.RUnlock()
@@ -455,12 +462,13 @@ func (exc *StackExchange) multiplexOnConnect(c *neffos.Conn) error {
 		exc.subscriberZset.IncrBy(1, s.id)
 	}
 
-	multiplexSub := multiplexSubscriber{
-		conn:       c,
-		subscriber: s,
-	}
-	// exc.multiplexAddSubscriber <- multiplexSub
-	exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
+	// multiplexSub := multiplexSubscriber{
+	// 	conn:       c,
+	// 	subscriber: s,
+	// }
+	// // exc.multiplexAddSubscriber <- multiplexSub
+	// exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
+	exc.subscribers.Store(c, s)
 
 	return nil
 }
