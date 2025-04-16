@@ -236,12 +236,19 @@ func (exc *StackExchange) run() {
 					// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
 					sub.pubSub.PUnsubscribe(sub.msgCh, channel)
 				} else {
-					count := sub.subscribedNs[m.namespace]
-					if count < 2 {
-						delete(sub.subscribedNs, m.namespace)
-						channel := exc.getChannel(m.namespace, "", "")
-						sub.pubSub.PUnsubscribe(sub.msgCh, channel)
-					} else {
+					// count := sub.subscribedNs[m.namespace]
+					// if count < 2 {
+					// 	delete(sub.subscribedNs, m.namespace)
+					// 	channel := exc.getChannel(m.namespace, "", "")
+					// 	sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+					// } else {
+					// 	sub.subscribedNs[m.namespace] = count - 1
+					// }
+
+					// when use multiplex subscriber, don't unsubscribe the namespace
+					// because in concurrency situation, the unsubscribe may happens before the subscribe
+					// that will make the conn use a subscriber that unsubscriber the namespace
+					if count, has := sub.subscribedNs[m.namespace]; has {
 						sub.subscribedNs[m.namespace] = count - 1
 					}
 				}
@@ -261,13 +268,18 @@ func (exc *StackExchange) run() {
 
 					for _, ns := range m.namespaces {
 						if count, has := sub.subscribedNs[ns]; has {
-							if count < 2 {
-								delete(sub.subscribedNs, ns)
-								channel := exc.getChannel(ns, "", "")
-								sub.pubSub.PUnsubscribe(sub.msgCh, channel)
-							} else {
-								sub.subscribedNs[ns] = count - 1
-							}
+							// if count < 2 {
+							// 	delete(sub.subscribedNs, ns)
+							// 	channel := exc.getChannel(ns, "", "")
+							// 	sub.pubSub.PUnsubscribe(sub.msgCh, channel)
+							// } else {
+							// 	sub.subscribedNs[ns] = count - 1
+							// }
+
+							// when use multiplex subscriber, don't unsubscribe the namespace
+							// because in concurrency situation, the unsubscribe may happens before the subscribe
+							// that will make the conn use a subscriber that unsubscriber the namespace
+							sub.subscribedNs[ns] = count - 1
 						}
 					}
 
