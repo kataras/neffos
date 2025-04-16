@@ -5,7 +5,9 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+	"unsafe"
 
+	"github.com/bytedance/gopkg/collection/lscq"
 	"github.com/bytedance/gopkg/collection/skipmap"
 	"github.com/bytedance/gopkg/collection/zset"
 	uuid "github.com/iris-contrib/go.uuid"
@@ -53,10 +55,11 @@ type StackExchange struct {
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
 
-	multiplexAddSubscriber chan multiplexSubscriber
-	wsNumPerRedisConn      int                // the limit number of websocket connections per redis connection
-	subscriberZset         *zset.Float64Set   // value: subscriberID, score: number of websocket connections
-	subscriberSkipMap      *skipmap.StringMap // key: subscriberID, value: *subscriber
+	multiplexAddSubscriber   chan *multiplexSubscriber
+	wsNumPerRedisConn        int                // the limit number of websocket connections per redis connection
+	subscriberZset           *zset.Float64Set   // value: subscriberID, score: number of websocket connections
+	subscriberSkipMap        *skipmap.StringMap // key: subscriberID, value: *subscriber
+	multiplexSubscriberQueue *lscq.PointerQueue // the concurrency safe FIFO queue that used to add multiplex subscriber
 
 	allowNativeMessages            bool
 	shouldHandleOnlyNativeMessages bool
@@ -174,15 +177,28 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		subscribe:     make(chan subscribeAction),
 		unsubscribe:   make(chan unsubscribeAction),
 
-		multiplexAddSubscriber: make(chan multiplexSubscriber),
-		wsNumPerRedisConn:      cfg.WsNumPerRedisConn,
-		subscriberZset:         zset.NewFloat64(),
-		subscriberSkipMap:      skipmap.NewString(),
+		multiplexAddSubscriber:   make(chan *multiplexSubscriber),
+		wsNumPerRedisConn:        cfg.WsNumPerRedisConn,
+		subscriberZset:           zset.NewFloat64(),
+		subscriberSkipMap:        skipmap.NewString(),
+		multiplexSubscriberQueue: lscq.NewPointer(),
 	}
 
 	go exc.run()
+	go exc.readMultiplexSubscriber()
 
 	return exc, nil
+}
+
+func (exc *StackExchange) readMultiplexSubscriber() {
+	for {
+		if p, ok := exc.multiplexSubscriberQueue.Dequeue(); ok {
+			multiplexSub := (*multiplexSubscriber)(p)
+			exc.multiplexAddSubscriber <- multiplexSub
+		} else {
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
 }
 
 func (exc *StackExchange) run() {
@@ -353,7 +369,8 @@ func (exc *StackExchange) multiplexOnConnect(c *neffos.Conn) error {
 							conn:       c,
 							subscriber: s,
 						}
-						exc.multiplexAddSubscriber <- multiplexSub
+						// exc.multiplexAddSubscriber <- multiplexSub
+						exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
 					}
 
 					s.mu.RUnlock()
@@ -442,7 +459,8 @@ func (exc *StackExchange) multiplexOnConnect(c *neffos.Conn) error {
 		conn:       c,
 		subscriber: s,
 	}
-	exc.multiplexAddSubscriber <- multiplexSub
+	// exc.multiplexAddSubscriber <- multiplexSub
+	exc.multiplexSubscriberQueue.Enqueue(unsafe.Pointer(&multiplexSub))
 
 	return nil
 }
