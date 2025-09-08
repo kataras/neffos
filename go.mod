@@ -1,6 +1,6 @@
 module github.com/kataras/neffos
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/gobwas/ws v1.4.0
@@ -8,7 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/mediocregopher/radix/v3 v3.8.1
 	github.com/nats-io/nats.go v1.40.1
-	golang.org/x/sync v0.12.0
+	golang.org/x/sync v0.17.0
 )
 
 require (
