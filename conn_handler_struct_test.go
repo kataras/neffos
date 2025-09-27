@@ -77,7 +77,7 @@ type testStructDynamicEmbedded struct {
 }
 
 func (s *testStructDynamicEmbedded) OnMyEvent(msg Message) error {
-	return fmt.Errorf(s.namespace)
+	return fmt.Errorf("%s", s.namespace)
 }
 
 func TestConnHandlerStructDynamicEmbedded(t *testing.T) {

@@ -148,7 +148,7 @@ var (
 // If the "v" value is `MessageObjectMarshaler` then it returns the result of its `Marshal` method,
 // otherwise the DefaultMarshaler will be used instead.
 // Errors are pushed to the result, use the object's Marshal method to catch those when necessary.
-func Marshal(v interface{}) []byte {
+func Marshal(v any) []byte {
 	if v == nil {
 		panic("nil assigment")
 	}
@@ -173,7 +173,7 @@ func Marshal(v interface{}) []byte {
 // Unmarshal unmarshals this Message's body to the "outPtr".
 // The "outPtr" must be a pointer to a value that can customize its decoded value
 // by implementing the `MessageObjectUnmarshaler`, otherwise the `DefaultUnmarshaler` will be used instead.
-func (m *Message) Unmarshal(outPtr interface{}) error {
+func (m *Message) Unmarshal(outPtr any) error {
 	if outPtr == nil {
 		panic("nil assigment")
 	}

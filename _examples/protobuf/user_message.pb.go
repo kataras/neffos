@@ -7,10 +7,11 @@
 package main
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -100,7 +101,7 @@ func file_user_message_proto_rawDescGZIP() []byte {
 }
 
 var file_user_message_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
-var file_user_message_proto_goTypes = []interface{}{
+var file_user_message_proto_goTypes = []any{
 	(*UserMessage)(nil), // 0: main.UserMessage
 }
 var file_user_message_proto_depIdxs = []int32{
@@ -117,7 +118,7 @@ func file_user_message_proto_init() {
 		return
 	}
 	if !protoimpl.UnsafeEnabled {
-		file_user_message_proto_msgTypes[0].Exporter = func(v interface{}, i int) interface{} {
+		file_user_message_proto_msgTypes[0].Exporter = func(v any, i int) any {
 			switch v := v.(*UserMessage); i {
 			case 0:
 				return &v.state

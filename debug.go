@@ -6,7 +6,7 @@ import (
 	"reflect"
 )
 
-var debugPrinter interface{}
+var debugPrinter any
 
 // EnableDebug enables debug and optionally
 // sets a custom printer to print out debug messages.
@@ -14,9 +14,9 @@ var debugPrinter interface{}
 // the standard `log.Logger` or a custom one like the `kataras/golog`.
 //
 // A "printer" is compatible when it contains AT LEAST ONE of the following methods:
-// Debugf(string, ...interface{}) or
-// Logf(string, ...interface{}) or
-// Printf(string, ...interface{})
+// Debugf(string, ...any) or
+// Logf(string, ...any) or
+// Printf(string, ...any)
 //
 // If EnableDebug is called but the "printer" value is nil
 // then neffos will print debug messages through a new log.Logger prefixed with "| neffos |".
@@ -25,7 +25,7 @@ var debugPrinter interface{}
 // Therefore enabling the debugger has zero performance cost on up-and-running servers and clients.
 //
 // There is no way to disable the debug mode on serve-time.
-func EnableDebug(printer interface{}) {
+func EnableDebug(printer any) {
 	if debugEnabled() {
 		Debugf("debug mode is already set")
 		return
@@ -46,13 +46,13 @@ func EnableDebug(printer interface{}) {
 
 type (
 	debugfer interface {
-		Debugf(string, ...interface{})
+		Debugf(string, ...any)
 	}
 	logfer interface {
-		Logf(string, ...interface{})
+		Logf(string, ...any)
 	}
 	printfer interface {
-		Printf(string, ...interface{})
+		Printf(string, ...any)
 	}
 )
 
@@ -62,7 +62,7 @@ func debugEnabled() bool {
 
 // Debugf prints debug messages to the printer defined on `EnableDebug`.
 // Runs only on debug mode.
-func Debugf(format string, args ...interface{}) {
+func Debugf(format string, args ...any) {
 	if !debugEnabled() {
 		return
 	}
@@ -89,7 +89,7 @@ func Debugf(format string, args ...interface{}) {
 	}
 }
 
-type dargs []interface{}
+type dargs []any
 
 // DebugEach prints debug messages for each of "mapOrSlice" elements
 // to the printer defined on `EnableDebug`.
@@ -100,7 +100,7 @@ type dargs []interface{}
 //		fval := f.Interface()
 //		Debugf("field [%s.%s] will be automatically re-filled with [%T(%s)]", typ.Name(), typ.Field(idx).Name, fval, fval)
 //	})
-func DebugEach(mapOrSlice interface{}, onDebugVisitor interface{}) {
+func DebugEach(mapOrSlice any, onDebugVisitor any) {
 	if !debugEnabled() || onDebugVisitor == nil {
 		return
 	}

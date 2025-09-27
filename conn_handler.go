@@ -208,7 +208,7 @@ func (s *Struct) SetInjector(fn StructInjector) *Struct {
 // Users of this method is `New` and `Dial`.
 //
 // Note that this method has a tiny performance cost when an event's callback's logic has small footprint.
-func NewStruct(ptr interface{}) *Struct {
+func NewStruct(ptr any) *Struct {
 	if ptr == nil {
 		panic("NewStruct: value is nil")
 	}

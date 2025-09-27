@@ -48,7 +48,7 @@ type Conn struct {
 	// returns the same ID from the request.
 	serverConnID string
 	// a context-scope storage, initialized on first `Set`.
-	store      map[string]interface{}
+	store      map[string]any
 	storeMutex sync.RWMutex
 
 	// the gorilla or gobwas socket.
@@ -184,17 +184,17 @@ func (c *Conn) Server() *Server {
 }
 
 // Set sets a value to this connection's store.
-func (c *Conn) Set(key string, value interface{}) {
+func (c *Conn) Set(key string, value any) {
 	c.storeMutex.Lock()
 	if c.store == nil {
-		c.store = make(map[string]interface{})
+		c.store = make(map[string]any)
 	}
 	c.store[key] = value
 	c.storeMutex.Unlock()
 }
 
 // Get retruns a value based on the given "key"
-func (c *Conn) Get(key string) interface{} {
+func (c *Conn) Get(key string) any {
 	c.storeMutex.RLock()
 	if c.store == nil {
 		c.storeMutex.RUnlock()
