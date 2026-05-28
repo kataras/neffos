@@ -28,6 +28,10 @@ type StackExchange struct {
 	subscribe     chan subscribeAction
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
+	// done is closed by Close to signal the run loop to exit and to let
+	// any goroutine that sends on the action channels drop its work cleanly.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 var _ neffos.StackExchange = (*StackExchange)(nil)
@@ -147,6 +151,7 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
 		unsubscribe:   make(chan unsubscribeAction),
+		done:          make(chan struct{}),
 	}
 
 	go exc.run()
@@ -157,8 +162,16 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 func (exc *StackExchange) run() {
 	for {
 		select {
+		case <-exc.done:
+			// drain remaining subscribers so we don't leak their nats connections.
+			for c, sub := range exc.subscribers {
+				if sub.subConn.IsConnected() {
+					sub.subConn.Close()
+				}
+				delete(exc.subscribers, c)
+			}
+			return
 		case s := <-exc.addSubscriber:
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
 			exc.subscribers[s.conn] = s
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
@@ -278,7 +291,13 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 		subConn: subConn,
 	}
 
-	exc.addSubscriber <- s
+	select {
+	case exc.addSubscriber <- s:
+	case <-exc.done:
+		if subConn.IsConnected() {
+			subConn.Close()
+		}
+	}
 
 	return nil
 }
@@ -353,18 +372,18 @@ func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 // Subscribe subscribes to a specific namespace,
 // it's called automatically on neffos namespace connected.
 func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
-	exc.subscribe <- subscribeAction{
-		conn:      c,
-		namespace: namespace,
+	select {
+	case exc.subscribe <- subscribeAction{conn: c, namespace: namespace}:
+	case <-exc.done:
 	}
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
 // it's called automatically on neffos namespace disconnect.
 func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
-	exc.unsubscribe <- unsubscribeAction{
-		conn:      c,
-		namespace: namespace,
+	select {
+	case exc.unsubscribe <- unsubscribeAction{conn: c, namespace: namespace}:
+	case <-exc.done:
 	}
 }
 
@@ -375,5 +394,21 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	exc.delSubscriber <- closeAction{conn: c}
+	select {
+	case exc.delSubscriber <- closeAction{conn: c}:
+	case <-exc.done:
+	}
+}
+
+// Close shuts down the run loop, closes the publisher and any outstanding
+// subscriber connections. It is safe to call Close more than once;
+// subsequent calls are no-ops.
+func (exc *StackExchange) Close() error {
+	exc.closeOnce.Do(func() {
+		close(exc.done)
+		if exc.publisher != nil && exc.publisher.IsConnected() {
+			exc.publisher.Close()
+		}
+	})
+	return nil
 }

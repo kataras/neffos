@@ -46,12 +46,19 @@ func (ns *NSConn) String() string {
 	return ns.Conn.String()
 }
 
-// Broadcast method sends a message to all connections, including this one.
+// Broadcast sends msgs to every connection, including the sender. Equivalent to
+// `ns.Conn.Server().Broadcast(nil, msgs...)` but reads more clearly inside an
+// event callback. Delivery is at-most-once; see Server.Broadcast for details.
+//
+// This is a server-side helper: calling it on a client-side NSConn panics.
 func (ns *NSConn) Broadcast(msgs ...Message) {
 	ns.Conn.server.Broadcast(nil, msgs...)
 }
 
-// Broadcast method sends a message to all connections except this one.
+// BroadcastOthers sends msgs to every connection except this one. Equivalent to
+// `ns.Conn.Server().Broadcast(ns.Conn, msgs...)`.
+//
+// This is a server-side helper: calling it on a client-side NSConn panics.
 func (ns *NSConn) BroadcastOthers(msgs ...Message) {
 	ns.Conn.server.Broadcast(ns.Conn, msgs...)
 }

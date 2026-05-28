@@ -1,6 +1,6 @@
 module github.com/kataras/neffos
 
-go 1.25
+go 1.26
 
 require (
 	github.com/gobwas/ws v1.4.0

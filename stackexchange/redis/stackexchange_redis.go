@@ -2,7 +2,8 @@ package redis
 
 import (
 	"context"
-	"math/rand"
+	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/kataras/neffos"
@@ -45,6 +46,10 @@ type StackExchange struct {
 	subscribe     chan subscribeAction
 	unsubscribe   chan unsubscribeAction
 	delSubscriber chan closeAction
+	// done is closed by Close to signal the run loop to exit and to let
+	// any goroutine that sends on the action channels drop its work cleanly.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type (
@@ -112,7 +117,7 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 
 		connFunc = func(network, addr string) (radix.Conn, error) {
 			topo := cluster.Topo()
-			node := topo[rand.Intn(len(topo))]
+			node := topo[rand.IntN(len(topo))]
 			return radix.Dial(cfg.Network, node.Addr, dialOptions...)
 		}
 	} else {
@@ -141,6 +146,7 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		delSubscriber: make(chan closeAction),
 		subscribe:     make(chan subscribeAction),
 		unsubscribe:   make(chan unsubscribeAction),
+		done:          make(chan struct{}),
 	}
 
 	go exc.run()
@@ -151,32 +157,46 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 func (exc *StackExchange) run() {
 	for {
 		select {
+		case <-exc.done:
+			// drain remaining subscribers so we don't leak their pubsub conns.
+			for c, sub := range exc.subscribers {
+				sub.pubSub.Close()
+				close(sub.msgCh)
+				delete(exc.subscribers, c)
+			}
+			return
 		case s := <-exc.addSubscriber:
 			exc.subscribers[s.conn] = s
-			// neffos.Debugf("[%s] added to potential subscribers", s.conn.ID())
 		case m := <-exc.subscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				channel := exc.getChannel(m.namespace, "", "")
 				sub.pubSub.PSubscribe(sub.msgCh, channel)
-				// neffos.Debugf("[%s] subscribed to [%s] for namespace [%s]", m.conn.ID(), channel, m.namespace)
-				//	} else {
-				// neffos.Debugf("[%s] tried to subscribe to [%s] namespace before 'OnConnect.addSubscriber'!", m.conn.ID(), m.namespace)
 			}
 		case m := <-exc.unsubscribe:
 			if sub, ok := exc.subscribers[m.conn]; ok {
 				channel := exc.getChannel(m.namespace, "", "")
-				// neffos.Debugf("[%s] unsubscribed from [%s]", channel)
 				sub.pubSub.PUnsubscribe(sub.msgCh, channel)
 			}
 		case m := <-exc.delSubscriber:
 			if sub, ok := exc.subscribers[m.conn]; ok {
-				// neffos.Debugf("[%s] disconnected", m.conn.ID())
 				sub.pubSub.Close()
 				close(sub.msgCh)
 				delete(exc.subscribers, m.conn)
 			}
 		}
 	}
+}
+
+// Close shuts down the run loop, terminates any outstanding subscriber
+// connections, and releases the connection pool. It is safe to call Close more
+// than once; subsequent calls are no-ops.
+func (exc *StackExchange) Close() error {
+	var err error
+	exc.closeOnce.Do(func() {
+		close(exc.done)
+		err = exc.pool.Close()
+	})
+	return err
 }
 
 func (exc *StackExchange) getChannel(namespace, room, connID string) string {
@@ -219,7 +239,12 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 	selfChannel := exc.getChannel("", "", c.ID())
 	pubSub.PSubscribe(redisMsgCh, selfChannel)
 
-	exc.addSubscriber <- s
+	select {
+	case exc.addSubscriber <- s:
+	case <-exc.done:
+		pubSub.Close()
+		close(redisMsgCh)
+	}
 
 	return nil
 }
@@ -284,18 +309,18 @@ func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 // Subscribe subscribes to a specific namespace,
 // it's called automatically on neffos namespace connected.
 func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
-	exc.subscribe <- subscribeAction{
-		conn:      c,
-		namespace: namespace,
+	select {
+	case exc.subscribe <- subscribeAction{conn: c, namespace: namespace}:
+	case <-exc.done:
 	}
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
 // it's called automatically on neffos namespace disconnect.
 func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
-	exc.unsubscribe <- unsubscribeAction{
-		conn:      c,
-		namespace: namespace,
+	select {
+	case exc.unsubscribe <- unsubscribeAction{conn: c, namespace: namespace}:
+	case <-exc.done:
 	}
 }
 
@@ -306,5 +331,8 @@ func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	exc.delSubscriber <- closeAction{conn: c}
+	select {
+	case exc.delSubscriber <- closeAction{conn: c}:
+	case <-exc.done:
+	}
 }

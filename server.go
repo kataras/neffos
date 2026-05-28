@@ -74,7 +74,7 @@ type Server struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 
-	count uint64
+	count atomic.Uint64
 
 	connections       map[*Conn]struct{}
 	connect           chan *Conn
@@ -89,7 +89,11 @@ type Server struct {
 	waitingMessages      map[string]chan Message
 	waitingMessagesMutex sync.RWMutex
 
-	closed uint32
+	closed atomic.Uint32
+	// done is closed by Close() to signal the start() loop to exit and to let
+	// goroutines that send to s.disconnect/s.connect/s.actions/s.broadcastMessages
+	// drop their work cleanly during shutdown.
+	done chan struct{}
 
 	// OnUpgradeError can be optionally registered to catch upgrade errors.
 	OnUpgradeError func(err error)
@@ -127,6 +131,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 		broadcaster:       newBroadcaster(),
 		waitingMessages:   make(map[string]chan Message),
 		IDGenerator:       DefaultIDGenerator,
+		done:              make(chan struct{}),
 	}
 
 	go s.start()
@@ -165,19 +170,17 @@ func (s *Server) usesStackExchange() bool {
 }
 
 func (s *Server) start() {
-	atomic.StoreUint32(&s.closed, 0)
-
 	for {
 		select {
+		case <-s.done:
+			return
 		case c := <-s.connect:
 			s.connections[c] = struct{}{}
-			atomic.AddUint64(&s.count, 1)
+			s.count.Add(1)
 		case c := <-s.disconnect:
 			if _, ok := s.connections[c]; ok {
-				// close(c.out)
 				delete(s.connections, c)
-				atomic.AddUint64(&s.count, ^uint64(0))
-				// println("disconnect...")
+				s.count.Add(^uint64(0))
 				if s.OnDisconnect != nil {
 					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
 					if !s.FireDisconnectAlways && (!c.readiness.isReady() || (c.readiness.err != nil)) {
@@ -200,6 +203,7 @@ func (s *Server) start() {
 			}
 
 			if act.done != nil {
+				// act.done is buffered to cap 1 (see Server.Do), so this never blocks.
 				act.done <- struct{}{}
 			}
 		}
@@ -207,11 +211,23 @@ func (s *Server) start() {
 }
 
 // Close terminates the server and all of its connections, client connections are getting notified.
+// Close is idempotent: subsequent calls are no-ops.
+//
+// Close fires c.Close() for every connection synchronously (each connection's
+// OnNamespaceDisconnect / OnRoomLeave callbacks run before this method returns),
+// signals the internal dispatch loop to exit, and (when the configured
+// StackExchange implements StackExchangeCloser) releases its broker
+// connections. After Close returns, the server no longer accepts Upgrade calls
+// and any pending Broadcast/Ask calls will fail.
 func (s *Server) Close() {
-	if atomic.CompareAndSwapUint32(&s.closed, 0, 1) {
+	if s.closed.CompareAndSwap(0, 1) {
 		s.Do(func(c *Conn) {
 			c.Close()
 		}, false)
+		close(s.done)
+		if closer, ok := s.StackExchange.(StackExchangeCloser); ok {
+			closer.Close()
+		}
 	}
 }
 
@@ -259,7 +275,7 @@ var errUpgradeOnRetry = errors.New("check status")
 //
 // Look the `Conn#WasReconnected` and `Conn#ReconnectTries` too.
 func IsTryingToReconnect(err error) (ok bool) {
-	return err != nil && err == errUpgradeOnRetry
+	return errors.Is(err, errUpgradeOnRetry)
 }
 
 // This header key should match with that browser-client's `whenResourceOnline->re-dial` uses.
@@ -282,7 +298,7 @@ func (s *Server) Upgrade(
 	socketWrapper func(Socket) Socket,
 	customIDGen IDGenerator,
 ) (*Conn, error) {
-	if atomic.LoadUint32(&s.closed) > 0 {
+	if s.closed.Load() > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil, errServerClosed
 	}
@@ -355,43 +371,23 @@ func (s *Server) Upgrade(
 		}
 	}
 
-	// Start the reader before `OnConnect`, remember clients may remotely connect to namespace before `Server#OnConnect`
-	// therefore any `Server:NSConn#OnNamespaceConnected` can write immediately to the client too.
-	// Note also that the `Server#OnConnect` itself can do that as well but if the written Message's Namespace is not locally connected
-	// it, correctly, can't pass the write checks. Also, and most important, the `OnConnect` is ready to connect a client to a namespace (locally and remotely).
+	// Start the reader before `OnConnect`: clients may remotely connect to a namespace before
+	// `Server#OnConnect` returns, so any `Server:NSConn#OnNamespaceConnected` can write
+	// immediately back to the client. The server's `OnConnect` can also write, but any Message
+	// targeting a not-yet-locally-connected namespace would (correctly) fail the write checks.
 	//
-	// This has a downside:
-	// We need a way to check if the `OnConnect` returns an non-nil error which means that the connection should terminate before namespace connect or anything.
-	// The solution is to still accept reading messages but add them to the queue(like we already do for any case messages came before ack),
-	// the problem to that is that the queue handler is fired when ack is done but `OnConnect` may not even return yet, so we introduce a `mark ready` atomic scope
-	// and a channel which will wait for that `mark ready` if handle queue is called before ready.
-	// Also make the same check before emit the connection's disconnect event (if defined),
-	// which will be always ready to be called because we added the connections via the connect channel;
-	// we still need the connection to be available for any broadcasting on connected events.
-	// ^ All these only when server-side connection in order to correctly handle the end-developer's `OnConnect`.
-	//
-	// Look `Conn.serverReadyWaiter#startReader##handleQueue.serverReadyWaiter.unwait`(to hold the events until no error returned or)
-	// `#Write:serverReadyWaiter.unwait` (for things like server connect).
-	// All cases tested & worked perfectly.
+	// To honor the contract that a non-nil error from `OnConnect` must abort the connection
+	// before any namespace connect, we accept messages into the queue while `OnConnect` runs
+	// (same path used for messages arriving before ack). The ack ready signal also waits on
+	// `OnConnect`'s outcome; on error, no events fire.
 	if s.OnConnect != nil {
 		if err = s.OnConnect(c); err != nil {
-			// TODO: Do something with that error.
-			// The most suitable thing we can do is to somehow send this to the client's `Dial` return statement.
-			// This can be done if client waits for "OK" signal or a failure with an error before return the websocket connection,
-			// as for today we have the ack process which does NOT block and end-developer can send messages and server will handle them when both sides are ready.
-			// So, maybe it's a better solution to transform that process into a blocking state which can handle any `Server#OnConnect` error and return it at client's `Dial`.
-			// Think more later today.
-			// Done but with a lot of code.... will try to cleanup some things.
-			//println("OnConnect error: " + err.Error())
 			c.readiness.unwait(err)
 			// No need to disconnect here, connection's .Close will be called on readiness ch errored.
-
-			// c.Close()
 			return nil, err
 		}
 	}
 
-	//println("OnConnect does not exist or no error, fire unwait")
 	c.readiness.unwait(nil)
 
 	return c, nil
@@ -406,7 +402,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // GetTotalConnections returns the total amount of the connected connections to the server, it's fast
 // and can be used as frequently as needed.
 func (s *Server) GetTotalConnections() uint64 {
-	return atomic.LoadUint64(&s.count)
+	return s.count.Load()
 }
 
 type action struct {
@@ -414,17 +410,20 @@ type action struct {
 	done chan struct{}
 }
 
-// Do loops through all connected connections and fires the "fn", with this method
-// callers can do whatever they want on a connection outside of a event's callback,
-// but make sure that these operations are not taking long time to complete because it delays the
-// new incoming connections.
-// If "async" is true then this method does not block the flow of the program.
+// Do loops through all connected connections and fires "fn" once per connection.
+// Callers can use this to manipulate connections outside an event callback.
+//
+// Do not perform long work inside fn: it runs on the server's dispatch goroutine
+// and delays accept of new connections, disconnects, and broadcasts until it returns.
+//
+// If async is true Do returns immediately; otherwise it blocks until every
+// connection has been processed.
 func (s *Server) Do(fn func(*Conn), async bool) {
 	act := action{call: fn}
 	if !async {
-		act.done = make(chan struct{})
-		// go func() { s.actions <- act }()
-		// <-act.done
+		// Buffered to cap 1 so the dispatch loop never blocks on a caller that
+		// already abandoned the wait.
+		act.done = make(chan struct{}, 1)
 	}
 
 	s.actions <- act
@@ -456,9 +455,6 @@ func publishMessages(c *Conn, msgs []Message) bool {
 }
 
 func (s *Server) waitMessages(c *Conn) bool {
-	s.broadcaster.mu.Lock()
-	defer s.broadcaster.mu.Unlock()
-
 	msgs, ok := s.broadcaster.waitUntilClosed(c.closeCh)
 	if !ok {
 		return false
@@ -482,25 +478,21 @@ func (s stringerValue) String() string { return s.v }
 //	 neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
 func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 
-// Broadcast method is fast and does not block any new incoming connection by-default,
-// it can be used as frequently as needed. Use the "msg"'s Namespace, or/and Event or/and Room to broadcast
-// to a specific type of connection collectives.
+// Broadcast publishes msgs to every connection that is allowed to receive them.
+// It does not block: the message is queued for the connection's writer, so this
+// method is safe to call as frequently as needed.
 //
-// If first "exceptSender" parameter is not nil then the message "msg" will be
-// broadcasted to all connected clients except the given connection's ID,
-// any value that completes the `fmt.Stringer` interface is valid. Keep note that
-// `Conn`, `NSConn`, `Room` and `Exclude(connID) global function` are valid values.
+// At-most-once semantics: when a connection's outbox is saturated or the
+// connection is mid-close, that connection silently drops the message. There is
+// no per-message delivery acknowledgement; if delivery confirmation is required,
+// use Ask instead.
 //
-// Example Code:
-// nsConn.Conn.Server().Broadcast(
+// If exceptSender is non-nil, msgs are not sent back to that connection. The
+// argument may be a *Conn, *NSConn, *Room, or the result of Exclude(connID).
 //
-//		nsConn OR nil,
-//	 neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
-//
-// Note that it if `StackExchange` is nil then its default behavior
-// doesn't wait for a publish to complete to all clients before any
-// next broadcast call. To change that behavior set the `Server.SyncBroadcaster` to true
-// before server start.
+// When `StackExchange` is configured, msgs are published through it. When
+// `SyncBroadcaster` is true, the call enqueues to the dispatch loop so broadcasts
+// preserve a strict order at the cost of throughput.
 func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
 
 	if exceptSender != nil {
@@ -537,14 +529,16 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
 	s.broadcaster.broadcast(msgs)
 }
 
-// Ask is like `Broadcast` but it blocks until a response
-// from a specific connection if "msg.To" is filled otherwise
-// from the first connection which will reply to this "msg".
+// Ask broadcasts msg and blocks until a matching reply arrives or ctx is canceled.
 //
-// Accepts a context for deadline as its first input argument.
-// The second argument is the request message
-// which should be sent to a specific namespace:event
-// like the `Conn.Ask`.
+// If msg.To is set, the reply comes from that specific connection. Otherwise Ask
+// returns the first reply received from any connection that handles the event.
+//
+// Always call Ask with a context that has a deadline (context.WithTimeout) — a
+// connection that goes silent will otherwise pin this goroutine forever.
+//
+// When `StackExchange` is configured, the wait is routed through it so the reply
+// can come from a different neffos instance.
 func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 	if ctx == nil {
 		ctx = context.TODO()
@@ -557,10 +551,19 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 		return s.StackExchange.Ask(ctx, msg, msg.wait)
 	}
 
-	ch := make(chan Message)
+	// Buffered to cap 1 so a replier never blocks if ctx fires before we read.
+	// The deferred cleanup ensures the entry is removed on both the receive and
+	// the cancel paths.
+	ch := make(chan Message, 1)
 	s.waitingMessagesMutex.Lock()
 	s.waitingMessages[msg.wait] = ch
 	s.waitingMessagesMutex.Unlock()
+
+	defer func() {
+		s.waitingMessagesMutex.Lock()
+		delete(s.waitingMessages, msg.wait)
+		s.waitingMessagesMutex.Unlock()
+	}()
 
 	s.Broadcast(nil, msg)
 
@@ -568,10 +571,6 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 	case <-ctx.Done():
 		return Message{}, ctx.Err()
 	case receive := <-ch:
-		s.waitingMessagesMutex.Lock()
-		delete(s.waitingMessages, msg.wait)
-		s.waitingMessagesMutex.Unlock()
-
 		return receive, receive.Err
 	}
 }
@@ -579,7 +578,6 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 // GetConnectionsByNamespace can be used as an alternative way to retrieve
 // all connected connections to a specific "namespace" on a specific time point.
 // Do not use this function frequently, it is not designed to be fast or cheap, use it for debugging or logging every 'x' time.
-// Users should work with the event's callbacks alone, the usability is enough for all type of operations. See `Do` too.
 //
 // Not thread safe.
 func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn {

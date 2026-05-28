@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -262,7 +263,7 @@ func escape(s string) string {
 		return s
 	}
 
-	return strings.Replace(s, messageSeparatorString, messageFieldSeparatorReplacement, -1)
+	return strings.ReplaceAll(s, messageSeparatorString, messageFieldSeparatorReplacement)
 }
 
 // called on `DeserializeMessage` to all message's fields except the body (and error).
@@ -271,7 +272,7 @@ func unescape(s string) string {
 		return s
 	}
 
-	return strings.Replace(s, messageFieldSeparatorReplacement, messageSeparatorString, -1)
+	return strings.ReplaceAll(s, messageFieldSeparatorReplacement, messageSeparatorString)
 }
 
 func serializeMessage(msg Message) (out []byte) {
@@ -379,21 +380,21 @@ const validMessageSepCount = 7
 
 var knownErrors = []error{ErrBadNamespace, ErrBadRoom, ErrWrite, ErrInvalidPayload}
 
-// RegisterKnownError registers an error that it's "known" to both server and client sides.
-// This simply adds an error to a list which, if its static text matches
-// an incoming error text then its value is set to the `Message.Error` field on the events callbacks.
+// RegisterKnownError registers an error that is "known" to both server and client sides.
+// On the receiving side an incoming error text is matched against every registered
+// known error: if any registered error's text matches (or a registered error
+// implements `ResolveError(errorText string) bool` and returns true), the
+// `Message.Err` field is set to that error value instead of a fresh `errors.New`.
+// This lets event callbacks compare errors with `==` or `errors.Is` across the wire.
 //
-// For dynamic text error, there is a special case which if
-// the error "err" contains
-// a `ResolveError(errorText string) bool` method then,
-// it is used to report whether this "err" is match to the incoming error text.
+// RegisterKnownError mutates a package-level slice without synchronization.
+// Call it during program initialization (e.g. in an `init` function), before
+// any `New` or `Dial`. Calling it concurrently with active connections is
+// unsafe.
 func RegisterKnownError(err error) {
-	for _, knownErr := range knownErrors {
-		if err == knownErr {
-			return
-		}
+	if slices.Contains(knownErrors, err) {
+		return
 	}
-
 	knownErrors = append(knownErrors, err)
 }
 

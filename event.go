@@ -1,6 +1,7 @@
 package neffos
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -77,11 +78,8 @@ func IsDisconnectError(err error) bool {
 }
 
 func isManualCloseError(err error) bool {
-	if _, ok := err.(CloseError); ok {
-		return true
-	}
-
-	return false
+	_, ok := errors.AsType[CloseError](err)
+	return ok
 }
 
 // IsCloseError reports whether the "err" is a "closed by the remote host" network connection error.
@@ -94,24 +92,23 @@ func IsCloseError(err error) bool {
 		return true
 	}
 
-	if err == io.ErrUnexpectedEOF || err == io.EOF {
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return true
 	}
 
-	if netErr, ok := err.(*net.OpError); ok {
-		if netErr.Err == nil {
-			return false
-		}
-
-		if sysErr, ok := netErr.Err.(*os.SyscallError); ok {
-			return sysErr != nil
-			// return strings.HasSuffix(sysErr.Err.Error(), "closed by the remote host.")
-		}
-
-		return strings.HasSuffix(err.Error(), "use of closed network connection")
+	netErr, ok := errors.AsType[*net.OpError](err)
+	if !ok {
+		return false
+	}
+	if netErr.Err == nil {
+		return false
 	}
 
-	return false
+	if _, ok := errors.AsType[*os.SyscallError](netErr.Err); ok {
+		return true
+	}
+
+	return strings.HasSuffix(err.Error(), "use of closed network connection")
 }
 
 // IsTimeoutError reports whether the "err" is caused by a defined timeout.
@@ -120,12 +117,12 @@ func IsTimeoutError(err error) bool {
 		return false
 	}
 
-	if netErr, ok := err.(*net.OpError); ok {
-		// poll.TimeoutError is the /internal/poll of the go language itself, we can't use it directly.
-		return netErr.Timeout()
+	netErr, ok := errors.AsType[*net.OpError](err)
+	if !ok {
+		return false
 	}
-
-	return false
+	// poll.TimeoutError is the /internal/poll of the go language itself, we can't use it directly.
+	return netErr.Timeout()
 }
 
 type reply struct {
@@ -137,10 +134,11 @@ func (r reply) Error() string {
 }
 
 func isReply(err error) ([]byte, bool) {
-	if err != nil {
-		if r, ok := err.(reply); ok {
-			return r.Body, true
-		}
+	if err == nil {
+		return nil, false
+	}
+	if r, ok := errors.AsType[reply](err); ok {
+		return r.Body, true
 	}
 	return nil, false
 }

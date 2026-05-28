@@ -17,7 +17,7 @@ func isZero(v reflect.Value) bool {
 	switch v.Kind() {
 	case reflect.Struct:
 		zero := true
-		for i := 0; i < v.NumField(); i++ {
+		for i := range v.NumField() {
 			zero = zero && isZero(v.Field(i))
 		}
 
@@ -44,7 +44,7 @@ func isZero(v reflect.Value) bool {
 		return v.IsNil()
 	case reflect.Array:
 		zero := true
-		for i := 0; i < v.Len(); i++ {
+		for i := range v.Len() {
 			zero = zero && isZero(v.Index(i))
 		}
 		return zero
@@ -66,10 +66,8 @@ func isZero(v reflect.Value) bool {
 func visitFields(typ reflect.Type, visitor func(f reflect.StructField) bool) int {
 	typ = indirectType(typ)
 
-	for n, i := typ.NumField(), 0; i < n; i++ {
-		f := typ.Field(i)
-		found := visitor(f)
-		if found {
+	for i := range typ.NumField() {
+		if visitor(typ.Field(i)) {
 			return i
 		}
 	}
@@ -135,9 +133,9 @@ func resolveStructNamespace(v reflect.Value) (string, bool) {
 }
 
 var (
-	nsConnType = reflect.TypeOf((*NSConn)(nil))
-	msgType    = reflect.TypeOf(Message{})
-	errType    = reflect.TypeOf((*error)(nil)).Elem()
+	nsConnType = reflect.TypeFor[*NSConn]()
+	msgType    = reflect.TypeFor[Message]()
+	errType    = reflect.TypeFor[error]()
 )
 
 func makeMessageHandlerFuncType(forType reflect.Type, nsConnFieldIndex int) reflect.Type {
@@ -164,7 +162,7 @@ func isArgOf(fnType reflect.Type, argType reflect.Type) bool {
 		panic("isArgOf used on a non-method type")
 	}
 
-	for i, n := 0, fnType.NumIn(); i < n; i++ {
+	for i := range fnType.NumIn() {
 		if fnType.In(i) == argType {
 			return true
 		}
@@ -234,7 +232,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 	nsConnFieldIndex := getFieldIndex(typ, nsConnType)
 	msgHandlerType := makeMessageHandlerFuncType(typ, nsConnFieldIndex)
 
-	for i, n := 0, typ.NumMethod(); i < n; i++ {
+	for i := range typ.NumMethod() {
 		method := typ.Method(i)
 
 		if method.Type != msgHandlerType {

@@ -74,8 +74,12 @@ type Conn struct {
 	// the defined namespaces, allowed to connect.
 	namespaces Namespaces
 
-	// more than 0 if acknowledged.
-	acknowledged *uint32
+	// 1 once acknowledged. Paired with ackCh, which is closed exactly once when
+	// the connection completes its ack handshake. Using both lets fast-path
+	// checks stay branch-free (Load) while blocking call sites can wait on ackCh.
+	acknowledged atomic.Uint32
+	ackCh        chan struct{}
+	ackOnce      sync.Once
 
 	// the connection's current connected namespace.
 	connectedNamespaces      map[string]*NSConn
@@ -84,7 +88,7 @@ type Conn struct {
 	// i.e `askConnect: myNamespace` blocks the `tryNamespace: myNamespace` until finish.
 	processes *processes
 
-	isInsideHandler *uint32
+	isInsideHandler atomic.Uint32
 
 	// messages that this connection waits for a reply.
 	waitingMessages      map[string]chan Message
@@ -96,8 +100,8 @@ type Conn struct {
 	queue      map[MessageType][][]byte
 	queueMutex sync.Mutex
 
-	// used to fire `conn#Close` once.
-	closed *uint32
+	// 1 once Close has run; protected via CompareAndSwap to make Close idempotent.
+	closed atomic.Uint32
 	// useful to terminate the broadcaster, see `Server#ServeHTTP.waitMessages`.
 	closeCh chan struct{}
 }
@@ -107,14 +111,12 @@ func newConn(socket Socket, namespaces Namespaces) *Conn {
 		socket:                         socket,
 		namespaces:                     namespaces,
 		readiness:                      newWaiterOnce(),
-		acknowledged:                   new(uint32),
+		ackCh:                          make(chan struct{}),
 		connectedNamespaces:            make(map[string]*NSConn),
 		processes:                      newProcesses(),
-		isInsideHandler:                new(uint32),
 		waitingMessages:                make(map[string]chan Message),
 		allowNativeMessages:            false,
 		shouldHandleOnlyNativeMessages: false,
-		closed:                         new(uint32),
 		closeCh:                        make(chan struct{}),
 	}
 
@@ -129,12 +131,21 @@ func newConn(socket Socket, namespaces Namespaces) *Conn {
 		if len(c.namespaces) == 1 && len(emptyNamespace) == 1 {
 			c.connectedNamespaces[""] = newNSConn(c, "", emptyNamespace)
 			c.shouldHandleOnlyNativeMessages = true
-			atomic.StoreUint32(c.acknowledged, 1)
+			c.markAcknowledged()
 			c.readiness.unwait(nil)
 		}
 	}
 
 	return c
+}
+
+// markAcknowledged transitions the connection to the acknowledged state exactly once.
+// ackCh is closed so any goroutine blocked in Connect can wake immediately.
+func (c *Conn) markAcknowledged() {
+	c.ackOnce.Do(func() {
+		c.acknowledged.Store(1)
+		close(c.ackCh)
+	})
 }
 
 // Is reports whether the "connID" is part of this server's connections and their IDs are equal.
@@ -174,7 +185,7 @@ func (c *Conn) IsClient() bool {
 	return c.server == nil
 }
 
-// Server method returns the backend server, it returns null on client-side connections.
+// Server returns the backend server for server-side connections, or nil on client-side connections.
 func (c *Conn) Server() *Server {
 	if c.IsClient() {
 		return nil
@@ -183,7 +194,9 @@ func (c *Conn) Server() *Server {
 	return c.server
 }
 
-// Set sets a value to this connection's store.
+// Set stores value under key in this connection's context-scope store.
+// Set is safe for concurrent use but the stored value is not — callers must
+// synchronize their own access if the value is mutable and shared.
 func (c *Conn) Set(key string, value any) {
 	c.storeMutex.Lock()
 	if c.store == nil {
@@ -193,17 +206,15 @@ func (c *Conn) Set(key string, value any) {
 	c.storeMutex.Unlock()
 }
 
-// Get retruns a value based on the given "key"
+// Get returns the value stored under key, or nil if absent.
+// Get is safe for concurrent use.
 func (c *Conn) Get(key string) any {
 	c.storeMutex.RLock()
+	defer c.storeMutex.RUnlock()
 	if c.store == nil {
-		c.storeMutex.RUnlock()
 		return nil
 	}
-
-	v := c.store[key]
-	c.storeMutex.RUnlock()
-	return v
+	return c.store[key]
 }
 
 // Increment works like `Set` method.
@@ -275,13 +286,12 @@ func (c *Conn) WasReconnected() bool {
 }
 
 func (c *Conn) isAcknowledged() bool {
-	return atomic.LoadUint32(c.acknowledged) > 0
+	return c.acknowledged.Load() > 0
 }
 
 const (
-	ackBinary   = 'M' // byte(0x1) // comes from client to server at startup.
-	ackIDBinary = 'A' // byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
-	// ackOKBinary    = 'K' // byte(0x3) // comes from client to server when id received and set-ed.
+	ackBinary      = 'M' // byte(0x1) // comes from client to server at startup.
+	ackIDBinary    = 'A' // byte(0x2) // comes from server to client after ackBinary and ready as a prefix, the rest message is the conn's ID.
 	ackNotOKBinary = 'H' // byte(0x4) // comes from server to client if `Server#OnConnected` errored as a prefix, the rest message is the error text.
 )
 
@@ -339,9 +349,9 @@ func (c *Conn) startReader() {
 			continue
 		}
 
-		atomic.StoreUint32(c.isInsideHandler, 1)
+		c.isInsideHandler.Store(1)
 		c.HandlePayload(msgTyp, b)
-		atomic.StoreUint32(c.isInsideHandler, 0)
+		c.isInsideHandler.Store(0)
 	}
 }
 
@@ -355,28 +365,19 @@ func (c *Conn) handleACK(msgTyp MessageType, b []byte) bool {
 			c.write(append(ackNotOKBinaryB, []byte(err.Error())...), false)
 			return false
 		}
-		atomic.StoreUint32(c.acknowledged, 1)
+		c.markAcknowledged()
 		c.handleQueue()
 
 		// it's ok send ID.
 		return c.write(append(ackIDBinaryB, []byte(c.id)...), false)
-
-	// case ackOKBinary:
-	// 	// from client to server.
-
-	// 	atomic.StoreUint32(c.acknowledged, 1)
-	// 	c.handleQueue()
 
 	case ackIDBinary:
 		// from server to client.
 		id := string(b[1:])
 		c.id = id
 
-		atomic.StoreUint32(c.acknowledged, 1)
+		c.markAcknowledged()
 		c.readiness.unwait(nil)
-		// c.write([]byte{ackOKBinary})
-		// println("ackIDBinary: pass with nil")
-		// c.handleQueue()
 	case ackNotOKBinary:
 		// from server to client.
 		errText := string(b[1:])
@@ -393,7 +394,6 @@ func (c *Conn) handleACK(msgTyp MessageType, b []byte) bool {
 	}
 
 	return true
-
 }
 
 func (c *Conn) handleQueue() {
@@ -404,9 +404,8 @@ func (c *Conn) handleQueue() {
 		for _, b := range q {
 			c.HandlePayload(msgTyp, b)
 		}
-
-		delete(c.queue, msgTyp)
 	}
+	clear(c.queue)
 }
 
 // ErrInvalidPayload can be returned by the internal `handleMessage`.
@@ -434,6 +433,8 @@ func (c *Conn) handleMessage(msg Message) error {
 			ch, ok := c.server.waitingMessages[msg.wait]
 			c.server.waitingMessagesMutex.RUnlock()
 			if ok {
+				// ch is buffered to cap 1 (see Server.Ask) so this never blocks
+				// even if the waiter has already returned via ctx cancellation.
 				ch <- msg
 				return nil
 			}
@@ -443,6 +444,7 @@ func (c *Conn) handleMessage(msg Message) error {
 		ch, ok := c.waitingMessages[msg.wait]
 		c.waitingMessagesMutex.RUnlock()
 		if ok {
+			// ch is buffered to cap 1 (see Conn.ask) so this never blocks.
 			ch <- msg
 			return nil
 		}
@@ -465,7 +467,6 @@ func (c *Conn) handleMessage(msg Message) error {
 	default:
 		ns, ok := c.tryNamespace(msg)
 		if !ok {
-			// println(msg.Namespace + " namespace and incoming message of event: " + msg.Event + " is not connected or not exists and wait?: " + msg.wait + "\n\n")
 			return ErrBadNamespace
 		}
 
@@ -491,43 +492,30 @@ func (c *Conn) HandlePayload(msgTyp MessageType, payload []byte) error {
 	return c.handleMessage(c.DeserializeMessage(msgTyp, payload))
 }
 
-const syncWaitDur = 15 * time.Millisecond
-
-// 10 seconds is high value which is not realistic on healthy networks, but may useful for slow connections.
-// This value is used just for the ack(which is usually done before the Connect call itself) wait on Connect when on server-side only.
-const maxSyncWaitDur = 10 * time.Second
-
 // Connect method returns a new connected to the specific "namespace" `NSConn` value.
 // The "namespace" should be declared in the `connHandler` of both server and client sides.
 // If this is a client-side connection then the server-side namespace's `OnNamespaceConnect` event callback MUST return null
 // in order to allow this client-side connection to connect, otherwise a non-nil error is returned instead.
 func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
-	// if c.IsClosed() {
-	// 	return nil, ErrWrite
-	// }
-
 	if !c.IsClient() {
 		c.readiness.unwait(nil)
-		// server-side check for ack-ed, it should be done almost immediately the client connected
-		// but give it sometime for slow networks and add an extra check for closed after 5 seconds and a deadline of 10seconds.
-		t := maxSyncWaitDur
-		for !c.isAcknowledged() {
-			time.Sleep(syncWaitDur)
-			t -= syncWaitDur
-
-			if t <= maxSyncWaitDur/2 { // check once after 5 seconds if closed.
-				if c.IsClosed() {
-					return nil, ErrWrite
-				}
+		// Server-side: wait for the client's ack to complete before we commit to the
+		// namespace. ackCh is closed exactly once by markAcknowledged, so this is
+		// race-free and wakes immediately rather than polling.
+		if !c.isAcknowledged() {
+			if ctx == nil {
+				ctx = context.TODO()
 			}
-
-			if t == 0 {
-				// when maxSyncWaitDur passed,
-				// we could use the context's deadline but it will make things slower (extracting its value slower than the sleep time).
+			select {
+			case <-c.ackCh:
+				// ack completed; fall through.
+			case <-c.closeCh:
+				return nil, ErrWrite
+			case <-ctx.Done():
 				if c.IsClosed() {
 					return nil, ErrWrite
 				}
-				return nil, context.DeadlineExceeded
+				return nil, ctx.Err()
 			}
 		}
 	}
@@ -535,12 +523,9 @@ func (c *Conn) Connect(ctx context.Context, namespace string) (*NSConn, error) {
 	return c.askConnect(ctx, namespace)
 }
 
-// const defaultNS = ""
-
-// func (c *Conn) DefaultNamespace() *NSConn {
-// 	ns, _ := c.Connect(nil, defaultNS)
-// 	return ns
-// }
+// syncWaitDur is the small sleep used by WaitConnect's poll loop. The Connect
+// path uses an explicit channel select instead.
+const syncWaitDur = 15 * time.Millisecond
 
 // WaitConnect method can be used instead of the `Connect` if the other side force-calls `Connect` to this connection
 // and this side wants to "waits" for that signal.
@@ -585,9 +570,6 @@ func (c *Conn) tryNamespace(in Message) (*NSConn, bool) {
 
 	ns := c.Namespace(in.Namespace)
 	if ns == nil {
-		// if _, canConnect := c.namespaces[msg.Namespace]; !canConnect {
-		// 	msg.Err = ErrForbiddenNamespace
-		// }
 		in.Err = ErrBadNamespace
 		c.Write(in)
 		return nil, false
@@ -606,10 +588,6 @@ func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error
 
 	defer p.Done() // unblock.
 
-	//	defer c.processes.get(namespace).run()()
-	// for !atomic.CompareAndSwapUint32(c.isConnectingProcess, 0, 1) {
-	// }
-	// defer atomic.StoreUint32(c.isConnectingProcess, 0)
 	ns := c.Namespace(namespace)
 	if ns != nil {
 		return ns, nil
@@ -632,30 +610,14 @@ func (c *Conn) askConnect(ctx context.Context, namespace string) (*NSConn, error
 		return nil, err
 	}
 
-	// println("ask connect")
 	_, err = c.Ask(ctx, connectMessage) // waits for answer no matter if already connected on the other side.
 	if err != nil {
 		return nil, err
 	}
-	// println("got connect")
-	// re-check, maybe connected so far (can happen by a simultaneously `Connect` calls on both server and client, which is not the standard way)
-	// c.connectedNamespacesMutex.RLock()
-	// ns, ok = c.connectedNamespaces[namespace]
-	// c.connectedNamespacesMutex.RUnlock()
-	// if ok {
-	// 	return ns, nil
-	// }
 
 	c.connectedNamespacesMutex.Lock()
 	c.connectedNamespaces[namespace] = ns
 	c.connectedNamespacesMutex.Unlock()
-
-	// println("we're connected")
-
-	// c.writeEmptyReply(genWaitConfirmation(reply.wait))
-	// println("wrote: " + genWaitConfirmation(reply.wait))
-
-	// c.sendConfirmation(reply.wait)
 
 	c.notifyNamespaceConnected(ns, connectMessage)
 	return ns, nil
@@ -882,17 +844,8 @@ func (c *Conn) canWrite(msg Message) bool {
 		}
 	}
 
-	// if !c.IsClient() && !msg.FromStackExchange {
-	// 	if exc := c.Server().StackExchange; exc != nil {
-	// 		if exc.Publish(c, msg) {
-	// 			return true
-	// 		}
-	// 	}
-	// }
-
 	// don't write if explicit "from" field is set
-	// to this server's instance client connection ~~~but give a chance to Publish
-	// it to other instances with the same conn ID, if any~~~.
+	// to this server's instance client connection.
 	if c.Is(msg.FromExplicit) {
 		return false
 	}
@@ -900,9 +853,17 @@ func (c *Conn) canWrite(msg Message) bool {
 	return true
 }
 
-// Write method sends a message to the remote side,
-// reports whether the connection is still available
-// or when this message is not allowed to be sent to the remote side.
+// Write sends msg to the remote side. It returns true if the message was handed
+// off to the underlying socket, false otherwise.
+//
+// Write returns false for two distinct reasons that the caller cannot
+// distinguish: the connection is closed, or this message is not allowed to be
+// sent on this connection (for example, the target namespace is not connected
+// or the target room is not joined). When false is returned, IsClosed reports
+// the precise cause.
+//
+// Write is safe for concurrent use; the underlying socket implementation
+// serializes writes internally.
 func (c *Conn) Write(msg Message) bool {
 	if !c.canWrite(msg) {
 		return false
@@ -917,30 +878,22 @@ func (c *Conn) writeEmptyReply(wait string) bool {
 	return c.write(genEmptyReplyToWait(wait), false)
 }
 
-// func (c *Conn) waitConfirmation(wait string) {
-// 	wait = genWaitConfirmation(wait)
-
-// 	ch := make(chan Message)
-// 	c.waitingMessagesMutex.Lock()
-// 	c.waitingMessages[wait] = ch
-// 	c.waitingMessagesMutex.Unlock()
-// 	<-ch
-// }
-
-// func (c *Conn) sendConfirmation(wait string) {
-// 	wait = genWaitConfirmation(wait)
-// 	c.writeEmptyReply(wait)
-// }
-
-// Ask method sends a message to the remote side and blocks until a response or an error received from the specific `Message.Event`.
+// Ask sends msg to the remote side and blocks until the remote replies or ctx is canceled.
+//
+// Always call Ask with a context that has a deadline (context.WithTimeout) — a
+// remote that never replies would otherwise block this goroutine forever.
+//
+// Ask is safe to call from inside an event callback: when the caller is the
+// current reader goroutine (isInsideHandler), Ask reads the next frame
+// synchronously from the socket. Outside a callback, Ask registers a wait slot
+// and returns once the matching message lands.
 func (c *Conn) Ask(ctx context.Context, msg Message) (Message, error) {
-	mustWaitOnlyTheNextMessage := atomic.LoadUint32(c.isInsideHandler) == 1
+	mustWaitOnlyTheNextMessage := c.isInsideHandler.Load() == 1
 	return c.ask(ctx, msg, mustWaitOnlyTheNextMessage)
 }
 
 func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage bool) (Message, error) {
 	if c.shouldHandleOnlyNativeMessages {
-		// should panic or...
 		return Message{}, nil
 	}
 
@@ -950,8 +903,7 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 
 	if ctx == nil {
 		ctx = context.TODO()
-	} else if ctx == context.TODO() {
-	} else {
+	} else if ctx != context.TODO() {
 		if deadline, has := ctx.Deadline(); has {
 			if deadline.Before(time.Now().Add(-1 * time.Second)) {
 				return Message{}, context.DeadlineExceeded
@@ -963,8 +915,9 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 	msg.wait = genWait(c.IsClient())
 
 	if mustWaitOnlyTheNextMessage {
-		// msg.wait is not required on this state
-		// but we still set it.
+		// We're inside the reader goroutine's HandlePayload, so the reader is paused
+		// here and we can safely steal the next frame from the socket without racing
+		// it. ReadData on the same socket from elsewhere would not be safe.
 		go func() {
 			b, msgTyp, err := c.Socket().ReadData(c.readTimeout)
 			if err != nil {
@@ -978,6 +931,11 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 		c.waitingMessagesMutex.Lock()
 		c.waitingMessages[msg.wait] = ch
 		c.waitingMessagesMutex.Unlock()
+		defer func() {
+			c.waitingMessagesMutex.Lock()
+			delete(c.waitingMessages, msg.wait)
+			c.waitingMessagesMutex.Unlock()
+		}()
 	}
 
 	if !c.Write(msg) {
@@ -991,55 +949,62 @@ func (c *Conn) ask(ctx context.Context, msg Message, mustWaitOnlyTheNextMessage 
 		}
 		return Message{}, ctx.Err()
 	case receive := <-ch:
-		if !mustWaitOnlyTheNextMessage {
-			c.waitingMessagesMutex.Lock()
-			delete(c.waitingMessages, msg.wait)
-			c.waitingMessagesMutex.Unlock()
-		}
-
 		return receive, receive.Err
 	}
 }
 
-// Close method will force-disconnect from all connected namespaces and force-leave from all joined rooms
-// and finally will terminate the underline websocket connection.
-// After this method call the `Conn` is not usable anymore, a new `Dial` call is required.
+// Close force-disconnects the connection from every joined namespace and room
+// and terminates the underlying socket.
+//
+// Close is idempotent: subsequent calls are no-ops. Disconnect events
+// (OnNamespaceDisconnect, OnRoomLeave, OnRoomLeft) fire synchronously before
+// the socket is closed. After Close returns, the Conn is no longer usable —
+// a new Dial / Upgrade is required to reconnect.
+//
+// During server shutdown Close still completes promptly: the goroutine that
+// notifies the dispatch loop selects against s.done.
 func (c *Conn) Close() {
-	if atomic.CompareAndSwapUint32(c.closed, 0, 1) {
-		if !c.shouldHandleOnlyNativeMessages {
-			disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
-			c.connectedNamespacesMutex.Lock()
-			for namespace, ns := range c.connectedNamespaces {
-				// leave rooms first with force and local property before remove the namespace completely.
-				ns.forceLeaveAll(true)
-
-				disconnectMsg.Namespace = ns.namespace
-				ns.events.fireEvent(ns, disconnectMsg)
-				delete(c.connectedNamespaces, namespace)
-			}
-			c.connectedNamespacesMutex.Unlock()
-
-			c.waitingMessagesMutex.Lock()
-			for wait := range c.waitingMessages {
-				delete(c.waitingMessages, wait)
-			}
-			c.waitingMessagesMutex.Unlock()
-		}
-
-		atomic.StoreUint32(c.acknowledged, 0)
-
-		if !c.IsClient() {
-			go func() {
-				c.server.disconnect <- c
-			}()
-		}
-
-		close(c.closeCh)
-		c.socket.NetConn().Close()
+	if !c.closed.CompareAndSwap(0, 1) {
+		return
 	}
+
+	if !c.shouldHandleOnlyNativeMessages {
+		disconnectMsg := Message{Event: OnNamespaceDisconnect, IsForced: true, IsLocal: true}
+		c.connectedNamespacesMutex.Lock()
+		for namespace, ns := range c.connectedNamespaces {
+			// leave rooms first with force and local property before remove the namespace completely.
+			ns.forceLeaveAll(true)
+
+			disconnectMsg.Namespace = ns.namespace
+			ns.events.fireEvent(ns, disconnectMsg)
+			delete(c.connectedNamespaces, namespace)
+		}
+		c.connectedNamespacesMutex.Unlock()
+
+		c.waitingMessagesMutex.Lock()
+		clear(c.waitingMessages)
+		c.waitingMessagesMutex.Unlock()
+	}
+
+	c.acknowledged.Store(0)
+
+	if !c.IsClient() {
+		// Notify the server dispatch loop. Select against s.done so we never
+		// leak this goroutine if the server is being torn down concurrently.
+		s := c.server
+		go func() {
+			select {
+			case s.disconnect <- c:
+			case <-s.done:
+			}
+		}()
+	}
+
+	close(c.closeCh)
+	c.socket.NetConn().Close()
 }
 
 // IsClosed method reports whether this connection is remotely or manually terminated.
 func (c *Conn) IsClosed() bool {
-	return atomic.LoadUint32(c.closed) > 0
+	return c.closed.Load() > 0
 }

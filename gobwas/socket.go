@@ -1,8 +1,8 @@
 package gobwas
 
 import (
+	"errors"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"sync"
@@ -75,7 +75,7 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, er
 
 		hdr, err := s.reader.NextFrame()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil, 0, io.ErrUnexpectedEOF // for io.ReadAll to return an error if connection remotely closed.
 			}
 			return nil, 0, err
@@ -101,30 +101,13 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, er
 			continue
 		}
 
-		b, err := ioutil.ReadAll(s.reader)
+		b, err := io.ReadAll(s.reader)
 		if err != nil {
 			return nil, 0, err
 		}
 
 		return b, neffos.MessageType(hdr.OpCode), nil
 	}
-
-	// for {
-	// 	if timeout > 0 {
-	// 		s.UnderlyingConn.SetReadDeadline(time.Now().Add(timeout))
-	// 	}
-
-	// 	b, code, err := wsutil.ReadData(s.UnderlyingConn, s.state)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-
-	// 	if code != defaultOp {
-	// 		continue
-	// 	}
-
-	// 	return b, nil
-	// }
 }
 
 // WriteBinary sends a binary message to the remote connection.

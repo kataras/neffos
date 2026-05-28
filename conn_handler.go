@@ -1,6 +1,7 @@
 package neffos
 
 import (
+	"maps"
 	"reflect"
 	"strings"
 	"time"
@@ -282,30 +283,22 @@ func (s *Struct) GetNamespaces() Namespaces { // completes the `ConnHandler` int
 // JoinConnHandlers combines two or more "connHandlers"
 // and returns a result of a single `ConnHandler` that
 // can be passed on the `New` and `Dial` functions.
+//
+// Later handlers override earlier ones on event-name collisions within the
+// same namespace.
 func JoinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 	namespaces := Namespaces{}
 
 	for _, h := range connHandlers {
-		nss := h.GetNamespaces()
-		if len(nss) > 0 {
-			for namespace, events := range nss {
-				if events == nil {
-					continue
-				}
-				clonedEvents := make(Events, len(events))
-				for evt, cb := range events {
-					clonedEvents[evt] = cb
-				}
+		for namespace, events := range h.GetNamespaces() {
+			if events == nil {
+				continue
+			}
 
-				if curEvents, exists := namespaces[namespace]; exists {
-					// fill missing events.
-					for evt, cb := range clonedEvents {
-						curEvents[evt] = cb
-					}
-
-				} else {
-					namespaces[namespace] = clonedEvents
-				}
+			if curEvents, exists := namespaces[namespace]; exists {
+				maps.Copy(curEvents, events)
+			} else {
+				namespaces[namespace] = maps.Clone(events)
 			}
 		}
 	}

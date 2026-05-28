@@ -51,6 +51,15 @@ type StackExchangeInitializer interface {
 	Init(Namespaces) error
 }
 
+// StackExchangeCloser is an optional interface for a `StackExchange`.
+// If implemented, its Close method is called as part of `Server.Close` so
+// background goroutines and broker connections can be released cleanly.
+type StackExchangeCloser interface {
+	// Close releases resources held by the stack exchange (worker goroutines,
+	// broker connections, etc.). Implementations should be idempotent.
+	Close() error
+}
+
 func stackExchangeInit(s StackExchange, namespaces Namespaces) error {
 	if s != nil {
 		if sinit, ok := s.(StackExchangeInitializer); ok {
@@ -126,4 +135,21 @@ func (s *stackExchangeWrapper) Subscribe(c *Conn, namespace string) {
 func (s *stackExchangeWrapper) Unsubscribe(c *Conn, namespace string) {
 	s.parent.Unsubscribe(c, namespace)
 	s.current.Unsubscribe(c, namespace)
+}
+
+// Close propagates to both wrapped exchanges if they implement StackExchangeCloser.
+// Returns the first error encountered; both children are always attempted.
+func (s *stackExchangeWrapper) Close() error {
+	var firstErr error
+	if c, ok := s.parent.(StackExchangeCloser); ok {
+		if err := c.Close(); err != nil {
+			firstErr = err
+		}
+	}
+	if c, ok := s.current.(StackExchangeCloser); ok {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

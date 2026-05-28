@@ -38,19 +38,20 @@ func (p *processes) get(name string) *process {
 
 // process is used on connections on specific actions that needs to wait for an answer from the other side.
 // Take for example the `Conn#handleMessage.tryNamespace` which waits for `Conn#askConnect` to finish on the specific namespace.
+//
+// Lifecycle: Start -> Done -> [optional] Signal. Done is idempotent (subsequent
+// calls are no-ops). Signal must be called at most once; double-call panics.
+// Wait blocks until Done; after Done it returns immediately.
 type process struct {
-	done uint32
+	done atomic.Uint32
 
 	finished chan struct{}
 	waiting  sync.WaitGroup
 }
 
-// Signal closes the channel.
+// Signal closes the finished channel. Must be called at most once per process —
+// double-Signal panics because Go closes a closed channel with a runtime panic.
 func (p *process) Signal() {
-	// if !atomic.CompareAndSwapUint32(&p.running, 1, 0) {
-	// 	return // already finished.
-	// }
-
 	close(p.finished)
 }
 
@@ -60,18 +61,19 @@ func (p *process) Finished() <-chan struct{} {
 	return p.finished
 }
 
-// Done calls the internal WaitGroup's `Done` method.
+// Done releases waiters on this process. Idempotent: subsequent calls are no-ops.
 func (p *process) Done() {
-	if !atomic.CompareAndSwapUint32(&p.done, 0, 1) {
+	if !p.done.CompareAndSwap(0, 1) {
 		return
 	}
 
 	p.waiting.Done()
 }
 
-// Wait waits on the internal `WaitGroup`. See `Done` too.
+// Wait blocks until Done has been called. If Done was already called, Wait
+// returns immediately.
 func (p *process) Wait() {
-	if atomic.LoadUint32(&p.done) == 1 {
+	if p.done.Load() == 1 {
 		return
 	}
 	p.waiting.Wait()
@@ -84,5 +86,5 @@ func (p *process) Start() {
 
 // isDone reports whether process is finished.
 func (p *process) isDone() bool {
-	return atomic.LoadUint32(&p.done) == 1
+	return p.done.Load() == 1
 }

@@ -80,3 +80,31 @@ func TestProcessSingalFinished(t *testing.T) {
 		t.Fatalf("%s process should tik-tok for %d seconds but: %d", testProcessName, sleepSecs, counts)
 	}
 }
+
+func TestProcessDoneIdempotent(t *testing.T) {
+	procs := newProcesses()
+	p := procs.get("done-twice")
+	p.Start()
+
+	p.Done()
+	// Second Done must be a no-op rather than panicking with "negative WaitGroup
+	// counter".
+	p.Done()
+
+	if !p.isDone() {
+		t.Fatal("expected process to be done after Done()")
+	}
+
+	// Wait must return immediately since we're already done.
+	done := make(chan struct{})
+	go func() {
+		p.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return immediately after Done")
+	}
+}
