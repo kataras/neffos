@@ -249,8 +249,9 @@ each is in the right column. The wire protocol is unchanged, so v0.0.x servers, 
 - `_examples` is restructured into a numbered tutorial (`01-getting-started`, steps 01 to 12) plus topic folders
   (`02-backends` through `09-integrations`), each `main.go` with its own Learn, Run, Try and Next sections. See
   `_examples/README.md` for the full index.
-- `_examples/09-integrations/iris-jwt` is its own module: it follows the public iris release, whose `websocket`
-  package tracks neffos v0.0.x until iris ships against v0.1.0.
+- `_examples/09-integrations/iris-jwt` targets Iris v14 (`github.com/kataras/iris/v14`, with its
+  `middleware/websocket` and `middleware/jwt`) and is its own module, so the shared examples module stays free of
+  the Iris dependency tree.
 - The migration notes for existing v0.0.x code live on the wiki:
   https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0
 

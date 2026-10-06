@@ -6,7 +6,7 @@ Requirements: Go 1.27 or newer. A few examples need more, and say so in a `Requi
 
 ## Running an example
 
-All examples but one share one module, `_examples/go.mod`, which points `github.com/kataras/neffos` at the code in this repository; the exception is `09-integrations/iris-jwt`, explained in its section. In a clone, run an example from its folder:
+All examples but one share one module, `_examples/go.mod`, which points `github.com/kataras/neffos` at the code in this repository; the exception is `09-integrations/iris-jwt`, which has its own module so the shared one stays free of the Iris dependency tree. In a clone, run an example from its folder:
 
 ```sh
 cd _examples/01-getting-started/01-echo
@@ -124,9 +124,9 @@ Wiki: [Authentication](https://github.com/kataras/neffos/wiki/Authentication).
 
 | Example | Shows |
 | --- | --- |
-| [iris-jwt](09-integrations/iris-jwt) | neffos inside an Iris v12 app: `websocket.Handler` behind the `middleware/jwt` verifier, the verified user read in events with `websocket.GetContext` and `jwt.Get` |
+| [iris-jwt](09-integrations/iris-jwt) | neffos inside an Iris v14 app: `middleware/websocket.New` behind the `middleware/jwt` verifier, the verified user read in events with `websocket.GetContext` and `jwt.Get` |
 
-iris-jwt is its own Go module (`09-integrations/iris-jwt/go.mod`) because it follows the public Iris release: the websocket package of Iris v12.2.11 tracks neffos v0.0.x until the next Iris release, so it builds against that neffos version and not against this repository. Run it from its folder; `go vet` and `go test` from `_examples` do not enter it.
+iris-jwt is its own Go module (`09-integrations/iris-jwt/go.mod`) so the shared examples module does not carry the Iris dependency tree. It uses `github.com/kataras/iris/v14`; until v14 is published its go.mod points that import at a sibling `iris-private` checkout, and CI does not build it. Run it from its folder; `go vet` and `go test` from `_examples` do not enter it.
 
 ## The JavaScript client
 

@@ -112,7 +112,7 @@
 //
 // Runnable examples:
 //
-//	https://github.com/kataras/neffos/tree/master/_examples
+//	https://github.com/kataras/neffos/tree/main/_examples
 //
 // The matching JavaScript and TypeScript client, for browsers and Node.js:
 //

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
 
@@ -51,10 +51,6 @@ jobs:
     - name: Vet and test examples
       working-directory: _examples
       run: go vet ./... && go test -count=1 ./...
-
-    - name: Vet the iris integration example (its own module, pinned to the public iris release)
-      working-directory: _examples/09-integrations/iris-jwt
-      run: go vet ./...
 
   lint:
     name: Static Analysis

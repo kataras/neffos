@@ -243,11 +243,13 @@ func TestCloseCodes(t *testing.T) {
 	alice := connect(t, url, "alice")
 	bob := connect(t, url, "bob")
 
-	// SendObject hands a line over the size limit to the socket without an error;
-	// the server then closes the connection with 1009.
+	// The server closes the connection with 1009 as soon as the first fragment
+	// of this line exceeds the limit, which can happen while the client is still
+	// writing the rest of it; SendObject then returns the socket's close error
+	// instead of nil. Either way the close status is what matters here.
 	spam := chatMessage{Text: strings.Repeat("a", 2*maxMessageSize)}
 	if err := bob.SendObject("Chat", spam); err != nil {
-		t.Fatalf("bob: send: %v", err)
+		t.Logf("bob: send returned %v because the server closed first", err)
 	}
 	if code := neffos.CloseStatus(bob.expectClose(t)); code != neffos.CloseMessageTooBig {
 		t.Fatalf("bob: expected close status %d, got %d", neffos.CloseMessageTooBig, code)

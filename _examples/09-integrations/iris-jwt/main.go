@@ -1,25 +1,25 @@
 // neffos inside an Iris application, behind a JWT check.
 //
-// Iris v12 ships a websocket package built on neffos: websocket.Handler(srv)
-// turns a *neffos.Server into an Iris handler, so it takes part in a
-// route's middleware chain like any other handler, and it must come last.
-// Here the chain starts with the verifier of Iris's middleware/jwt.
-// jwt.NewVerifier reads the token from the Authorization header or from
-// ?token= (browsers cannot set handshake headers), answers 401 when it is
+// Iris v14 ships middleware/websocket, built on neffos: websocket.New(srv,
+// opts) turns a *neffos.Server into an Iris handler, so it takes part in a
+// route's middleware chain like any other handler, and it must come last
+// because it hijacks the connection. Here the chain starts with the verifier
+// of Iris's middleware/jwt. jwt.NewVerifier reads the token from the
+// Authorization header; WithQueryToken also accepts ?token=, because a
+// browser cannot set handshake headers. It answers 401 when the token is
 // missing, forged or expired, and stores the verified claims on the request.
 // No websocket is opened for a bad token.
 //
-// Inside neffos, websocket.GetContext(conn) returns the Iris context of the
-// handshake request, and jwt.Get(ctx) the claims verified for it. The
-// connection ID comes from them through an Iris websocket.IDGenerator, and
-// the chat events read the user the same way, so a client cannot claim to
+// Inside neffos, websocket.GetContext(conn) returns a read-only copy of the
+// Iris context of the handshake request, and jwt.Get(ctx) the claims verified
+// for it. The connection ID comes from them through websocket.Options.IDGenerator,
+// and the chat events read the user the same way, so a client cannot claim to
 // be someone else. GET /token?name=alice signs a short-lived token for
 // alice: a stand-in for a real login, which the Go client calls first.
 //
-// This example is its own Go module, see its go.mod, because it follows the
-// public Iris release. The websocket package of Iris v12.2.11 tracks neffos
-// v0.0.x until the next Iris release, so this program builds against that
-// neffos version and not against the code in the parent directory.
+// This example is its own Go module, see its go.mod, so the shared examples
+// module stays free of the Iris dependency tree. Its go.mod points
+// github.com/kataras/iris/v14 at the sibling checkout until v14 is published.
 //
 // Learn: mount a neffos server on an Iris route behind middleware and read the verified user in events.
 //
@@ -51,9 +51,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kataras/iris/v12"
-	"github.com/kataras/iris/v12/middleware/jwt"
-	"github.com/kataras/iris/v12/websocket"
+	"github.com/kataras/iris/v14"
+	"github.com/kataras/iris/v14/middleware/jwt"
+	"github.com/kataras/iris/v14/middleware/websocket"
 
 	"github.com/kataras/neffos"
 	"github.com/kataras/neffos/gorilla"
@@ -109,7 +109,7 @@ var serverEvents = neffos.Namespaces{
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
 			msg.Body = fmt.Appendf(nil, "%s: %s", userOf(c.Conn), msg.Body)
-			c.Conn.Server().Broadcast(c, msg) // everyone in the namespace but the sender
+			c.BroadcastOthers(msg) // everyone in the namespace but the sender
 			return nil
 		},
 	},
@@ -117,14 +117,16 @@ var serverEvents = neffos.Namespaces{
 
 func runServer(addr string) {
 	signer := jwt.NewSigner(jwt.HS256, secret, 15*time.Minute)
-	verifier := jwt.NewVerifier(jwt.HS256, secret) // reads the header, then ?token=
+	// The verifier reads the Authorization header; WithQueryToken adds ?token=
+	// for browsers, which cannot set headers on a websocket handshake.
+	verifier := jwt.NewVerifier(jwt.HS256, secret).WithQueryToken()
 
 	ws := neffos.New(gorilla.DefaultUpgrader, serverEvents)
 
 	app := iris.New()
 	// A stand-in for a login: sign a token for any name.
 	app.Get("/token", func(ctx iris.Context) {
-		name := ctx.URLParam("name")
+		name := ctx.Query().Get("name")
 		if name == "" {
 			ctx.StopWithText(iris.StatusBadRequest, "name is required")
 			return
@@ -136,15 +138,19 @@ func runServer(addr string) {
 		}
 		ctx.Write(token)
 	})
-	// The verifier runs first; websocket.Handler is the last handler of the route.
+	// The verifier runs first; websocket.New is the last handler of the route.
 	app.Get("/ws",
 		verifier.Verify(func() any { return new(userClaims) }),
-		websocket.Handler(ws, func(ctx iris.Context) string {
-			return jwt.Get(ctx).(*userClaims).Username // the connection ID
+		websocket.New(ws, websocket.Options{
+			IDGenerator: func(ctx iris.Context) string {
+				return jwt.Get(ctx).(*userClaims).Username // the connection ID
+			},
 		}),
 	)
 
-	log.Fatal(app.Listen(addr))
+	if err := app.Listen(addr); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func runClient(host, name string) {
