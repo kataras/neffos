@@ -252,6 +252,9 @@ each is in the right column. The wire protocol is unchanged, so v0.0.x servers, 
 - `_examples/09-integrations/iris-jwt` targets Iris v14 (`github.com/kataras/iris/v14`, with its
   `middleware/websocket` and `middleware/jwt`) and is its own module, so the shared examples module stays free of
   the Iris dependency tree.
+- The API outline on the README and the wiki's Getting-started page is a Mermaid class diagram, rendered by
+  GitHub, in place of the old ASCII drawing; the wiki keeps the source (`_assets/api-outline.mmd`) and rendered
+  SVG and PNG copies for PDF exports.
 - The migration notes for existing v0.0.x code live on the wiki:
   https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0
 

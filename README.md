@@ -37,6 +37,66 @@ Go 1.27 or later is required.
 go get github.com/kataras/neffos@latest
 ```
 
+## API outline
+
+One `Conn` per websocket, one `NSConn` per namespace it connects to, one `Room` per room it joins. Server and client sides share the same types and methods.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class Conn {
+        ID() string
+        IsClient() bool
+        Server() *Server
+        Connect(ctx, namespace) *NSConn, error
+        Namespace(namespace) *NSConn
+        Send(Message) error
+        Ask(ctx, Message) Message, error
+        Set(key, value)
+        Value~T~(key) T, bool
+        Terminate(code, reason)
+        Close()
+        Err() error
+    }
+
+    class NSConn {
+        Conn *Conn
+        Send(event, body) error
+        SendObject(event, v) error
+        Ask(ctx, event, body) Message, error
+        AskObject~Reply~(ctx, event, v) Reply, error
+        JoinRoom(ctx, name) *Room, error
+        Room(name) *Room
+        Rooms() []*Room
+        Broadcast(msgs...)
+        Disconnect(ctx) error
+    }
+
+    class Room {
+        NSConn *NSConn
+        Name string
+        Send(event, body) error
+        SendObject(event, v) error
+        Leave(ctx) error
+    }
+
+    class Message {
+        Namespace string
+        Room string
+        Event string
+        Body []byte
+        Err error
+        As~T~() T, error
+        Unmarshal(ptr) error
+    }
+
+    Conn "1" --> "0..*" NSConn : Connect(namespace)
+    NSConn "1" --> "0..*" Room : JoinRoom(name)
+    NSConn ..> Message : Send fills Namespace
+    Room ..> Message : Send fills Namespace and Room
+```
+
 ## Learning neffos
 
 <details>
