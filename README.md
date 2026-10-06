@@ -28,7 +28,7 @@ Neffos is a cross-platform real-time framework with an expressive, elegant API w
 
 ## Installation
 
-Go 1.26 or later is required.
+Go 1.27 or later is required.
 
 ```sh
 go get github.com/kataras/neffos@latest
@@ -160,7 +160,7 @@ Navigate to: <https://github.com/kataras/neffos.js>
 
 </details>
 
-Neffos has an extensive and thorough **[wiki](https://github.com/kataras/neffos/wiki)**, which makes it easy to get started with the framework.
+The **[wiki](https://github.com/kataras/neffos/wiki)** covers every feature with a page of its own, from the first echo server to scaling out over Redis or NATS.
 
 For detailed technical documentation, head over to [pkg.go.dev](https://pkg.go.dev/github.com/kataras/neffos). For executable code, visit the [_examples](_examples/) directory.
 

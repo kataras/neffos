@@ -177,8 +177,7 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, er
 // mapReadError turns coder's close, read limit and EOF errors into the neffos
 // ones. Other errors pass through unchanged.
 func (s *Socket) mapReadError(err error) error {
-	var ce websocket.CloseError
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[websocket.CloseError](err); ok {
 		return neffos.CloseError{Code: int(ce.Code), Reason: ce.Reason}
 	}
 

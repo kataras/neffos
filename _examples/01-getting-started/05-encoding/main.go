@@ -2,8 +2,10 @@
 //
 // A neffos body is just bytes, so the app picks the format. Chat and private
 // lines now travel as a chatMessage in JSON. neffos.Marshal turns a value into
-// a body and Message.Unmarshal reads it back; both use encoding/json unless
-// the value implements neffos.MessageObjectMarshaler or
+// a body and Message.As reads it back; NSConn.SendObject and Room.SendObject
+// encode and send in one call. The default encoder is encoding/json/v2, with
+// its options in neffos.JSONMarshalOptions and neffos.JSONUnmarshalOptions,
+// unless the value implements neffos.MessageObjectMarshaler or
 // MessageObjectUnmarshaler, which is the hook for another format. The server
 // fills From itself, so a client cannot speak for someone else, and a
 // private message carries its receiver in To instead of a "bob text" string.
@@ -34,7 +36,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -59,13 +61,13 @@ var staff = map[string]bool{"alice": true}
 // chatMessage is the JSON body of the Chat and Private events.
 type chatMessage struct {
 	From string `json:"from"`
-	To   string `json:"to,omitempty"`
+	To   string `json:"to,omitzero"`
 	Text string `json:"text"`
 }
 
 // Marshal makes chatMessage a neffos.MessageObjectMarshaler, so neffos.Marshal
-// calls it instead of the default json.Marshal. It is the one place to change
-// if the wire format ever changes.
+// calls it instead of the default encoder. It is the one place to change if
+// the wire format ever changes.
 func (m chatMessage) Marshal() ([]byte, error) {
 	return json.Marshal(m)
 }
@@ -137,27 +139,34 @@ var serverEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			log.Printf("[%s] says in %q: %s", c.Conn.ID(), msg.Room, m.Text)
 			m.From = c.Conn.ID() // the server decides who is speaking
-			msg.Body = neffos.Marshal(m)
+			msg.Body, err = neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.BroadcastOthers(msg) // msg.Room is kept: a room message stays in its room
 			return nil
 		},
 		"Private": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			m.From = c.Conn.ID()
+			body, err := neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.Conn.Server().Broadcast(nil, neffos.Message{
 				To:        m.To, // one connection ID: only that connection receives it
 				Namespace: namespace,
 				Event:     "Private",
-				Body:      neffos.Marshal(m),
+				Body:      body,
 			})
 			return nil
 		},
@@ -184,8 +193,8 @@ var clientEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			if msg.Room != "" {
@@ -195,8 +204,8 @@ var clientEvents = neffos.Namespaces{
 			return nil
 		},
 		"Private": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			fmt.Printf("(private) %s: %s\n", m.From, m.Text)
@@ -306,7 +315,7 @@ func runClient(addr, name string) {
 			return
 		case "/msg": // /msg bob some text
 			to, text, _ := strings.Cut(arg, " ")
-			c.Emit("Private", neffos.Marshal(chatMessage{To: to, Text: text}))
+			c.SendObject("Private", chatMessage{To: to, Text: text})
 		case "/join": // /join general
 			ctx, cancel := deadline()
 			r, err := c.JoinRoom(ctx, arg)
@@ -336,12 +345,12 @@ func runClient(addr, name string) {
 		case "/wave":
 			c.EmitBinary("Wave", []byte{0x00, 0x7f, 0xff, 0x7f})
 		default:
-			body := neffos.Marshal(chatMessage{Text: line})
+			m := chatMessage{Text: line}
 			if room != nil {
-				room.Emit("Chat", body)
+				room.SendObject("Chat", m)
 				continue
 			}
-			c.Emit("Chat", body)
+			c.SendObject("Chat", m)
 		}
 	}
 }

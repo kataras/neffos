@@ -2,7 +2,6 @@ package neffos
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -124,44 +123,27 @@ func (m Message) Serialize() []byte {
 	return serializeMessage(m)
 }
 
-type (
-	// MessageObjectMarshaler is an optional interface that "objects"
-	// can implement to customize their byte representation, see `Object` package-level function.
-	MessageObjectMarshaler interface {
-		Marshal() ([]byte, error)
-	}
-
-	// MessageObjectUnmarshaler is an optional interface that "objects"
-	// can implement to customize their structure, see `Message.Object` method.
-	MessageObjectUnmarshaler interface {
-		Unmarshal(body []byte) error
-	}
-)
-
-var (
-	// DefaultMarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
-	// It's used when the `Marshal.v` parameter is not a `MessageObjectMarshaler`.
-	DefaultMarshaler = json.Marshal
-	// DefaultUnmarshaler is a global, package-level alternative for `MessageObjectMarshaler`.
-	// It's used when the `Message.Unmarshal.outPtr` parameter is not a `MessageObjectUnmarshaler`.
-	DefaultUnmarshaler = json.Unmarshal
-)
-
-// Marshal marshals the "v" value and returns a Message's Body.
-// If the "v" value is `MessageObjectMarshaler` then it returns the result of its `Marshal` method,
-// otherwise the DefaultMarshaler will be used instead.
-// Errors are pushed to the result, use the object's Marshal method to catch those when necessary.
-// A nil "v" gives a nil body.
-func Marshal(v any) []byte {
+// Marshal encodes "v" into a Message's Body. A `MessageObjectMarshaler` encodes itself
+// through its `Marshal` method, anything else goes through the `DefaultMarshaler`.
+// A nil "v" gives a nil body and no error.
+//
+// `NSConn.SendObject`, `Room.SendObject`, `NSConn.AskObject` and `ReplyObject` call
+// Marshal for you; use it directly when a Message is built by hand:
+//
+//	body, err := neffos.Marshal(user)
+//	if err != nil {
+//		return err
+//	}
+//	return c.Send("user", body)
+func Marshal(v any) ([]byte, error) {
 	if v == nil {
-		return nil
+		return nil, nil
 	}
 
 	var (
 		body []byte
 		err  error
 	)
-
 	if marshaler, ok := v.(MessageObjectMarshaler); ok {
 		body, err = marshaler.Marshal()
 	} else {
@@ -169,9 +151,9 @@ func Marshal(v any) []byte {
 	}
 
 	if err != nil {
-		return []byte(err.Error())
+		return nil, err
 	}
-	return body
+	return body, nil
 }
 
 // errUnmarshalNil is returned by Message.Unmarshal for a nil "outPtr".
@@ -191,6 +173,23 @@ func (m *Message) Unmarshal(outPtr any) error {
 	}
 
 	return DefaultUnmarshaler(m.Body, outPtr)
+}
+
+// As decodes this Message's body into a new value of type T and returns it.
+// A *T that implements `MessageObjectUnmarshaler` decodes through its `Unmarshal`
+// method, anything else through the `DefaultUnmarshaler`:
+//
+//	req, err := msg.As[LoginRequest]()
+//	if err != nil {
+//		return err
+//	}
+func (m Message) As[T any]() (T, error) {
+	var out T
+	if unmarshaler, ok := any(&out).(MessageObjectUnmarshaler); ok {
+		return out, unmarshaler.Unmarshal(m.Body)
+	}
+
+	return out, DefaultUnmarshaler(m.Body, &out)
 }
 
 const (

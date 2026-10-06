@@ -1,6 +1,6 @@
 // A per-connection message limit that closes a flooding client with a code.
 //
-// Every connection has a small store of its own (Conn.Set and Conn.Get),
+// Every connection has a small store of its own (Conn.Set and Conn.Value),
 // and Conn.Increment and Conn.Decrement change an integer in it safely from
 // any goroutine. That is enough for a sliding window: each chat message
 // increments "recent" and schedules a Decrement one second later, so

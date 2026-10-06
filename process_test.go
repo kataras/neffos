@@ -142,7 +142,7 @@ func TestProcessesGetSamePointerConcurrently(t *testing.T) {
 	)
 
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(i int) {
 			defer wg.Done()
 			results[i] = procs.get(name)

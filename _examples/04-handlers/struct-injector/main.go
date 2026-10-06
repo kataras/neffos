@@ -4,9 +4,9 @@
 // neffos.NewStruct makes a new value for every connection that enters its
 // namespace. By default that value is a copy of the one you passed, which
 // only works for plain fields. Struct.SetInjector hands the construction to
-// you: the function receives the struct type and the connection and returns
-// a pointer to a value it built, here with a shared store and an audit log.
-// neffos then fills the NSConn field, which must be exported.
+// you: the function receives the connection and returns a pointer to a value
+// it built, here with a shared store and an audit log. neffos then fills the
+// NSConn field, which must be exported.
 //
 // Two controllers, two namespaces: notes keeps each user's notes, audit
 // reports what happened across all users. SetEventMatcher picks which
@@ -40,7 +40,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -109,7 +108,7 @@ func (n *notes) NoteAdd(msg neffos.Message) error {
 }
 
 func (n *notes) NoteList(msg neffos.Message) error {
-	return neffos.Reply(neffos.Marshal(n.store.list(n.user())))
+	return neffos.ReplyObject(n.store.list(n.user()))
 }
 
 // audit handles the "audit" namespace for one connection.
@@ -120,23 +119,23 @@ type audit struct {
 }
 
 func (a *audit) AuditRecent(msg neffos.Message) error {
-	return neffos.Reply(neffos.Marshal(a.log.recent(5)))
+	return neffos.ReplyObject(a.log.recent(5))
 }
 
 // newHandler builds both controllers around the shared dependencies.
-func newHandler(store *noteStore, log *auditLog) (*neffos.Struct, *neffos.Struct) {
+func newHandler(store *noteStore, log *auditLog) (*neffos.Struct[notes], *neffos.Struct[audit]) {
 	notesController := neffos.NewStruct(&notes{}).
 		SetNamespace("notes").
 		SetEventMatcher(neffos.EventPrefixMatcher("Note")).
-		SetInjector(func(_ reflect.Type, _ *neffos.NSConn) reflect.Value {
-			return reflect.ValueOf(&notes{store: store, audit: log})
+		SetInjector(func(_ *neffos.NSConn) *notes {
+			return &notes{store: store, audit: log}
 		})
 
 	auditController := neffos.NewStruct(&audit{}).
 		SetNamespace("audit").
 		SetEventMatcher(neffos.EventPrefixMatcher("Audit")).
-		SetInjector(func(_ reflect.Type, _ *neffos.NSConn) reflect.Value {
-			return reflect.ValueOf(&audit{log: log})
+		SetInjector(func(_ *neffos.NSConn) *audit {
+			return &audit{log: log}
 		})
 
 	return notesController, auditController
@@ -227,8 +226,7 @@ func runClient(addr, name string) {
 			return
 		case "/list":
 			if reply, ok := ask(notes, "NoteList", ""); ok {
-				var list []string
-				reply.Unmarshal(&list)
+				list, _ := reply.As[[]string]()
 				if len(list) == 0 {
 					fmt.Println("no notes")
 				}
@@ -238,8 +236,7 @@ func runClient(addr, name string) {
 			}
 		case "/audit":
 			if reply, ok := ask(audit, "AuditRecent", ""); ok {
-				var lines []string
-				reply.Unmarshal(&lines)
+				lines, _ := reply.As[[]string]()
 				fmt.Println(strings.Join(lines, "\n"))
 			}
 		default:

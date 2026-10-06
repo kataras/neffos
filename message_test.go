@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMessageSerialization(t *testing.T) {
@@ -227,18 +228,6 @@ func TestDeserializeKeepsMarkerOnClient(t *testing.T) {
 	}
 }
 
-func TestMarshalNil(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Marshal(nil) panicked: %v", r)
-		}
-	}()
-
-	if got := Marshal(nil); got != nil {
-		t.Fatalf("expected Marshal(nil) to return nil, got %q", got)
-	}
-}
-
 func TestUnmarshalNil(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -267,5 +256,111 @@ func TestSerializeWaitAndFromExplicit(t *testing.T) {
 	got = serializeMessage(Message{FromExplicit: "neffos(0xabc(id0x1))", Event: "e"})
 	if want := []byte("neffos(0xabc(id0x1));;;e;0;0;"); !bytes.Equal(got, want) {
 		t.Fatalf("expected FromExplicit without a wait token: %q, got %q", want, got)
+	}
+}
+
+func TestMarshalNilBody(t *testing.T) {
+	b, err := Marshal(nil)
+	if err != nil {
+		t.Fatalf("Marshal(nil) returned error: %v", err)
+	}
+	if b != nil {
+		t.Fatalf("expected Marshal(nil) to return a nil body, got %q", b)
+	}
+}
+
+func TestMarshalErrorNotInBody(t *testing.T) {
+	b, err := Marshal(make(chan int))
+	if err == nil {
+		t.Fatal("expected an error for an unmarshalable value")
+	}
+	if b != nil {
+		t.Fatalf("expected a nil body on error, got %q", b)
+	}
+}
+
+type asTestObject struct {
+	Name string `json:"name"`
+}
+
+type asTestCustom struct{ raw string }
+
+func (c *asTestCustom) Unmarshal(body []byte) error {
+	c.raw = "custom:" + string(body)
+	return nil
+}
+
+func TestMessageAs(t *testing.T) {
+	msg := Message{Body: []byte(`{"name":"makis"}`)}
+
+	got, err := msg.As[asTestObject]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "makis" {
+		t.Fatalf("expected name to be decoded, got %+v", got)
+	}
+
+	custom, err := msg.As[asTestCustom]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if custom.raw != `custom:{"name":"makis"}` {
+		t.Fatalf("expected MessageObjectUnmarshaler to be honoured, got %q", custom.raw)
+	}
+
+	if _, err := (Message{Body: []byte(`{bad`)}).As[asTestObject](); err == nil {
+		t.Fatal("expected an error for an invalid body")
+	}
+}
+
+func TestJSONPolicy(t *testing.T) {
+	type payload struct {
+		Zeta    int           `json:"zeta"`
+		Alpha   string        `json:"alpha"`
+		Timeout time.Duration `json:"timeout"`
+		Names   []string      `json:"names"`
+	}
+
+	in := payload{Zeta: 1, Alpha: "\xff", Timeout: 2 * time.Second}
+	b, err := DefaultMarshaler(in)
+	if err != nil {
+		t.Fatalf("invalid UTF-8 must be tolerated on output: %v", err)
+	}
+	// nil slices encode as [], durations as int64 nanoseconds, map keys sorted.
+	if want := `{"zeta":1,"alpha":"�","timeout":2000000000,"names":[]}`; string(b) != want {
+		t.Fatalf("unexpected encoding:\n got %s\nwant %s", b, want)
+	}
+
+	m, err := DefaultMarshaler(map[string]int{"b": 2, "a": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(m) != `{"a":1,"b":2}` {
+		t.Fatalf("expected deterministic key order, got %s", m)
+	}
+
+	var out payload
+	// case-insensitive member matching and duration from nanoseconds.
+	if err := DefaultUnmarshaler([]byte(`{"ZETA":3,"Timeout":1000}`), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Zeta != 3 || out.Timeout != time.Microsecond {
+		t.Fatalf("unexpected decoding: %+v", out)
+	}
+}
+
+func TestReplyObject(t *testing.T) {
+	err := ReplyObject(asTestObject{Name: "x"})
+	body, ok := isReply(err)
+	if !ok {
+		t.Fatalf("expected a reply error, got %T %v", err, err)
+	}
+	if string(body) != `{"name":"x"}` {
+		t.Fatalf("unexpected reply body %s", body)
+	}
+
+	if _, ok := isReply(ReplyObject(make(chan int))); ok {
+		t.Fatal("a marshal failure must surface as a plain error, not a reply")
 	}
 }

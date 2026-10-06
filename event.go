@@ -236,3 +236,15 @@ func isReply(err error) ([]byte, bool) {
 func Reply(body []byte) error {
 	return reply{body}
 }
+
+// ReplyObject is `Reply` for a value: it encodes "v" with `Marshal` and replies
+// with the result. When encoding fails the error itself is returned, so the
+// caller's event callback reports it instead of sending a broken body.
+func ReplyObject(v any) error {
+	body, err := Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	return Reply(body)
+}

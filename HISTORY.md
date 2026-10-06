@@ -21,12 +21,40 @@ Developers are not forced to upgrade if they don't really need it. Upgrade whene
 - Three websocket backends behind the same `Socket` interface (`gorilla`, `gobwas`, and the new `coder`), plus
   `stackexchange/redis` rewritten on go-redis v9 and `stackexchange/nats` rewritten to use two connections
   total instead of one per websocket connection.
+- Go 1.27 is the floor, and the API uses what it brings: generic methods (`msg.As[T]()`, `c.Value[T](key)`,
+  `c.AskObject[Reply](...)`, `c.Instance[T]()`), `encoding/json/v2` for message bodies, the standard library's
+  `uuid` package, and a `Struct[T]` handler whose injector is typed. `reflect` is gone from the API except for
+  `StructValue`, the escape hatch frameworks such as iris need.
 
 ### Breaking changes
 
-None. Typed `MessageType` constants and `const` event names are the only theoretical source breaks: code that
-compared an untyped `int` to `neffos.TextMessage` or assigned to an event-name variable stops compiling; no such
-code was found in the repository or examples.
+**Go 1.27 or later is required** (`go 1.27` in `go.mod`). Everything below is a compile-time break; the fix for
+each is in the right column. The wire protocol is unchanged, so v0.0.x servers, v0.1.0 servers and neffos.js
+0.3 clients keep talking to each other.
+
+| v0.0.x | v0.1.0 |
+|---|---|
+| `neffos.Marshal(v) []byte` | `neffos.Marshal(v) ([]byte, error)`; or `c.SendObject(event, v)`, `room.SendObject(event, v)`, `c.AskObject[Reply](ctx, event, v)`, `neffos.ReplyObject(v)` |
+| `msg.Unmarshal(&v)` | unchanged; or `v, err := msg.As[T]()` |
+| `neffos.DefaultMarshaler`, `neffos.DefaultUnmarshaler` (`encoding/json` v1 function values) | typed `neffos.Marshaler` and `neffos.Unmarshaler` on `encoding/json/v2`, configured by `neffos.JSONMarshalOptions` and `neffos.JSONUnmarshalOptions` |
+| `c.Conn.Get(key) any` | `v, ok := c.Conn.Value[T](key)`; `Value[any]` is the old `Get` |
+| `neffos.NewStruct(ptr any) *Struct` | `neffos.NewStruct(prototype *T) *Struct[T]`, same call syntax |
+| `neffos.NewStruct(reflect.Value)` | `neffos.NewStructValue(reflect.Value) *StructValue` |
+| `Struct.SetInjector(neffos.StructInjector)` | `Struct[T].SetInjector(func(*NSConn) *T)`; `StructValue.SetInjector(func(*NSConn) reflect.Value)` |
+| `type StructInjector` | removed |
+| `Server.Broadcast(fmt.Stringer, ...)`, `neffos.Exclude(id) fmt.Stringer` | `Server.Broadcast(neffos.Sender, ...)`, `neffos.Exclude(id) neffos.Sender`; `*Conn`, `*NSConn` and `*Room` are Senders, call sites do not change |
+| `neffos.EnableDebug(printer any)` | `neffos.EnableDebug(neffos.Printer)`; `*log.Logger` qualifies, wrap anything else in `neffos.PrinterFunc` |
+| `neffos.DebugEach(any, any)` | removed |
+| `var EventPrefixMatcher`, `var EventTrimPrefixMatcher` | funcs, same call syntax |
+| `github.com/google/uuid` | the standard library's `uuid`; connection ids are still UUID v4 strings |
+
+- `neffos.Marshal` used to write the error text into the returned body when encoding failed, so a broken value
+  went out as a message that said `json: unsupported type`; now it returns the error and a nil body.
+- Typed `MessageType` constants and `const` event names: code that compared an untyped `int` to
+  `neffos.TextMessage` or assigned to an event-name variable stops compiling; no such code was found in the
+  repository or examples.
+- Message bodies are encoded with `encoding/json/v2`. For structs this changes a few things on the wire, see
+  "Behaviour notes" below for the list and the opt-outs.
 
 ### Fixed
 
@@ -129,8 +157,48 @@ code was found in the repository or examples.
 - `IsCloseError` now also recognises `net.ErrClosed`, wrapped or not.
 - `IsTimeoutError` now also recognises `context.DeadlineExceeded` and `os.ErrDeadlineExceeded`, wrapped or not.
 - `CloseError` gains a `Reason string` field and an `Unwrap() error` method.
+- `Message.As[T]() (T, error)`: decodes the body into a new T. A `*T` that implements `MessageObjectUnmarshaler`
+  decodes through its own method, as with `Unmarshal`.
+- `NSConn.SendObject`, `Room.SendObject`: `Send` for a value, encoded with `Marshal`. `NSConn.AskObject[Reply]`:
+  `Ask` for values, encoding the request and decoding the reply. `ReplyObject(v)`: `Reply` for a value; an
+  encoding failure is returned as the event's error instead of being sent as a body.
+- `Marshaler` and `Unmarshaler` function types for `DefaultMarshaler` and `DefaultUnmarshaler`, and
+  `JSONMarshalOptions` / `JSONUnmarshalOptions`, the `encoding/json/v2` options they use.
+- `Conn.Value[T](key) (T, bool)`: typed read of the connection store; false when the key is absent or holds
+  another type.
+- `Struct[T]` with `NewStruct(prototype *T)`: the struct handler is generic, so `SetInjector` takes a
+  `func(*NSConn) *T` and the `*NSConn` field is set by neffos after the injector returns.
+- `NSConn.Instance[T]() (*T, bool)`: the per-connection instance of a dynamic `Struct[T]`, for code outside the
+  struct's own methods (an `OnNamespaceDisconnect` registered elsewhere, an audit hook).
+- `StructValue` with `NewStructValue(reflect.Value)`: the reflection-driven form of `Struct`, for frameworks that
+  only have the controller as a `reflect.Value`. This is what iris's mvc websocket controller will use.
+- `Sender`: the sealed interface `Server.Broadcast` takes for the connection to skip. `*Conn`, `*NSConn`, `*Room`
+  and `Exclude(id)` implement it.
+- `Printer` and `PrinterFunc`: what `EnableDebug` writes to.
 
 ### Behaviour notes
+
+- Message bodies are encoded and decoded with `encoding/json/v2`. Kept from v1 on purpose: map keys are sorted,
+  invalid UTF-8 in a string is replaced by U+FFFD instead of failing the message, `time.Duration` is an int64
+  nanosecond count, and member names match case-insensitively on decode. Changed, because v2 changed it: a nil
+  slice encodes as `[]` (was `null`) and a nil map as `{}`; `omitempty` omits empty JSON values only, use
+  `omitzero` for Go zero values (a `0`, `false` or zero `time.Duration` that `omitempty` used to drop is now
+  sent); `<`, `>` and `&` are no longer HTML-escaped; a `[N]byte` encodes as base64; duplicate object names and
+  invalid UTF-8 in an incoming body are rejected, so `msg.Unmarshal` and `msg.As` return an error where v1
+  silently took the last value. To restore a v1 behaviour, reassign the options, for example
+  `neffos.JSONMarshalOptions = json.JoinOptions(neffos.JSONMarshalOptions, json.FormatNilSliceAsNull(true))`.
+  `encoding/json.RawMessage` is an alias of `jsontext.Value` since Go 1.27, so raw-JSON fields work with both.
+- `Server.Broadcast` with `neffos.Exclude(connID)` or a `*Room` used to be a no-op under a `StackExchange`: the
+  exclusion travelled in a field that `Message.Serialize` does not write, and every broadcast is serialized on
+  its way through redis or nats. Both now resolve to the connection's server id and travel like a `*Conn` does.
+  An id this server does not know (a connection on another node) is still excluded locally only.
+- A dynamic `Struct` (one with a `*NSConn` field) binds its event methods once per connection, at
+  `OnNamespaceConnect`. Each event used to do a `reflect.Value.Method(i).Interface()` lookup; it is now a plain
+  function call (139 ns and one 8-byte allocation per event in `BenchmarkStructDynamicEvent`, all of it the
+  `Message` copy).
+- Unexported fields of a dynamic `Struct` prototype are no longer copied into the per-connection instance. They
+  used to be reported as non-zero and `reflect.Value.Set` panicked on the first connect; a `sync.Mutex` or a
+  private counter on the controller now just starts zero. Use `SetInjector` to fill private fields.
 
 - A close frame now actually goes out: code 1000 on `Conn.Close` or a plain `Conn.Terminate`, and code 1001
   (`CloseGoingAway`) on `Server.Close` or `Server.Shutdown`.
@@ -171,13 +239,18 @@ code was found in the repository or examples.
 - `github.com/coder/websocket` v1.8.15 added, for the new `coder` backend.
 - `github.com/gorilla/websocket` v1.5.3 and `github.com/gobwas/ws` v1.4.0 are unchanged.
 - `golang.org/x/sync` v0.23.0, `golang.org/x/crypto` v0.57.0 and `golang.org/x/sys` v0.48.0.
-- Module floor raised to Go 1.26 (`go 1.26.0` in `go.mod`, no `toolchain` line).
+- `github.com/google/uuid` is removed; the standard library's `uuid` package (Go 1.27) generates the ids.
+- Module floor raised to Go 1.27 (`go 1.27` in `go.mod`, no `toolchain` line). Notes that come with the
+  toolchain itself: `go test` now runs the `stdversion` vet check by default, and the compiler may give two
+  identical function literals one code pointer, so never compare event handlers by function value.
 
 ### Examples and documentation
 
 - `_examples` is restructured into a numbered tutorial (`01-getting-started`, steps 01 to 12) plus topic folders
   (`02-backends` through `09-integrations`), each `main.go` with its own Learn, Run, Try and Next sections. See
   `_examples/README.md` for the full index.
+- `_examples/09-integrations/iris-jwt` is its own module: it follows the public iris release, whose `websocket`
+  package tracks neffos v0.0.x until iris ships against v0.1.0.
 - The migration notes for existing v0.0.x code live on the wiki:
   https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0
 

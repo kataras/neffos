@@ -8,7 +8,7 @@ import (
 )
 
 // ConnHandler is the interface which namespaces and events can be retrieved through.
-// Built-in ConnHandlers are the`Events`, `Namespaces`, `WithTimeout` and `NewStruct`.
+// Built-in ConnHandlers are the `Events`, `Namespaces`, `WithTimeout` and `Struct` (see `NewStruct`).
 // Users of this are the `Dial`(client) and `New` (server) functions.
 type ConnHandler interface {
 	GetNamespaces() Namespaces
@@ -18,7 +18,8 @@ var (
 	_ ConnHandler = (Events)(nil)
 	_ ConnHandler = (Namespaces)(nil)
 	_ ConnHandler = WithTimeout{}
-	_ ConnHandler = (*Struct)(nil)
+	_ ConnHandler = (*Struct[struct{}])(nil)
+	_ ConnHandler = (*StructValue)(nil)
 )
 
 // Events completes the `ConnHandler` interface.
@@ -138,35 +139,62 @@ func (s connSettings) merge(other connSettings) connSettings {
 	return s
 }
 
-// getSettings returns the settings carried by a WithTimeout or a *Struct
-// handler, or zero settings for any other handler.
-func getSettings(h ConnHandler) connSettings {
-	switch t := h.(type) {
-	case WithTimeout:
-		return connSettings{
-			readTimeout:    t.ReadTimeout,
-			writeTimeout:   t.WriteTimeout,
-			pingInterval:   t.PingInterval,
-			maxMessageSize: t.MaxMessageSize,
-		}
-	case *Struct:
-		return connSettings{
-			readTimeout:    t.readTimeout,
-			writeTimeout:   t.writeTimeout,
-			pingInterval:   t.pingInterval,
-			maxMessageSize: t.maxMessageSize,
-		}
-	default:
-		return connSettings{}
+// settingsCarrier is implemented by the ConnHandlers that carry per-connection
+// settings: WithTimeout, *StructValue and *Struct[T].
+type settingsCarrier interface {
+	settings() connSettings
+}
+
+func (t WithTimeout) settings() connSettings {
+	return connSettings{
+		readTimeout:    t.ReadTimeout,
+		writeTimeout:   t.WriteTimeout,
+		pingInterval:   t.PingInterval,
+		maxMessageSize: t.MaxMessageSize,
 	}
+}
+
+// getSettings returns the settings carried by h, or zero settings for a
+// handler without any.
+func getSettings(h ConnHandler) connSettings {
+	if c, ok := h.(settingsCarrier); ok {
+		return c.settings()
+	}
+
+	return connSettings{}
 }
 
 // EventMatcherFunc is a type of which a Struct matches the methods with neffos events.
 type EventMatcherFunc = func(methodName string) (string, bool)
 
-// Struct is a ConnHandler. All fields are unexported, use `NewStruct` instead.
-// It converts any pointer to a struct value to `neffos.Namespaces` using reflection.
-type Struct struct {
+// EventPrefixMatcher matches methods to events based on the "prefix".
+func EventPrefixMatcher(prefix string) EventMatcherFunc {
+	return func(methodName string) (string, bool) {
+		if strings.HasPrefix(methodName, prefix) {
+			return methodName, true
+		}
+
+		return "", false
+	}
+}
+
+// EventTrimPrefixMatcher matches methods based on the "prefixToTrim"
+// and events are registered without this prefix.
+func EventTrimPrefixMatcher(prefixToTrim string) EventMatcherFunc {
+	return func(methodName string) (string, bool) {
+		if strings.HasPrefix(methodName, prefixToTrim) {
+			return methodName[len(prefixToTrim):], true
+		}
+
+		return "", false
+	}
+}
+
+// StructValue is the reflection-driven ConnHandler behind `Struct`. It is for
+// frameworks that only have the controller as a `reflect.Value` (iris mvc builds
+// its controllers through a dependency injection container). Application code
+// uses `NewStruct`, which is typed. All fields are unexported, use `NewStructValue`.
+type StructValue struct {
 	ptr reflect.Value
 
 	// defaults to empty and tries to get it through `Struct.Namespace() string` method.
@@ -179,135 +207,27 @@ type Struct struct {
 	maxMessageSize            int64
 
 	// This field is set when external dependency injection system is used.
-	injector StructInjector
+	injector func(nsConn *NSConn) reflect.Value
 
 	events Events
 }
 
-// SetNamespace sets a namespace that this Struct is responsible for,
-// Alterinatively create a method on the controller named `Namespace() string`
-// to retrieve this namespace at build time.
-func (s *Struct) SetNamespace(namespace string) *Struct {
-	s.namespace = namespace
-	return s
-}
-
-var (
-	// EventPrefixMatcher matches methods to events based on the "prefix".
-	EventPrefixMatcher = func(prefix string) EventMatcherFunc {
-		return func(methodName string) (string, bool) {
-			if strings.HasPrefix(methodName, prefix) {
-				return methodName, true
-			}
-
-			return "", false
-		}
-	}
-
-	// EventTrimPrefixMatcher matches methods based on the "prefixToTrim"
-	// and events are registered without this prefix.
-	EventTrimPrefixMatcher = func(prefixToTrim string) EventMatcherFunc {
-		return func(methodName string) (string, bool) {
-			if strings.HasPrefix(methodName, prefixToTrim) {
-				return methodName[len(prefixToTrim):], true
-			}
-
-			return "", false
-		}
-	}
-)
-
-// SetEventMatcher sets an event method matcher which applies to every
-// event except the system events (OnNamespaceConnected, and so on).
-func (s *Struct) SetEventMatcher(matcher EventMatcherFunc) *Struct {
-	s.eventMatcher = matcher
-	return s
-}
-
-// SetTimeouts sets read and write deadlines on the underlying network connection.
-// After a read or write have timed out, the websocket connection is closed.
-//
-// Defaults to 0, no timeout except an `Upgrader` or `Dialer` specifies its own values.
-func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
-	s.readTimeout = read
-	s.writeTimeout = write
-
-	return s
-}
-
-// SetPingInterval sets the heartbeat interval. Above zero, the connection
-// pings the remote side every d and closes if no pong arrives within d.
-// It needs a Socket that implements SocketPinger.
-// See `WithTimeout.PingInterval`.
-//
-// Defaults to 0, no heartbeat.
-func (s *Struct) SetPingInterval(d time.Duration) *Struct {
-	s.pingInterval = d
-	return s
-}
-
-// SetMaxMessageSize caps the size in bytes of one incoming message. Above
-// zero, a bigger message closes the connection with CloseMessageTooBig. It
-// needs a Socket that implements SocketReadLimiter.
-// See `WithTimeout.MaxMessageSize`.
-//
-// Defaults to 0, no cap except the one of the `Upgrader` or `Dialer`.
-func (s *Struct) SetMaxMessageSize(n int64) *Struct {
-	s.maxMessageSize = n
-	return s
-}
-
-// SetInjector sets a custom injector and overrides the neffos default behavior
-// on dynamic structs.
-// The "fn" should handle to fill static fields and the NSConn.
-// This "fn" will only be called when dynamic struct "ptr" is passed
-// on the `NewStruct`.
-// The caller should return a
-// valid type of "ptr" reflect.Value.
-func (s *Struct) SetInjector(fn StructInjector) *Struct {
-	s.injector = fn
-	return s
-}
-
-// NewStruct returns a new Struct value instance type of ConnHandler.
-// The "ptr" should be a pointer to a struct.
-// This function is used when you want to convert a structure to
-// neffos.ConnHandler based on the struct's methods.
-// The methods if "ptr" structure value
-// can be func(msg neffos.Message) error if the structure contains a *neffos.NSConn field,
-// otherwise they should be like any event callback: func(nsConn *neffos.NSConn, msg neffos.Message) error.
-// If contains a field of type *neffos.NSConn then on each new connection to the namespace a new controller is created
-// and static fields(if any) are set on runtime with the NSConn itself.
-// If it's a static controller (does not contain a NSConn field)
-// then it just registers its functions as regular events without performance cost.
-//
-// Users of this method is `New` and `Dial`.
-//
-// Note that this method has a tiny performance cost when an event's callback's logic has small footprint.
-func NewStruct(ptr any) *Struct {
-	if ptr == nil {
-		panic("NewStruct: value is nil")
-	}
-
-	if s, ok := ptr.(*Struct); ok { // if it's already a *Struct then just return it.
-		return s
-	}
-
-	var v reflect.Value // use for methods with receiver Ptr.
-	if rValue, ok := ptr.(reflect.Value); ok {
-		v = rValue
-	} else {
-		v = reflect.ValueOf(ptr)
-	}
-
+// NewStructValue is `NewStruct` for a controller held as a `reflect.Value`.
+// The value must be a non-nil pointer to a struct with at least one exported
+// method; anything else panics, as a programming error at registration time.
+func NewStructValue(v reflect.Value) *StructValue {
 	if !v.IsValid() {
 		panic("NewStruct: value is not a valid one")
 	}
 
 	typ := v.Type() // use for methods with receiver Ptr.
 
-	if typ.Kind() != reflect.Ptr {
+	if typ.Kind() != reflect.Pointer {
 		panic("NewStruct: value should be a pointer")
+	}
+
+	if v.IsNil() {
+		panic("NewStruct: value is nil")
 	}
 
 	if typ.ConvertibleTo(nsConnType) {
@@ -324,17 +244,61 @@ func NewStruct(ptr any) *Struct {
 		panic("NewStruct: value does not contain any exported methods")
 	}
 
-	return &Struct{
-		ptr: v,
+	return &StructValue{ptr: v}
+}
+
+// SetNamespace sets the namespace this handler is responsible for.
+// See `Struct.SetNamespace`.
+func (s *StructValue) SetNamespace(namespace string) *StructValue {
+	s.namespace = namespace
+	return s
+}
+
+// SetEventMatcher sets the method-to-event matcher. See `Struct.SetEventMatcher`.
+func (s *StructValue) SetEventMatcher(matcher EventMatcherFunc) *StructValue {
+	s.eventMatcher = matcher
+	return s
+}
+
+// SetTimeouts sets the read and write deadlines. See `Struct.SetTimeouts`.
+func (s *StructValue) SetTimeouts(read, write time.Duration) *StructValue {
+	s.readTimeout = read
+	s.writeTimeout = write
+	return s
+}
+
+// SetPingInterval sets the heartbeat interval. See `Struct.SetPingInterval`.
+func (s *StructValue) SetPingInterval(d time.Duration) *StructValue {
+	s.pingInterval = d
+	return s
+}
+
+// SetMaxMessageSize caps the size of one incoming message. See `Struct.SetMaxMessageSize`.
+func (s *StructValue) SetMaxMessageSize(n int64) *StructValue {
+	s.maxMessageSize = n
+	return s
+}
+
+// SetInjector sets the function that builds the per-connection controller
+// instance when the struct has a `*NSConn` field. The returned value must be
+// a pointer to the same struct type; neffos sets its `*NSConn` field afterwards.
+// Static fields are not copied when an injector is set. See `Struct.SetInjector`.
+func (s *StructValue) SetInjector(fn func(nsConn *NSConn) reflect.Value) *StructValue {
+	s.injector = fn
+	return s
+}
+
+func (s *StructValue) settings() connSettings {
+	return connSettings{
+		readTimeout:    s.readTimeout,
+		writeTimeout:   s.writeTimeout,
+		pingInterval:   s.pingInterval,
+		maxMessageSize: s.maxMessageSize,
 	}
 }
 
-// Events builds and returns the Events.
-// Callers of this method is users that want to add Structs to different namespaces
-// in the same application.
-// When a single namespace is used then this call is unnecessary,
-// the `Struct` is already a fully featured `ConnHandler` by itself.
-func (s *Struct) Events() Events {
+// Events builds and returns the Events. See `Struct.Events`.
+func (s *StructValue) Events() Events {
 	if s.events != nil {
 		return s.events
 	}
@@ -343,9 +307,8 @@ func (s *Struct) Events() Events {
 	return s.events
 }
 
-// GetNamespaces creates and returns Namespaces based on the
-// pointer to struct value provided by the "s".
-func (s *Struct) GetNamespaces() Namespaces { // completes the `ConnHandler` interface.
+// GetNamespaces completes the `ConnHandler` interface. See `Struct.GetNamespaces`.
+func (s *StructValue) GetNamespaces() Namespaces {
 	if s.namespace == "" {
 		s.namespace, _ = resolveStructNamespace(s.ptr)
 	}
@@ -353,6 +316,134 @@ func (s *Struct) GetNamespaces() Namespaces { // completes the `ConnHandler` int
 	return Namespaces{
 		s.namespace: s.Events(),
 	}
+}
+
+// Struct is a ConnHandler built from the exported methods of a struct of type T.
+// All fields are unexported, use `NewStruct` instead.
+//
+// A method named `OnChat` with the signature of a `MessageHandlerFunc`,
+// `func(c *neffos.NSConn, msg neffos.Message) error`, handles the "OnChat" event
+// (see `SetEventMatcher` to change the mapping). System events are matched by
+// name without the leading underscore: `OnNamespaceConnected` handles
+// `_OnNamespaceConnected`.
+//
+// When T has a field of type `*neffos.NSConn` the struct is dynamic: a new T is
+// created for every connection to the namespace (see `SetInjector`), the field is
+// set to that connection, and the methods take the shorter
+// `func(msg neffos.Message) error` form. Exported fields that are non-zero on the
+// prototype passed to `NewStruct` are copied into each instance; unexported fields
+// are not. Without such a field the struct is static and its methods are
+// registered as plain events with no per-connection cost.
+type Struct[T any] struct {
+	engine *StructValue
+}
+
+// NewStruct returns a ConnHandler built from the exported methods of *T.
+// "prototype" is the value whose exported, non-zero fields are copied into every
+// per-connection instance of a dynamic struct; for a static struct it is the
+// receiver of every event. A nil prototype, a non-struct T, or a T without
+// exported methods panics, as a programming error at registration time.
+//
+//	type chat struct {
+//		Conn *neffos.NSConn
+//		Users *userStore
+//	}
+//
+//	func (c *chat) OnChat(msg neffos.Message) error { ... }
+//
+//	server := neffos.New(upgrader, neffos.NewStruct(&chat{Users: store}).SetNamespace("default"))
+//
+// Users of this handler are `New` and `Dial`.
+func NewStruct[T any](prototype *T) *Struct[T] {
+	if prototype == nil {
+		panic("NewStruct: value is nil")
+	}
+
+	return &Struct[T]{engine: NewStructValue(reflect.ValueOf(prototype))}
+}
+
+// SetNamespace sets a namespace that this Struct is responsible for,
+// Alterinatively create a method on the controller named `Namespace() string`
+// to retrieve this namespace at build time.
+func (s *Struct[T]) SetNamespace(namespace string) *Struct[T] {
+	s.engine.SetNamespace(namespace)
+	return s
+}
+
+// SetEventMatcher sets an event method matcher which applies to every
+// event except the system events (OnNamespaceConnected, and so on).
+// See `EventPrefixMatcher` and `EventTrimPrefixMatcher`.
+func (s *Struct[T]) SetEventMatcher(matcher EventMatcherFunc) *Struct[T] {
+	s.engine.SetEventMatcher(matcher)
+	return s
+}
+
+// SetTimeouts sets read and write deadlines on the underlying network connection.
+// After a read or write have timed out, the websocket connection is closed.
+//
+// Defaults to 0, no timeout except an `Upgrader` or `Dialer` specifies its own values.
+func (s *Struct[T]) SetTimeouts(read, write time.Duration) *Struct[T] {
+	s.engine.SetTimeouts(read, write)
+	return s
+}
+
+// SetPingInterval sets the heartbeat interval. Above zero, the connection
+// pings the remote side every d and closes if no pong arrives within d.
+// It needs a Socket that implements SocketPinger.
+// See `WithTimeout.PingInterval`.
+//
+// Defaults to 0, no heartbeat.
+func (s *Struct[T]) SetPingInterval(d time.Duration) *Struct[T] {
+	s.engine.SetPingInterval(d)
+	return s
+}
+
+// SetMaxMessageSize caps the size in bytes of one incoming message. Above
+// zero, a bigger message closes the connection with CloseMessageTooBig. It
+// needs a Socket that implements SocketReadLimiter.
+// See `WithTimeout.MaxMessageSize`.
+//
+// Defaults to 0, no cap except the one of the `Upgrader` or `Dialer`.
+func (s *Struct[T]) SetMaxMessageSize(n int64) *Struct[T] {
+	s.engine.SetMaxMessageSize(n)
+	return s
+}
+
+// SetInjector sets the function that builds the per-connection instance of a
+// dynamic struct (one with a `*NSConn` field). It is called once per connection
+// to the namespace; neffos sets the `*NSConn` field on the returned value, so
+// the function only fills the application's own dependencies:
+//
+//	neffos.NewStruct(&chat{}).SetInjector(func(c *neffos.NSConn) *chat {
+//		return &chat{Users: store, Log: logger.With("conn", c.Conn.ID())}
+//	})
+//
+// With an injector set, the prototype's fields are not copied.
+// Static structs never call it.
+func (s *Struct[T]) SetInjector(fn func(nsConn *NSConn) *T) *Struct[T] {
+	s.engine.SetInjector(func(c *NSConn) reflect.Value {
+		return reflect.ValueOf(fn(c))
+	})
+	return s
+}
+
+func (s *Struct[T]) settings() connSettings {
+	return s.engine.settings()
+}
+
+// Events builds and returns the Events.
+// Callers of this method is users that want to add Structs to different namespaces
+// in the same application.
+// When a single namespace is used then this call is unnecessary,
+// the `Struct` is already a fully featured `ConnHandler` by itself.
+func (s *Struct[T]) Events() Events {
+	return s.engine.Events()
+}
+
+// GetNamespaces creates and returns Namespaces based on the
+// pointer to struct value provided by the "s".
+func (s *Struct[T]) GetNamespaces() Namespaces { // completes the `ConnHandler` interface.
+	return s.engine.GetNamespaces()
 }
 
 // JoinConnHandlers combines two or more "connHandlers"

@@ -119,11 +119,16 @@ func runServer(addr string) {
 	jobs.AddFunc("@every 10s", func() {
 		due := notifications.take(srv.GetConnections())
 		for _, n := range due {
+			body, err := neffos.Marshal(n)
+			if err != nil {
+				log.Printf("cron: cannot encode the notification for %s: %v", n.User, err)
+				continue
+			}
 			srv.Broadcast(nil, neffos.Message{
 				To:        n.User, // only this user's connection
 				Namespace: namespace,
 				Event:     "Notification",
-				Body:      neffos.Marshal(n),
+				Body:      body,
 			})
 		}
 		log.Printf("cron: pushed %d notification(s)", len(due))
@@ -151,8 +156,8 @@ func runClient(addr, user string) {
 	events := neffos.Namespaces{
 		namespace: neffos.Events{
 			"Notification": func(c *neffos.NSConn, msg neffos.Message) error {
-				var n notification
-				if err := msg.Unmarshal(&n); err != nil {
+				n, err := msg.As[notification]()
+				if err != nil {
 					return err
 				}
 				fmt.Printf("notification: %s\n", n.Text)

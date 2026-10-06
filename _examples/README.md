@@ -2,11 +2,11 @@
 
 Runnable programs for [neffos](https://github.com/kataras/neffos), ordered the way you would learn it: a tutorial that grows one chat app step by step, then one section per topic. Every example is a single `main.go` (plus an `index.html` where a browser page helps) that opens with a comment saying what it shows, what you will be able to do afterwards, how to run and try it, and which example to read next. Every section names the [wiki](https://github.com/kataras/neffos/wiki) page it pairs with.
 
-Requirements: Go 1.26 or newer. A few examples need more, and say so in a `Requires:` line: Redis or NATS for scale-out, Docker for its compose file, `protoc` only to regenerate the protobuf code. New to neffos? Start with `01-getting-started` and do the steps in order.
+Requirements: Go 1.27 or newer. A few examples need more, and say so in a `Requires:` line: Redis or NATS for scale-out, Docker for its compose file, `protoc` only to regenerate the protobuf code. New to neffos? Start with `01-getting-started` and do the steps in order.
 
 ## Running an example
 
-All examples share one module, `_examples/go.mod`, which points `github.com/kataras/neffos` at the code in this repository. In a clone, run an example from its folder:
+All examples but one share one module, `_examples/go.mod`, which points `github.com/kataras/neffos` at the code in this repository; the exception is `09-integrations/iris-jwt`, explained in its section. In a clone, run an example from its folder:
 
 ```sh
 cd _examples/01-getting-started/01-echo
@@ -40,7 +40,7 @@ Wiki: [Getting started](https://github.com/kataras/neffos/wiki/Getting-started),
 | [04-rooms](01-getting-started/04-rooms) | `/join` and `/leave`, room-scoped chat, a `staff` room gated in `OnRoomJoin`, `IsForced` when a connection drops |
 | [05-encoding](01-getting-started/05-encoding) | JSON bodies with `Marshal`, `Unmarshal` and `MessageObjectMarshaler`; binary frames with `EmitBinary` and `SetBinary` |
 | [06-ask-and-errors](01-getting-started/06-ask-and-errors) | `NSConn.Ask` and `Server.Ask` with context deadlines, `Message.Err`, `RegisterKnownError` and `errors.Is` across the wire |
-| [07-authentication](01-getting-started/07-authentication) | A bearer token checked by HTTP middleware (401) and by `OnConnect`, the user kept with `Conn.Set` and `Conn.Get` |
+| [07-authentication](01-getting-started/07-authentication) | A bearer token checked by HTTP middleware (401) and by `OnConnect`, the user kept with `Conn.Set` and `Conn.Value` |
 | [08-timeouts-and-limits](01-getting-started/08-timeouts-and-limits) | `WithTimeout`: read and write deadlines, a heartbeat with `PingInterval`, `MaxMessageSize`; `Send` errors sorted with `IsTimeoutError` and `IsDisconnectError` |
 | [09-close-and-shutdown](01-getting-started/09-close-and-shutdown) | Kicking a user with `Conn.Terminate(4000, reason)`, reading `CloseStatus(c.Err())` on both sides, and `Server.Shutdown` on Ctrl+C |
 | [10-struct-handler](01-getting-started/10-struct-handler) | The server's handlers as a per-connection struct: `NewStruct`, `EventTrimPrefixMatcher`, `JoinConnHandlers`, and the limits through `SetTimeouts`, `SetPingInterval`, `SetMaxMessageSize` |
@@ -125,6 +125,8 @@ Wiki: [Authentication](https://github.com/kataras/neffos/wiki/Authentication).
 | Example | Shows |
 | --- | --- |
 | [iris-jwt](09-integrations/iris-jwt) | neffos inside an Iris v12 app: `websocket.Handler` behind the `middleware/jwt` verifier, the verified user read in events with `websocket.GetContext` and `jwt.Get` |
+
+iris-jwt is its own Go module (`09-integrations/iris-jwt/go.mod`) because it follows the public Iris release: the websocket package of Iris v12.2.11 tracks neffos v0.0.x until the next Iris release, so it builds against that neffos version and not against this repository. Run it from its folder; `go vet` and `go test` from `_examples` do not enter it.
 
 ## The JavaScript client
 

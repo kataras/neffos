@@ -335,23 +335,43 @@ func TestIncrementConcurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range perG {
 				c.Increment("n")
 				c.Increment("m")
 				c.Decrement("m")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
-	if got := c.Get("n"); got != workers*perG {
+	if got, _ := c.Value[int]("n"); got != workers*perG {
 		t.Fatalf("expected %d increments, got %v", workers*perG, got)
 	}
-	if got := c.Get("m"); got != 0 {
+	if got, _ := c.Value[int]("m"); got != 0 {
 		t.Fatalf("expected balanced increments and decrements to give 0, got %v", got)
+	}
+}
+
+func TestConnValueTyped(t *testing.T) {
+	c := newConn(newFakeSocket(), Namespaces{})
+
+	if _, ok := c.Value[string]("missing"); ok {
+		t.Fatal("expected a missing key to report false")
+	}
+
+	c.Set("user", "makis")
+	got, ok := c.Value[string]("user")
+	if !ok || got != "makis" {
+		t.Fatalf("expected the stored string, got %q (%v)", got, ok)
+	}
+
+	if n, ok := c.Value[int]("user"); ok || n != 0 {
+		t.Fatalf("expected a wrong type to report the zero value and false, got %d (%v)", n, ok)
+	}
+
+	if v, ok := c.Value[any]("user"); !ok || v != "makis" {
+		t.Fatalf("expected Value[any] to behave like the old Get, got %v (%v)", v, ok)
 	}
 }
 

@@ -195,6 +195,12 @@ func (c *Conn) Is(connID string) bool {
 	return c.serverConnID == connID
 }
 
+// excludeKeys implements Sender: a server-side connection is excluded by its
+// server connection id, which survives a StackExchange round trip.
+func (c *Conn) excludeKeys() (serverConnID, connID string) {
+	return c.serverConnID, c.id
+}
+
 // ID method returns the unique identifier of the connection.
 // If this is a server-side connection then this value is the generated one by the `Server#IDGenerator`.
 // If this is a client-side connection then this value is filled on the acknowledgment process which is done on the `Client#Dial`.
@@ -240,15 +246,24 @@ func (c *Conn) Set(key string, value any) {
 	c.storeMutex.Unlock()
 }
 
-// Get returns the value stored under key, or nil if absent.
-// Get is safe for concurrent use.
-func (c *Conn) Get(key string) any {
+// Value returns the value stored under key as a T. The second result is false
+// when the key is absent or the stored value is not a T. `Value[any](key)`
+// returns whatever was stored.
+//
+//	user, ok := c.Conn.Value[User]("user")
+//
+// Value is safe for concurrent use.
+func (c *Conn) Value[T any](key string) (T, bool) {
 	c.storeMutex.RLock()
-	defer c.storeMutex.RUnlock()
-	if c.store == nil {
-		return nil
+	v, ok := c.store[key]
+	c.storeMutex.RUnlock()
+	if !ok {
+		var zero T
+		return zero, false
 	}
-	return c.store[key]
+
+	t, ok := v.(T)
+	return t, ok
 }
 
 // Increment works like `Set` method.

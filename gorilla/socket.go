@@ -108,8 +108,7 @@ func (s *Socket) ReadData(timeout time.Duration) ([]byte, neffos.MessageType, er
 // mapReadError turns gorilla's close and read limit errors into the neffos
 // ones. Other errors, timeouts included, pass through unchanged.
 func mapReadError(err error) error {
-	var ce *gorilla.CloseError
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*gorilla.CloseError](err); ok {
 		return neffos.CloseError{Code: ce.Code, Reason: ce.Text}
 	}
 

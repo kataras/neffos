@@ -151,8 +151,8 @@ func (tc *testClient) join(t *testing.T, room string) *neffos.Room {
 func chatOf(t *testing.T, msg neffos.Message) chatMessage {
 	t.Helper()
 
-	var m chatMessage
-	if err := msg.Unmarshal(&m); err != nil {
+	m, err := msg.As[chatMessage]()
+	if err != nil {
 		t.Fatalf("decode %s: %v", msg.Body, err)
 	}
 	return m
@@ -164,18 +164,18 @@ func TestBroadcast(t *testing.T) {
 	bob := connect(t, url, "bob")
 
 	// From is filled by the server, whatever the client claims.
-	alice.Emit("Chat", neffos.Marshal(chatMessage{From: "mallory", Text: "hello"}))
+	alice.SendObject("Chat", chatMessage{From: "mallory", Text: "hello"})
 	if got := chatOf(t, bob.expect(t, "Chat")); got.From != "alice" || got.Text != "hello" {
 		t.Fatalf("bob got %+v, want alice: hello", got)
 	}
 	alice.expectNone(t, "Chat") // BroadcastOthers skips the sender
 
-	bob.Emit("Private", neffos.Marshal(chatMessage{To: "alice", Text: "psst"}))
+	bob.SendObject("Private", chatMessage{To: "alice", Text: "psst"})
 	if got := chatOf(t, alice.expect(t, "Private")); got.From != "bob" || got.Text != "psst" {
 		t.Fatalf("alice got %+v, want bob: psst", got)
 	}
 
-	bob.Emit("Private", neffos.Marshal(chatMessage{To: "carol", Text: "hi"}))
+	bob.SendObject("Private", chatMessage{To: "carol", Text: "hi"})
 	if msg := bob.expect(t, "Private"); msg.Err == nil || !strings.Contains(msg.Err.Error(), "not online") {
 		t.Fatalf("expected a Message.Err saying carol is not online, got %v", msg.Err)
 	}
@@ -190,7 +190,7 @@ func TestRooms(t *testing.T) {
 	general := alice.join(t, "general")
 	bob.join(t, "general")
 
-	general.Emit("Chat", neffos.Marshal(chatMessage{Text: "hi room"}))
+	general.SendObject("Chat", chatMessage{Text: "hi room"})
 	msg := bob.expect(t, "Chat")
 	if got := chatOf(t, msg); msg.Room != "general" || got.Text != "hi room" {
 		t.Fatalf("bob got %q in #%s, want \"hi room\" in #general", got.Text, msg.Room)
@@ -218,8 +218,8 @@ func TestAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	if err := reply.Unmarshal(&names); err != nil || !slices.Equal(names, []string{"alice", "bob"}) {
+	names, err := reply.As[[]string]()
+	if err != nil || !slices.Equal(names, []string{"alice", "bob"}) {
 		t.Fatalf("who: got %v (%v), want [alice bob]", names, err)
 	}
 
@@ -243,10 +243,10 @@ func TestCloseCodes(t *testing.T) {
 	alice := connect(t, url, "alice")
 	bob := connect(t, url, "bob")
 
-	// Send hands a line over the size limit to the socket without an error;
+	// SendObject hands a line over the size limit to the socket without an error;
 	// the server then closes the connection with 1009.
-	spam := neffos.Marshal(chatMessage{Text: strings.Repeat("a", 2*maxMessageSize)})
-	if err := bob.Send("Chat", spam); err != nil {
+	spam := chatMessage{Text: strings.Repeat("a", 2*maxMessageSize)}
+	if err := bob.SendObject("Chat", spam); err != nil {
 		t.Fatalf("bob: send: %v", err)
 	}
 	if code := neffos.CloseStatus(bob.expectClose(t)); code != neffos.CloseMessageTooBig {

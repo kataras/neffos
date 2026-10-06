@@ -360,16 +360,14 @@ func TestGetConnectionsDuringUpgrades(t *testing.T) {
 		errs := make(chan error, clients)
 		var wg sync.WaitGroup
 		for range clients {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				client, err := neffos.Dial(context.Background(), dialer, url, events)
 				if err != nil {
 					errs <- err
 					return
 				}
 				t.Cleanup(client.Close)
-			}()
+			})
 		}
 
 		within(t, backend+": dials", wg.Wait)
@@ -576,7 +574,19 @@ func TestServerShutdownContextTimeout(t *testing.T) {
 type recordingExchange struct {
 	mu        sync.Mutex
 	events    []string
+	published []neffos.Message
 	onConnect func()
+}
+
+// lastPublished returns the most recently published message.
+func (e *recordingExchange) lastPublished(t *testing.T) neffos.Message {
+	t.Helper()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.published) == 0 {
+		t.Fatal("expected a published message")
+	}
+	return e.published[len(e.published)-1]
 }
 
 func (e *recordingExchange) record(event string) {
@@ -599,8 +609,13 @@ func (e *recordingExchange) OnConnect(*neffos.Conn) error {
 	return nil
 }
 
-func (e *recordingExchange) OnDisconnect(*neffos.Conn)              { e.record("disconnect") }
-func (e *recordingExchange) Publish([]neffos.Message) bool          { return true }
+func (e *recordingExchange) OnDisconnect(*neffos.Conn) { e.record("disconnect") }
+func (e *recordingExchange) Publish(msgs []neffos.Message) bool {
+	e.mu.Lock()
+	e.published = append(e.published, msgs...)
+	e.mu.Unlock()
+	return true
+}
 func (e *recordingExchange) Subscribe(*neffos.Conn, string)         {}
 func (e *recordingExchange) Unsubscribe(*neffos.Conn, string)       {}
 func (e *recordingExchange) NotifyAsk(neffos.Message, string) error { return nil }
@@ -895,4 +910,59 @@ func TestBroadcastBatchWithDifferentTargets(t *testing.T) {
 			t.Fatalf("%s: expected a:for-a and b:for-b, got %v", backend, received)
 		}
 	}
+}
+
+// Every exclusion form must survive a StackExchange round trip: the message is
+// serialized by Publish, so the sender has to travel in FromExplicit.
+var (
+	_ neffos.Sender = (*neffos.Conn)(nil)
+	_ neffos.Sender = (*neffos.NSConn)(nil)
+	_ neffos.Sender = (*neffos.Room)(nil)
+	_ neffos.Sender = neffos.Exclude("id")
+)
+
+func TestBroadcastExcludeThroughStackExchange(t *testing.T) {
+	const namespace = "default"
+	exc := &recordingExchange{}
+	handler := neffos.Namespaces{namespace: neffos.Events{"event": func(*neffos.NSConn, neffos.Message) error { return nil }}}
+
+	ts := newTestServers(t, handler, func(s *neffos.Server) { s.StackExchange = exc })
+
+	ts.dial(t, handler, func(backend string, client *neffos.Client) {
+		defer client.Close()
+
+		c, err := client.Connect(context.TODO(), namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.JoinRoom(context.TODO(), "lobby"); err != nil {
+			t.Fatal(err)
+		}
+
+		srv := ts.servers[backend]
+		msg := neffos.Message{Namespace: namespace, Event: "event", Body: []byte("x")}
+
+		srv.Broadcast(neffos.Exclude(client.ID), msg)
+		if got := exc.lastPublished(t); got.FromExplicit == "" {
+			t.Fatalf("[%s] Exclude(connID) of a live connection must publish with FromExplicit set", backend)
+		}
+
+		serverNS := srv.GetConnectionsByNamespace(namespace)[client.ID]
+		if serverNS == nil {
+			t.Fatalf("[%s] server-side NSConn not found", backend)
+		}
+		room := serverNS.Room("lobby")
+		if room == nil {
+			t.Fatalf("[%s] server-side room not found", backend)
+		}
+		srv.Broadcast(room, msg)
+		if got := exc.lastPublished(t); got.FromExplicit == "" {
+			t.Fatalf("[%s] a *Room sender must publish with FromExplicit set", backend)
+		}
+
+		srv.Broadcast(neffos.Exclude("not-a-live-connection"), msg)
+		if got := exc.lastPublished(t); got.FromExplicit != "" {
+			t.Fatalf("[%s] an unknown id cannot resolve to a server connection id, got %q", backend, got.FromExplicit)
+		}
+	})
 }

@@ -51,11 +51,11 @@ type notification struct {
 	Message string `json:"message"`
 }
 
+// message is what every round broadcasts; main encodes its body once.
 var message = neffos.Message{
 	To:        clientConnID,
 	Namespace: namespace,
 	Event:     "notify",
-	Body:      neffos.Marshal(notification{Title: "load test", Message: "a notification message"}),
 }
 
 var (
@@ -75,6 +75,12 @@ var (
 )
 
 func main() {
+	body, err := neffos.Marshal(notification{Title: "load test", Message: "a notification message"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	message.Body = body
+
 	server := startServer()
 	time.Sleep(200 * time.Millisecond)
 

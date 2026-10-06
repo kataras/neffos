@@ -2,7 +2,6 @@ package neffos
 
 import (
 	"context"
-	"reflect"
 	"sync"
 )
 
@@ -25,9 +24,29 @@ type NSConn struct {
 	rooms      map[string]*Room
 	roomsMutex sync.RWMutex
 
-	// value is just a temporarily value.
-	// Storage across event callbacks for this namespace.
-	value reflect.Value
+	// value is the per-connection *structInstance of a dynamic Struct handler,
+	// set on OnNamespaceConnect and read by its events and by `Instance`.
+	value any
+}
+
+// Instance returns the per-connection instance of a dynamic `Struct[T]` handler
+// (one whose T has a `*NSConn` field), created when this connection connected
+// to the namespace. It reports false before that, for a static struct, and when
+// the handler's type is not T.
+//
+//	chat, ok := c.Instance[Chat]()
+func (ns *NSConn) Instance[T any]() (*T, bool) {
+	if ns == nil {
+		return nil, false
+	}
+
+	inst, ok := ns.value.(*structInstance)
+	if !ok {
+		return nil, false
+	}
+
+	t, ok := inst.ptr.(*T)
+	return t, ok
 }
 
 func newNSConn(c *Conn, namespace string, events Events) *NSConn {
@@ -71,6 +90,11 @@ func (ns *NSConn) BroadcastOthers(msgs ...Message) {
 	ns.Conn.server.Broadcast(ns.Conn, msgs...)
 }
 
+// excludeKeys implements Sender for the namespace's connection.
+func (ns *NSConn) excludeKeys() (serverConnID, connID string) {
+	return ns.Conn.excludeKeys()
+}
+
 // Emit method sends a message to the remote side
 // with its `Message.Namespace` filled to this specific namespace.
 // It is `Send(event, body) == nil`.
@@ -84,6 +108,19 @@ func (ns *NSConn) Emit(event string, body []byte) bool {
 // the other errors.
 func (ns *NSConn) Send(event string, body []byte) error {
 	return ns.send(Message{Event: event, Body: body})
+}
+
+// SendObject is `Send` for a value: it encodes "v" with `Marshal` and sends the
+// result as the body. An encoding error is returned and nothing is sent.
+//
+//	return c.SendObject("chat", chatMessage{From: "makis", Text: "hi"})
+func (ns *NSConn) SendObject(event string, v any) error {
+	body, err := Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	return ns.Send(event, body)
 }
 
 // EmitBinary acts like `Emit` but it sets the `Message.SetBinary` to true
@@ -109,6 +146,26 @@ func (ns *NSConn) Ask(ctx context.Context, event string, body []byte) (Message, 
 	}
 
 	return ns.Conn.Ask(ctx, Message{Namespace: ns.namespace, Event: event, Body: body})
+}
+
+// AskObject is `Ask` for values: it encodes "v" with `Marshal`, waits for the
+// reply and decodes the reply's body into a Reply with `Message.As`.
+//
+//	user, err := c.AskObject[User](ctx, "login", credentials)
+func (ns *NSConn) AskObject[Reply any](ctx context.Context, event string, v any) (Reply, error) {
+	var zero Reply
+
+	body, err := Marshal(v)
+	if err != nil {
+		return zero, err
+	}
+
+	msg, err := ns.Ask(ctx, event, body)
+	if err != nil {
+		return zero, err
+	}
+
+	return msg.As[Reply]()
 }
 
 // JoinRoom method can be used to join a connection to a specific room, rooms are dynamic.

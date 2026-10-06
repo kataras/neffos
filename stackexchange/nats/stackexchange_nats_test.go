@@ -144,9 +144,7 @@ func silentListener(t *testing.T, serve func(net.Conn)) string {
 		wg.Wait()
 	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
@@ -156,14 +154,12 @@ func silentListener(t *testing.T, serve func(net.Conn)) string {
 			conns = append(conns, c)
 			mu.Unlock()
 			if serve != nil {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					serve(c)
-				}()
+				})
 			}
 		}
-	}()
+	})
 
 	return "nats://" + ln.Addr().String()
 }
@@ -699,7 +695,7 @@ func TestCloseIdempotentAndReleases(t *testing.T) {
 		answering := neffos.Namespaces{namespace: neffos.Events{
 			"ask": func(*neffos.NSConn, neffos.Message) error { return neffos.Reply([]byte("pong")) },
 		}}
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			events := serverEvents(namespace)
 			if i < 2 {
 				events = answering
@@ -728,7 +724,7 @@ func TestCloseIdempotentAndReleases(t *testing.T) {
 
 		// A few Asks nobody answers. The old exchange opened a nats
 		// connection for each one.
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			askCtx, askCancel := context.WithTimeout(ctx, 100*time.Millisecond)
 			_, err := s2.srv.Ask(askCtx, neffos.Message{Namespace: namespace, Event: "ask", To: "nobody"})
 			askCancel()
@@ -835,7 +831,7 @@ func allStacks() string {
 // package's code.
 func natsGoroutines() int {
 	count := 0
-	for _, g := range strings.Split(allStacks(), "\n\n") {
+	for g := range strings.SplitSeq(allStacks(), "\n\n") {
 		if strings.Contains(g, "nats-io/nats.go") || strings.Contains(g, "neffos/stackexchange/nats.") {
 			count++
 		}

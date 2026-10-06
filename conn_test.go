@@ -325,3 +325,77 @@ func TestOnNativeMessageOnly(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+type objectTestRequest struct {
+	Name string `json:"name"`
+}
+
+type objectTestReply struct {
+	Greeting string   `json:"greeting"`
+	Tags     []string `json:"tags"`
+}
+
+func TestObjectHelpers(t *testing.T) {
+	const namespace = "default"
+
+	received := make(chan string, 2) // bodies seen by the server on "note" and the room event.
+
+	ts := newTestServers(t, neffos.Namespaces{namespace: neffos.Events{
+		"greet": func(c *neffos.NSConn, msg neffos.Message) error {
+			req, err := msg.As[objectTestRequest]()
+			if err != nil {
+				return err
+			}
+			return neffos.ReplyObject(objectTestReply{Greeting: "hello " + req.Name})
+		},
+		"note": func(c *neffos.NSConn, msg neffos.Message) error {
+			received <- msg.Room + ":" + string(msg.Body)
+			return nil
+		},
+	}})
+
+	ts.dial(t, neffos.Namespaces{namespace: neffos.Events{}}, func(backend string, client *neffos.Client) {
+		defer client.Close()
+
+		c, err := client.Connect(context.TODO(), namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reply, err := c.AskObject[objectTestReply](context.TODO(), "greet", objectTestRequest{Name: "makis"})
+		if err != nil {
+			t.Fatalf("[%s] AskObject: %v", backend, err)
+		}
+		if reply.Greeting != "hello makis" {
+			t.Fatalf("[%s] unexpected reply %+v", backend, reply)
+		}
+		if reply.Tags == nil {
+			t.Fatalf("[%s] a nil slice must arrive as an empty JSON array, not null", backend)
+		}
+
+		if err := c.SendObject("note", objectTestRequest{Name: "ns"}); err != nil {
+			t.Fatalf("[%s] SendObject: %v", backend, err)
+		}
+		if got, want := <-received, `:{"name":"ns"}`; got != want {
+			t.Fatalf("[%s] NSConn.SendObject body: got %q want %q", backend, got, want)
+		}
+
+		room, err := c.JoinRoom(context.TODO(), "lobby")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := room.SendObject("note", objectTestRequest{Name: "room"}); err != nil {
+			t.Fatalf("[%s] Room.SendObject: %v", backend, err)
+		}
+		if got, want := <-received, `lobby:{"name":"room"}`; got != want {
+			t.Fatalf("[%s] Room.SendObject body: got %q want %q", backend, got, want)
+		}
+
+		if err := c.SendObject("note", make(chan int)); err == nil {
+			t.Fatalf("[%s] SendObject must report an unencodable value", backend)
+		}
+		if _, err := c.AskObject[objectTestReply](context.TODO(), "greet", make(chan int)); err == nil {
+			t.Fatalf("[%s] AskObject must report an unencodable value", backend)
+		}
+	})
+}

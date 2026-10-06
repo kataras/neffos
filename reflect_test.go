@@ -33,3 +33,34 @@ func TestIsZeroMethodWithoutReturnDoesNotPanic(t *testing.T) {
 		t.Fatal("expected a well-formed IsZero to be used")
 	}
 }
+
+func TestNonZeroFieldsSkipUnexported(t *testing.T) {
+	type mixed struct {
+		A int
+		b int
+		C []string
+	}
+	fields := getNonZeroFields(reflect.ValueOf(&mixed{A: 1, b: 2}))
+	if len(fields) != 1 {
+		t.Fatalf("expected only the exported non-zero field, got %v", fields)
+	}
+	if _, ok := fields[0]; !ok {
+		t.Fatalf("expected field A (index 0) to be static, got %v", fields)
+	}
+}
+
+func TestIsZeroKinds(t *testing.T) {
+	var nilSlice []int
+	var nilMap map[string]int
+	var nilFunc func()
+	for _, v := range []any{false, 0, "", nilSlice, nilMap, nilFunc, [2]int{}, struct{ A int }{}} {
+		if !isZero(reflect.ValueOf(v)) {
+			t.Fatalf("expected %T(%v) to be zero", v, v)
+		}
+	}
+	for _, v := range []any{true, 1, "x", []int{}, map[string]int{}, [2]int{0, 1}, struct{ A int }{1}} {
+		if isZero(reflect.ValueOf(v)) {
+			t.Fatalf("expected %T(%v) to be non-zero", v, v)
+		}
+	}
+}

@@ -13,7 +13,8 @@
 // notices a server that vanished.
 //
 // Emit only reports true or false. NSConn.Send and Room.Send return the error
-// instead, and describe sorts it with neffos.IsTimeoutError and
+// instead, as does SendObject, which the client already uses for its JSON
+// bodies, and describe sorts it with neffos.IsTimeoutError and
 // neffos.IsDisconnectError; the operator's ping and the client's /who use it
 // too. Send returns nil once the message is handed to the socket, which does
 // not mean the server accepted it: "/spam" sends a line twice the limit, Send
@@ -42,7 +43,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -108,13 +109,13 @@ func authenticate(next http.Handler) http.Handler {
 // chatMessage is the JSON body of the Chat and Private events.
 type chatMessage struct {
 	From string `json:"from"`
-	To   string `json:"to,omitempty"`
+	To   string `json:"to,omitzero"`
 	Text string `json:"text"`
 }
 
 // Marshal makes chatMessage a neffos.MessageObjectMarshaler, so neffos.Marshal
-// calls it instead of the default json.Marshal. It is the one place to change
-// if the wire format ever changes.
+// calls it instead of the default encoder. It is the one place to change if
+// the wire format ever changes.
 func (m chatMessage) Marshal() ([]byte, error) {
 	return json.Marshal(m)
 }
@@ -175,7 +176,7 @@ var serverEvents = neffos.Namespaces{
 			return nil
 		},
 		neffos.OnRoomJoin: func(c *neffos.NSConn, msg neffos.Message) error {
-			u, _ := c.Conn.Get("user").(user) // stored by OnConnect
+			u, _ := c.Conn.Value[user]("user") // stored by OnConnect
 			if msg.Room == "staff" && !u.Staff {
 				return errors.New("the staff room is for staff only")
 			}
@@ -200,30 +201,37 @@ var serverEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			log.Printf("[%s] says in %q: %s", c.Conn.ID(), msg.Room, m.Text)
 			m.From = c.Conn.ID() // the server decides who is speaking
-			msg.Body = neffos.Marshal(m)
+			msg.Body, err = neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.BroadcastOthers(msg) // msg.Room is kept: a room message stays in its room
 			return nil
 		},
 		"Private": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			if _, online := c.Conn.Server().GetConnections()[m.To]; !online {
 				return fmt.Errorf("%s is not online", m.To) // the sender gets it as Message.Err
 			}
 			m.From = c.Conn.ID()
+			body, err := neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.Conn.Server().Broadcast(nil, neffos.Message{
 				To:        m.To, // one connection ID: only that connection receives it
 				Namespace: namespace,
 				Event:     "Private",
-				Body:      neffos.Marshal(m),
+				Body:      body,
 			})
 			return nil
 		},
@@ -247,7 +255,7 @@ var serverEvents = neffos.Namespaces{
 				return errNotInRoom
 			}
 			slices.Sort(names)
-			return neffos.Reply(neffos.Marshal(names))
+			return neffos.ReplyObject(names)
 		},
 	},
 }
@@ -267,8 +275,8 @@ var clientEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			if msg.Room != "" {
@@ -282,8 +290,8 @@ var clientEvents = neffos.Namespaces{
 				fmt.Printf("not sent: %v\n", msg.Err)
 				return nil
 			}
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			fmt.Printf("(private) %s: %s\n", m.From, m.Text)
@@ -441,7 +449,9 @@ func runClient(addr, name string) {
 			return
 		case "/msg": // /msg bob some text
 			to, text, _ := strings.Cut(arg, " ")
-			c.Emit("Private", neffos.Marshal(chatMessage{To: to, Text: text}))
+			if err := c.SendObject("Private", chatMessage{To: to, Text: text}); err != nil {
+				fmt.Printf("not sent: %s\n", describe(err))
+			}
 		case "/join": // /join general
 			ctx, cancel := deadline()
 			r, err := c.JoinRoom(ctx, arg)
@@ -470,7 +480,7 @@ func runClient(addr, name string) {
 			}
 		case "/spam": // one chat line twice the size the server accepts
 			text := strings.Repeat("spam ", 2*maxMessageSize/5)
-			if err := c.Send("Chat", neffos.Marshal(chatMessage{Text: text})); err != nil {
+			if err := c.SendObject("Chat", chatMessage{Text: text}); err != nil {
 				fmt.Printf("not sent: %s\n", describe(err))
 			}
 		case "/wave":
@@ -487,16 +497,15 @@ func runClient(addr, name string) {
 			case err != nil:
 				fmt.Printf("who: %s\n", describe(err))
 			default:
-				var names []string
-				reply.Unmarshal(&names)
+				names, _ := reply.As[[]string]()
 				fmt.Printf("online: %s\n", strings.Join(names, ", "))
 			}
 		default:
-			send := c.Send
+			send := c.SendObject
 			if room != nil {
-				send = room.Send
+				send = room.SendObject
 			}
-			if err := send("Chat", neffos.Marshal(chatMessage{Text: line})); err != nil {
+			if err := send("Chat", chatMessage{Text: line}); err != nil {
 				fmt.Printf("not sent: %s\n", describe(err))
 			}
 		}

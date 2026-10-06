@@ -14,7 +14,7 @@ jobs:
 
     strategy:
       matrix:
-        go_version: [1.26.x, 1.27.x]
+        go_version: [1.27.x]
 
     services:
       redis:
@@ -52,6 +52,10 @@ jobs:
       working-directory: _examples
       run: go vet ./... && go test -count=1 ./...
 
+    - name: Vet the iris integration example (its own module, pinned to the public iris release)
+      working-directory: _examples/09-integrations/iris-jwt
+      run: go vet ./...
+
   lint:
     name: Static Analysis
     runs-on: ubuntu-latest
@@ -60,7 +64,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: 1.26.x
+        go-version: 1.27.x
 
     - name: Check out code
       uses: actions/checkout@v6

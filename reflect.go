@@ -1,68 +1,35 @@
 package neffos
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 )
 
 func indirectType(typ reflect.Type) reflect.Type {
-	if typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 
 	return typ
 }
 
+// isZero reports whether v is the zero value of its type: false, 0, "", a nil
+// func, map or slice, and an array or struct whose elements are all zero. A
+// struct with an `IsZero() bool` method answers for itself.
 func isZero(v reflect.Value) bool {
-	switch v.Kind() {
-	case reflect.Struct:
-		zero := true
-		for i := range v.NumField() {
-			zero = zero && isZero(v.Field(i))
+	if v.Kind() == reflect.Struct && v.CanInterface() {
+		if z, ok := v.Interface().(interface{ IsZero() bool }); ok {
+			return z.IsZero()
 		}
-
-		if v.IsValid() {
-			f, ok := v.Type().MethodByName("IsZero")
-			// if not found
-			// if has input arguments (1 is for the value receiver, so > 1 for the actual input args)
-			// if output argument is not boolean
-			// then skip this IsZero user-defined function.
-			if !ok || f.Type.NumIn() > 1 || f.Type.NumOut() != 1 || f.Type.Out(0).Kind() != reflect.Bool {
-				return zero
-			}
-
-			method := v.Method(f.Index)
-			// no needed check but:
-			if method.IsValid() && !method.IsNil() {
-				// it shouldn't panic here.
-				zero = method.Call(nil)[0].Interface().(bool)
-			}
-		}
-
-		return zero
-	case reflect.Func, reflect.Map, reflect.Slice:
-		return v.IsNil()
-	case reflect.Array:
-		zero := true
-		for i := range v.Len() {
-			zero = zero && isZero(v.Index(i))
-		}
-		return zero
-	}
-	// if not any special type then use the reflect's .Zero
-	// usually for fields, but remember if it's boolean and it's false
-	// then it's zero, even if set-ed.
-
-	if !v.CanInterface() {
-		// if can't interface, i.e return value from unexported field or method then return false
-		return false
 	}
 
-	zero := reflect.Zero(v.Type())
-	return v.Interface() == zero.Interface()
+	return v.IsZero()
 }
 
-// does not support child elements on purpose.
+// visitFields calls visitor for each top-level field of typ and returns the
+// index of the first field for which it returned true, or -1.
+// It does not support child elements on purpose.
 func visitFields(typ reflect.Type, visitor func(f reflect.StructField) bool) int {
 	typ = indirectType(typ)
 
@@ -75,10 +42,17 @@ func visitFields(typ reflect.Type, visitor func(f reflect.StructField) bool) int
 	return -1
 }
 
+// getNonZeroFields returns the exported, non-zero fields of the struct v points
+// to, by field index. Unexported fields are skipped: they cannot be set on the
+// per-connection instance (use an injector for those).
 func getNonZeroFields(v reflect.Value) (fields map[int]reflect.Value) {
 	v = reflect.Indirect(v)
 
 	visitFields(v.Type(), func(f reflect.StructField) bool {
+		if !f.IsExported() {
+			return false
+		}
+
 		fieldIndex := f.Index[0]
 		fieldValue := v.Field(fieldIndex)
 		if !isZero(fieldValue) {
@@ -162,8 +136,8 @@ func isArgOf(fnType reflect.Type, argType reflect.Type) bool {
 		panic("isArgOf used on a non-method type")
 	}
 
-	for i := range fnType.NumIn() {
-		if fnType.In(i) == argType {
+	for in := range fnType.Ins() {
+		if in == argType {
 			return true
 		}
 	}
@@ -200,30 +174,46 @@ func makeEventFromMethod(v reflect.Value, method reflect.Method, eventMatcher Ev
 		// it should accept NSConn - static "controller".
 		cb = v.Method(method.Index).Interface().(func(*NSConn, Message) error)
 	} else {
-		// the NSConn exists on the "controller" itself which is set dynamically.
+		// the NSConn exists on the "controller" itself which is set dynamically;
+		// the method values are bound once per connection, see makeEventsFromStruct.
+		idx := method.Index
 		cb = func(c *NSConn, msg Message) error {
-			// load an existing instance which contains the same "c".
-			return c.value.Method(method.Index).Interface().(func(Message) error)(msg)
+			inst, ok := c.value.(*structInstance)
+			if !ok {
+				return errStructNotConnected
+			}
+
+			return inst.methods[idx](msg)
 		}
 	}
 
 	return
 }
 
-// StructInjector is a type which injects a dynamic struct value.
-// See `Struct.SetInjector` for more.
-type StructInjector func(structType reflect.Type, nsConn *NSConn) (structValue reflect.Value)
+// errStructNotConnected is returned by a dynamic struct event that fires on a
+// namespace connection that never ran its OnNamespaceConnect.
+var errStructNotConnected = errors.New("neffos: struct handler: namespace not connected")
+
+// structInstance is the per-connection instance of a dynamic struct handler.
+type structInstance struct {
+	// ptr is the *T created by the injector (or reflect.New by default).
+	ptr any
+	// methods holds the event methods bound to ptr, by reflect method index.
+	methods []func(Message) error
+}
 
 func nameOf(structType reflect.Type) string {
 	structType = indirectType(structType)
 
-	typName := structType.Name()
-	pkgPath := structType.PkgPath()
-	fullname := pkgPath[strings.LastIndexByte(pkgPath, '/')+1:] + "." + typName
-	return fullname
+	pkg := structType.PkgPath()
+	if _, last, ok := strings.CutLast(pkg, "/"); ok {
+		pkg = last
+	}
+
+	return pkg + "." + structType.Name()
 }
 
-func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, injector StructInjector) Events {
+func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, injector func(*NSConn) reflect.Value) Events {
 	events := make(Events)
 
 	typ := v.Type()
@@ -232,9 +222,10 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 	nsConnFieldIndex := getFieldIndex(typ, nsConnType)
 	msgHandlerType := makeMessageHandlerFuncType(typ, nsConnFieldIndex)
 
-	for i := range typ.NumMethod() {
-		method := typ.Method(i)
+	// the method indices of the dynamic events, bound per connection below.
+	var dynamicMethods []int
 
+	for method := range typ.Methods() {
 		if method.Type != msgHandlerType {
 			continue
 		}
@@ -242,6 +233,10 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 		eventName, cb := makeEventFromMethod(v, method, eventMatcher)
 		if cb == nil {
 			continue
+		}
+
+		if !isArgOf(method.Type, nsConnType) {
+			dynamicMethods = append(dynamicMethods, method.Index)
 		}
 
 		Debugf("Event [\"%s\"] is handled by [%s.%s] method", func() dargs {
@@ -252,6 +247,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 	}
 
 	if nsConnFieldIndex != -1 {
+		numMethods := typ.NumMethod()
 		typ = indirectType(typ)
 
 		var staticFields map[int]reflect.Value
@@ -261,7 +257,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 			// some things in our company's production server first.
 			staticFields = getNonZeroFields(v)
 
-			DebugEach(staticFields, func(idx int, f reflect.Value) {
+			debugEach(staticFields, func(idx int, f reflect.Value) {
 				fval := f.Interface()
 				fname := typ.Field(idx).Name
 				if fname == "Namespace" {
@@ -273,7 +269,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 				Debugf("Field [%s.%s] marked as static on value [%v]", nameOf(typ), fname, fval)
 			})
 
-			injector = func(typ reflect.Type, nsConn *NSConn) reflect.Value {
+			injector = func(*NSConn) reflect.Value {
 				return reflect.New(typ)
 			}
 		}
@@ -281,7 +277,7 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 		cb, hasNamespaceConnect := events[OnNamespaceConnect]
 
 		events[OnNamespaceConnect] = func(c *NSConn, msg Message) error {
-			cachePtr := injector(typ, c)
+			cachePtr := injector(c)
 			cacheElem := cachePtr.Elem()
 
 			// set the NSConn dynamic field.
@@ -292,9 +288,18 @@ func makeEventsFromStruct(v reflect.Value, eventMatcher EventMatcherFunc, inject
 				cacheElem.Field(findex).Set(fvalue)
 			}
 
+			// Bind the event methods once, so each event is a plain call.
+			inst := &structInstance{
+				ptr:     cachePtr.Interface(),
+				methods: make([]func(Message) error, numMethods),
+			}
+			for _, idx := range dynamicMethods {
+				inst.methods[idx] = cachePtr.Method(idx).Interface().(func(Message) error)
+			}
+
 			// Store it for the rest of the events inside
 			// this namespace of that specific connection.
-			c.value = cachePtr
+			c.value = inst
 
 			if hasNamespaceConnect {
 				return cb(c, msg)

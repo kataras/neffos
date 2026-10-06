@@ -12,12 +12,12 @@
 // that error's text. Here it rejects banned users, then stores the user on
 // the connection with Conn.Set. Conn.Socket().Request() is the handshake
 // request, so the token is read again from there, and later handlers read
-// the user back with Conn.Get: the "staff" room now checks user.Staff
+// the user back with Conn.Value: the "staff" room now checks user.Staff
 // instead of a list of names. OnConnect also refuses an unknown token, so the
 // server stays closed when it is mounted without the middleware, as the
 // tests of step 11 do.
 //
-// Learn: authenticate the upgrade request, refuse a connection from OnConnect and keep per-connection data with Conn.Set and Conn.Get.
+// Learn: authenticate the upgrade request, refuse a connection from OnConnect and keep per-connection data with Conn.Set and Conn.Value.
 //
 // Run:
 //
@@ -38,7 +38,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -97,13 +97,13 @@ func authenticate(next http.Handler) http.Handler {
 // chatMessage is the JSON body of the Chat and Private events.
 type chatMessage struct {
 	From string `json:"from"`
-	To   string `json:"to,omitempty"`
+	To   string `json:"to,omitzero"`
 	Text string `json:"text"`
 }
 
 // Marshal makes chatMessage a neffos.MessageObjectMarshaler, so neffos.Marshal
-// calls it instead of the default json.Marshal. It is the one place to change
-// if the wire format ever changes.
+// calls it instead of the default encoder. It is the one place to change if
+// the wire format ever changes.
 func (m chatMessage) Marshal() ([]byte, error) {
 	return json.Marshal(m)
 }
@@ -164,7 +164,7 @@ var serverEvents = neffos.Namespaces{
 			return nil
 		},
 		neffos.OnRoomJoin: func(c *neffos.NSConn, msg neffos.Message) error {
-			u, _ := c.Conn.Get("user").(user) // stored by OnConnect
+			u, _ := c.Conn.Value[user]("user") // stored by OnConnect
 			if msg.Room == "staff" && !u.Staff {
 				return errors.New("the staff room is for staff only")
 			}
@@ -189,30 +189,37 @@ var serverEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			log.Printf("[%s] says in %q: %s", c.Conn.ID(), msg.Room, m.Text)
 			m.From = c.Conn.ID() // the server decides who is speaking
-			msg.Body = neffos.Marshal(m)
+			msg.Body, err = neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.BroadcastOthers(msg) // msg.Room is kept: a room message stays in its room
 			return nil
 		},
 		"Private": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			if _, online := c.Conn.Server().GetConnections()[m.To]; !online {
 				return fmt.Errorf("%s is not online", m.To) // the sender gets it as Message.Err
 			}
 			m.From = c.Conn.ID()
+			body, err := neffos.Marshal(m)
+			if err != nil {
+				return err
+			}
 			c.Conn.Server().Broadcast(nil, neffos.Message{
 				To:        m.To, // one connection ID: only that connection receives it
 				Namespace: namespace,
 				Event:     "Private",
-				Body:      neffos.Marshal(m),
+				Body:      body,
 			})
 			return nil
 		},
@@ -236,7 +243,7 @@ var serverEvents = neffos.Namespaces{
 				return errNotInRoom
 			}
 			slices.Sort(names)
-			return neffos.Reply(neffos.Marshal(names))
+			return neffos.ReplyObject(names)
 		},
 	},
 }
@@ -256,8 +263,8 @@ var clientEvents = neffos.Namespaces{
 			return nil
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			if msg.Room != "" {
@@ -271,8 +278,8 @@ var clientEvents = neffos.Namespaces{
 				fmt.Printf("not sent: %v\n", msg.Err)
 				return nil
 			}
-			var m chatMessage
-			if err := msg.Unmarshal(&m); err != nil {
+			m, err := msg.As[chatMessage]()
+			if err != nil {
 				return err
 			}
 			fmt.Printf("(private) %s: %s\n", m.From, m.Text)
@@ -407,7 +414,7 @@ func runClient(addr, name string) {
 			return
 		case "/msg": // /msg bob some text
 			to, text, _ := strings.Cut(arg, " ")
-			c.Emit("Private", neffos.Marshal(chatMessage{To: to, Text: text}))
+			c.SendObject("Private", chatMessage{To: to, Text: text})
 		case "/join": // /join general
 			ctx, cancel := deadline()
 			r, err := c.JoinRoom(ctx, arg)
@@ -448,17 +455,16 @@ func runClient(addr, name string) {
 			case err != nil:
 				fmt.Printf("who: %v\n", err)
 			default:
-				var names []string
-				reply.Unmarshal(&names)
+				names, _ := reply.As[[]string]()
 				fmt.Printf("online: %s\n", strings.Join(names, ", "))
 			}
 		default:
-			body := neffos.Marshal(chatMessage{Text: line})
+			m := chatMessage{Text: line}
 			if room != nil {
-				room.Emit("Chat", body)
+				room.SendObject("Chat", m)
 				continue
 			}
-			c.Emit("Chat", body)
+			c.SendObject("Chat", m)
 		}
 	}
 }

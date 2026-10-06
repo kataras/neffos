@@ -541,7 +541,7 @@ func TestCloseIdempotentAndReleases(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			client, err := neffos.Dial(ctx, gorilla.DefaultDialer, url, serverEvents(namespace))
 			if err != nil {
 				t.Fatalf("Dial: %v", err)

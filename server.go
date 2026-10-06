@@ -10,8 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // Upgrader is the definition type of a protocol upgrader, gorilla or gobwas or custom.
@@ -27,11 +26,7 @@ type IDGenerator func(w http.ResponseWriter, r *http.Request) string
 // DefaultIDGenerator returns a universal unique identifier for a new connection.
 // It's the default `IDGenerator` for `Server`.
 var DefaultIDGenerator IDGenerator = func(http.ResponseWriter, *http.Request) string {
-	id, err := uuid.NewRandom()
-	if err != nil {
-		return strconv.FormatInt(time.Now().Unix(), 10)
-	}
-	return id.String()
+	return uuid.NewV4().String()
 }
 
 // Server is the neffos server.
@@ -128,7 +123,7 @@ func New(upgrader Upgrader, connHandler ConnHandler) *Server {
 	settings := getSettings(connHandler)
 	namespaces := connHandler.GetNamespaces()
 	s := &Server{
-		uuid:              uuid.NewString(),
+		uuid:              uuid.NewV4().String(),
 		upgrader:          upgrader,
 		namespaces:        namespaces,
 		settings:          settings,
@@ -276,6 +271,18 @@ func (s *Server) closeExchange() {
 			closer.Close()
 		}
 	})
+}
+
+// connByID returns the registered connection with the public id, or nil.
+func (s *Server) connByID(id string) *Conn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for c := range s.connections {
+		if c.id == id {
+			return c
+		}
+	}
+	return nil
 }
 
 // Close terminates the server and all of its connections, client connections are getting notified.
@@ -654,20 +661,33 @@ func (s *Server) waitMessages(c *Conn, entry *broadcastEntry) *broadcastEntry {
 	return next
 }
 
-type stringerValue struct{ v string }
+// Sender identifies the connection a broadcast must not be sent back to.
+// `*Conn`, `*NSConn`, `*Room` (the connection that joined it) and the value
+// returned by `Exclude` are Senders; the interface is sealed.
+type Sender interface {
+	excludeKeys() (serverConnID, connID string)
+}
 
-func (s stringerValue) String() string { return s.v }
+type excludedConnID string
 
-// Exclude can be passed on `Server#Broadcast` when
-// caller does not have access to the `Conn`, `NSConn` or a `Room` value but
-// has access to a string variable which is a connection's ID instead.
+func (id excludedConnID) excludeKeys() (serverConnID, connID string) { return "", string(id) }
+
+// String returns the excluded connection id.
+func (id excludedConnID) String() string { return string(id) }
+
+// Exclude can be passed on `Server.Broadcast` when the caller does not have
+// access to the `Conn`, `NSConn` or `Room` value but has the connection's ID.
 //
 // Example Code:
-// nsConn.Conn.Server().Broadcast(
 //
+//	nsConn.Conn.Server().Broadcast(
 //		neffos.Exclude("connection_id_here"),
-//	 neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
-func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
+//		neffos.Message{Namespace: "default", Room: "roomName or empty", Event: "chat", Body: [...]})
+//
+// When the id belongs to a connection of this server instance the exclusion
+// travels through a `StackExchange` like a `*Conn` does. An id this server does
+// not know is excluded locally only.
+func Exclude(connID string) Sender { return excludedConnID(connID) }
 
 // Broadcast publishes msgs to every connection that is allowed to receive them.
 // It does not block: the message is queued for the connection's writer, so this
@@ -679,30 +699,28 @@ func Exclude(connID string) fmt.Stringer { return stringerValue{connID} }
 // use Ask instead.
 //
 // If exceptSender is non-nil, msgs are not sent back to that connection. The
-// argument may be a *Conn, *NSConn, *Room, or the result of Exclude(connID).
+// argument may be a *Conn, *NSConn, *Room (its connection), or the result of
+// Exclude(connID).
 //
 // When `StackExchange` is configured, msgs are published through it. When
 // `SyncBroadcaster` is true, the call enqueues to the dispatch loop so broadcasts
 // preserve a strict order at the cost of throughput.
-func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
-
+func (s *Server) Broadcast(exceptSender Sender, msgs ...Message) {
 	if exceptSender != nil {
-		var fromExplicit, from string
-
-		switch c := exceptSender.(type) {
-		case *Conn:
-			fromExplicit = c.serverConnID
-		case *NSConn:
-			fromExplicit = c.Conn.serverConnID
-		default:
-			from = exceptSender.String()
+		fromExplicit, from := exceptSender.excludeKeys()
+		if fromExplicit == "" && from != "" {
+			// Exclude(connID): resolve to this server's connection so the
+			// exclusion survives a StackExchange round trip.
+			if c := s.connByID(from); c != nil {
+				fromExplicit = c.serverConnID
+			}
 		}
 
 		for i := range msgs {
-			if from != "" {
-				msgs[i].from = from
-			} else {
+			if fromExplicit != "" {
 				msgs[i].FromExplicit = fromExplicit
+			} else {
+				msgs[i].from = from
 			}
 		}
 	}

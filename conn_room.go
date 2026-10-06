@@ -22,10 +22,14 @@ func newRoom(ns *NSConn, roomName string) *Room {
 
 // String method simply returns the Conn's ID().
 // To get the room's name simply use the `Room.Name` struct field instead.
-// Useful method to this room to be passed on `Server#Broadcast` method
-// to exclude itself from the broadcasted message's receivers.
 func (r *Room) String() string {
 	return r.NSConn.String()
+}
+
+// excludeKeys implements Sender: passing a Room to `Server.Broadcast` excludes
+// the connection that joined it, not the room's members.
+func (r *Room) excludeKeys() (serverConnID, connID string) {
+	return r.NSConn.excludeKeys()
 }
 
 // Emit method sends a message to the remote side with its `Message.Room` filled to this specific room
@@ -49,6 +53,17 @@ func (r *Room) Send(event string, body []byte) error {
 		Event: event,
 		Body:  body,
 	})
+}
+
+// SendObject is `Send` for a value: it encodes "v" with `Marshal` and sends the
+// result as the body to this room. An encoding error is returned and nothing is sent.
+func (r *Room) SendObject(event string, v any) error {
+	body, err := Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	return r.Send(event, body)
 }
 
 // Leave method sends a remote and local leave room signal `OnRoomLeave` to this specific room

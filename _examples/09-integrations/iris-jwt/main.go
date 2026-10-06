@@ -16,6 +16,11 @@
 // be someone else. GET /token?name=alice signs a short-lived token for
 // alice: a stand-in for a real login, which the Go client calls first.
 //
+// This example is its own Go module, see its go.mod, because it follows the
+// public Iris release. The websocket package of Iris v12.2.11 tracks neffos
+// v0.0.x until the next Iris release, so this program builds against that
+// neffos version and not against the code in the parent directory.
+//
 // Learn: mount a neffos server on an Iris route behind middleware and read the verified user in events.
 //
 // Run:
@@ -104,7 +109,7 @@ var serverEvents = neffos.Namespaces{
 		},
 		"Chat": func(c *neffos.NSConn, msg neffos.Message) error {
 			msg.Body = fmt.Appendf(nil, "%s: %s", userOf(c.Conn), msg.Body)
-			c.BroadcastOthers(msg)
+			c.Conn.Server().Broadcast(c, msg) // everyone in the namespace but the sender
 			return nil
 		},
 	},
