@@ -225,6 +225,14 @@ func (s *Server) addConn(c *Conn, readers int) bool {
 // StackExchange's `OnDisconnect` outside the lock. It does nothing if c is not
 // registered, so each connection is reported once.
 func (s *Server) removeConn(c *Conn) {
+	if s.detach(c) {
+		s.fireDisconnect(c)
+	}
+}
+
+// detach unregisters c and reports whether it was registered. The caller
+// that gets true owns the disconnect callbacks for c.
+func (s *Server) detach(c *Conn) bool {
 	s.mu.Lock()
 	_, ok := s.connections[c]
 	if ok {
@@ -233,10 +241,12 @@ func (s *Server) removeConn(c *Conn) {
 	}
 	s.mu.Unlock()
 
-	if !ok {
-		return
-	}
+	return ok
+}
 
+// fireDisconnect runs the server's `OnDisconnect` and the StackExchange's
+// `OnDisconnect` for a connection that detach reported as registered.
+func (s *Server) fireDisconnect(c *Conn) {
 	// don't fire disconnect if was immediately closed on the `OnConnect` server event.
 	if s.OnDisconnect != nil && (s.FireDisconnectAlways || (c.readiness.isReady() && c.readiness.err == nil)) {
 		s.OnDisconnect(c)
@@ -334,9 +344,18 @@ func (s *Server) terminateAll(reason string) bool {
 		return false
 	}
 
+	// Detach every connection first, so the dispatch loop's own disconnect
+	// path finds nothing to report and this goroutine owns every
+	// OnDisconnect call: they all run, one at a time, before Close returns.
 	// Each Terminate may wait up to the write timeout for its close frame,
-	// so the connections close in parallel. removeConn then runs in order.
-	conns := s.snapshot()
+	// so the connections close in parallel.
+	var conns []*Conn
+	for _, c := range s.snapshot() {
+		if s.detach(c) {
+			conns = append(conns, c)
+		}
+	}
+
 	var wg sync.WaitGroup
 	for _, c := range conns {
 		wg.Go(func() { c.Terminate(CloseGoingAway, reason) })
@@ -344,7 +363,7 @@ func (s *Server) terminateAll(reason string) bool {
 	wg.Wait()
 
 	for _, c := range conns {
-		s.removeConn(c)
+		s.fireDisconnect(c)
 	}
 
 	close(s.done)

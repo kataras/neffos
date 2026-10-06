@@ -21,8 +21,8 @@ func isZero(v reflect.Value) bool {
 			zero = zero && isZero(v.Field(i))
 		}
 
-		if typ := v.Type(); typ != nil && v.IsValid() {
-			f, ok := typ.MethodByName("IsZero")
+		if v.IsValid() {
+			f, ok := v.Type().MethodByName("IsZero")
 			// if not found
 			// if has input arguments (1 is for the value receiver, so > 1 for the actual input args)
 			// if output argument is not boolean

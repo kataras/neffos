@@ -66,7 +66,6 @@ type StackExchange struct {
 	subscribers map[*neffos.Conn]*redis.PubSub
 	closed      bool
 	closeOnce   sync.Once
-	closeErr    error
 }
 
 var (

@@ -4,3 +4,13 @@ _authortools
 /_examples/**/node_modules
 .directory
 *.exe
+
+# AI
+.claude
+CLAUDE.md
+.codex
+AGENTS.md
+.agents
+.superpowers
+docs/superpowers/
+.plexon
