@@ -1,4 +1,7 @@
-<img src="gh_logo.png" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="gh_logo_dark.png">
+  <img src="gh_logo.png" alt="neffos: real-time framework for Go" width="433">
+</picture>
 
 [![neffos chat example](https://github.com/neffos-contrib/bootstrap-chat/raw/master/screenshot.png)](https://github.com/neffos-contrib/bootstrap-chat)
 
