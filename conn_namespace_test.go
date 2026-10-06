@@ -17,24 +17,29 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 		body      = []byte("data")
 		events    = neffos.Namespaces{
 			namespace: neffos.Events{
+				// The IsClient() branch runs on the connection's own
+				// goroutine, so it must use t.Error, not t.Fatal.
 				"event": func(c *neffos.NSConn, msg neffos.Message) error {
 					if c.Conn.IsClient() {
+						defer wg.Done()
+
 						if !bytes.Equal(msg.Body, body) {
-							t.Fatalf("expected event's incoming data to be: %s but got: %s", string(body), string(msg.Body))
+							t.Errorf("expected event's incoming data to be: %s but got: %s", string(body), string(msg.Body))
+							return nil
 						}
 
 						room := c.Room(roomName)
 						if room == nil {
-							t.Fatal("expected a non-nil room")
+							t.Error("expected a non-nil room")
+							return nil
 						}
 
 						if room.Name != msg.Room {
-							t.Fatalf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
+							t.Errorf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
+							return nil
 						}
 
 						room.Leave(context.TODO())
-
-						wg.Done()
 					} else {
 						c.Conn.Server().Broadcast(nil, msg)
 					}
@@ -43,10 +48,11 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 				},
 				neffos.OnRoomLeft: func(c *neffos.NSConn, msg neffos.Message) error {
 					if c.Conn.IsClient() {
+						defer wg.Done()
+
 						if msg.Room != roomName {
-							t.Fatalf("expected left room name to be %s but got %s", roomName, msg.Room)
+							t.Errorf("expected left room name to be %s but got %s", roomName, msg.Room)
 						}
-						wg.Done()
 					}
 
 					return nil
@@ -55,11 +61,10 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", events)
-	defer teardownServer()
+	ts := newTestServers(t, events)
 
-	err := runTestClient("localhost:8080", events,
-		func(dialer string, client *neffos.Client) {
+	ts.dial(t, events,
+		func(backend string, client *neffos.Client) {
 			c, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
@@ -86,10 +91,7 @@ func TestJoinAndLeaveRoom(t *testing.T) {
 				t.Fatalf("expected true")
 			}
 			wg.Wait()
-		})()
-	if err != nil {
-		t.Fatal(err)
-	}
+		})
 }
 
 func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
@@ -100,24 +102,29 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 		body      = []byte("data")
 		events    = neffos.Namespaces{
 			namespace: neffos.Events{
+				// The IsClient() branch runs on the connection's own
+				// goroutine, so it must use t.Error, not t.Fatal.
 				"event": func(c *neffos.NSConn, msg neffos.Message) error {
 					if c.Conn.IsClient() {
+						defer wg.Done()
+
 						if !bytes.Equal(msg.Body, body) {
-							t.Fatalf("expected event's incoming data to be: %s but got: %s", string(body), string(msg.Body))
+							t.Errorf("expected event's incoming data to be: %s but got: %s", string(body), string(msg.Body))
+							return nil
 						}
 
 						room := c.Room(roomName)
 						if room == nil {
-							t.Fatal("expected a non-nil room")
+							t.Error("expected a non-nil room")
+							return nil
 						}
 
 						if room.Name != msg.Room {
-							t.Fatalf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
+							t.Errorf("expected Message's room name to be: %s==%s but it's: %s", roomName, room.Name, msg.Room)
+							return nil
 						}
 
 						room.Leave(context.TODO())
-
-						wg.Done()
 					} else {
 						room, err := c.JoinRoom(context.TODO(), roomName)
 						if err != nil {
@@ -131,10 +138,11 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 				},
 				neffos.OnRoomLeft: func(c *neffos.NSConn, msg neffos.Message) error {
 					if c.Conn.IsClient() {
+						defer wg.Done()
+
 						if msg.Room != roomName {
-							t.Fatalf("expected left room name to be %s but got %s", roomName, msg.Room)
+							t.Errorf("expected left room name to be %s but got %s", roomName, msg.Room)
 						}
-						wg.Done()
 					}
 
 					return nil
@@ -143,11 +151,10 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", events)
-	defer teardownServer()
+	ts := newTestServers(t, events)
 
-	err := runTestClient("localhost:8080", events,
-		func(dialer string, client *neffos.Client) {
+	ts.dial(t, events,
+		func(backend string, client *neffos.Client) {
 			c, err := client.Connect(context.TODO(), namespace)
 			if err != nil {
 				t.Fatal(err)
@@ -158,8 +165,5 @@ func TestJoinAndLeaveRoomInsideHandler(t *testing.T) {
 			wg.Add(2)
 			c.Emit("event", body)
 			wg.Wait()
-		})()
-	if err != nil {
-		t.Fatal(err)
-	}
+		})
 }

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>neffos native messages</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }
+  #log { border-top: 1px solid #ccc; margin-top: 1rem; padding-top: .5rem; }
+  .me { color: #a33; }
+</style>
+</head>
+<body>
+<form id="form">
+  <input id="text" autocomplete="off" placeholder="type and press Enter">
+  <button>Send</button>
+</form>
+<div id="log"></div>
+
+<script>
+  // No neffos.js here: the server only handles native messages, so the
+  // browser's own WebSocket is enough. Every frame is one plain message.
+  const log = document.getElementById("log");
+  const text = document.getElementById("text");
+
+  function show(line, cls) {
+    const div = document.createElement("div");
+    div.textContent = line;
+    if (cls) div.className = cls;
+    log.prepend(div);
+  }
+
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(scheme + "://" + location.host + "/ws");
+  ws.onopen = () => show("connected");
+  ws.onclose = () => show("disconnected");
+  ws.onmessage = (e) => show(e.data);
+
+  document.getElementById("form").onsubmit = (e) => {
+    e.preventDefault();
+    if (!text.value) return;
+    show("me: " + text.value, "me");
+    ws.send(text.value);
+    text.value = "";
+  };
+</script>
+</body>
+</html>

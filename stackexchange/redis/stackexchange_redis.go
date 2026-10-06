@@ -1,14 +1,34 @@
+// Package redis provides a neffos StackExchange that scales neffos servers out
+// through redis publish and subscribe.
+//
+// Every neffos server that uses the same redis server and the same channel
+// prefix shares its broadcasts with the others. The exchange subscribes with
+// plain SUBSCRIBE on exact channel names, so a namespace may contain any
+// character, including the glob characters *, ? and [ ].
+//
+// Channel names, for the prefix given to NewStackExchange:
+//
+//	<prefix>.<namespace>.   broadcasts to a namespace, and to its rooms
+//	<prefix>.<connID>.      messages sent to one connection (Message.To)
+//	<prefix>.ask.<token>    replies to a Server.Ask
+//
+// A message for a room goes to its namespace channel. Each server then writes
+// it only to the connections that joined that room. The namespace and
+// connection names are the ones earlier neffos versions used, so older and
+// newer servers on the same redis still share broadcasts. Server.Ask needs
+// every server on this version.
 package redis
 
 import (
 	"context"
-	"math/rand/v2"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/kataras/neffos"
 
-	"github.com/mediocregopher/radix/v3"
+	"github.com/redis/go-redis/v9"
 )
 
 // Config is used on the `StackExchange` package-level function.
@@ -36,48 +56,32 @@ type Config struct {
 // StackExchange is a `neffos.StackExchange` for redis.
 type StackExchange struct {
 	channel string
+	// dialTimeout bounds every call that waits on redis for a websocket
+	// connection: OnConnect, Subscribe and Unsubscribe.
+	dialTimeout time.Duration
 
-	pool     *radix.Pool
-	connFunc radix.ConnFunc
+	client redis.UniversalClient
 
-	subscribers map[*neffos.Conn]*subscriber
-
-	addSubscriber chan *subscriber
-	subscribe     chan subscribeAction
-	unsubscribe   chan unsubscribeAction
-	delSubscriber chan closeAction
-	// done is closed by Close to signal the run loop to exit and to let
-	// any goroutine that sends on the action channels drop its work cleanly.
-	done      chan struct{}
-	closeOnce sync.Once
+	mu          sync.Mutex
+	subscribers map[*neffos.Conn]*redis.PubSub
+	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
-type (
-	subscriber struct {
-		conn   *neffos.Conn
-		pubSub radix.PubSubConn
-		msgCh  chan<- radix.PubSubMessage
-	}
-
-	subscribeAction struct {
-		conn      *neffos.Conn
-		namespace string
-	}
-
-	unsubscribeAction struct {
-		conn      *neffos.Conn
-		namespace string
-	}
-
-	closeAction struct {
-		conn *neffos.Conn
-	}
+var (
+	_ neffos.StackExchange       = (*StackExchange)(nil)
+	_ neffos.StackExchangeCloser = (*StackExchange)(nil)
 )
 
-var _ neffos.StackExchange = (*StackExchange)(nil)
+// errClosed is returned by OnConnect and Ask after Close.
+var errClosed = errors.New("redis stackexchange: closed")
 
 // NewStackExchange returns a new redis StackExchange.
 // The "channel" input argument is the channel prefix for publish and subscribe.
+//
+// It connects to redis before it returns, so an unreachable address or a wrong
+// password is reported here.
 func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 	if cfg.Network == "" {
 		cfg.Network = "tcp"
@@ -87,7 +91,7 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		cfg.Addr = "127.0.0.1:6379"
 	}
 
-	if cfg.DialTimeout < 0 {
+	if cfg.DialTimeout <= 0 {
 		cfg.DialTimeout = 30 * time.Second
 	}
 
@@ -95,110 +99,80 @@ func NewStackExchange(cfg Config, channel string) (*StackExchange, error) {
 		cfg.MaxActive = 10
 	}
 
-	var dialOptions []radix.DialOpt
+	client := newClient(cfg)
 
-	if cfg.Password != "" {
-		dialOptions = append(dialOptions, radix.DialAuthPass(cfg.Password))
-	}
-
-	if cfg.DialTimeout > 0 {
-		dialOptions = append(dialOptions, radix.DialTimeout(cfg.DialTimeout))
-	}
-
-	var connFunc radix.ConnFunc
-
-	if len(cfg.Clusters) > 0 {
-		cluster, err := radix.NewCluster(cfg.Clusters)
-		if err != nil {
-			// maybe an
-			// ERR This instance has cluster support disabled
-			return nil, err
-		}
-
-		connFunc = func(network, addr string) (radix.Conn, error) {
-			topo := cluster.Topo()
-			node := topo[rand.IntN(len(topo))]
-			return radix.Dial(cfg.Network, node.Addr, dialOptions...)
-		}
-	} else {
-		connFunc = func(network, addr string) (radix.Conn, error) {
-			return radix.Dial(cfg.Network, cfg.Addr, dialOptions...)
-		}
-	}
-
-	pool, err := radix.NewPool("", "", cfg.MaxActive, radix.PoolConnFunc(connFunc))
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout)
+	err := client.Ping(ctx).Err()
+	cancel()
 	if err != nil {
+		client.Close()
 		return nil, err
 	}
 
 	exc := &StackExchange{
-		pool:     pool,
-		connFunc: connFunc,
+		client: client,
 		// If you are using one redis server for multiple nefos servers,
 		// use a different channel for each neffos server.
 		// Otherwise a message sent from one server to all of its own clients will go
 		// to all clients of all nefos servers that use the redis server.
 		// We could use multiple channels but overcomplicate things here.
-		channel: channel,
-
-		subscribers:   make(map[*neffos.Conn]*subscriber),
-		addSubscriber: make(chan *subscriber),
-		delSubscriber: make(chan closeAction),
-		subscribe:     make(chan subscribeAction),
-		unsubscribe:   make(chan unsubscribeAction),
-		done:          make(chan struct{}),
+		channel:     channel,
+		dialTimeout: cfg.DialTimeout,
+		subscribers: make(map[*neffos.Conn]*redis.PubSub),
 	}
-
-	go exc.run()
 
 	return exc, nil
 }
 
-func (exc *StackExchange) run() {
-	for {
-		select {
-		case <-exc.done:
-			// drain remaining subscribers so we don't leak their pubsub conns.
-			for c, sub := range exc.subscribers {
-				sub.pubSub.Close()
-				close(sub.msgCh)
-				delete(exc.subscribers, c)
-			}
-			return
-		case s := <-exc.addSubscriber:
-			exc.subscribers[s.conn] = s
-		case m := <-exc.subscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				channel := exc.getChannel(m.namespace, "", "")
-				sub.pubSub.PSubscribe(sub.msgCh, channel)
-			}
-		case m := <-exc.unsubscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				channel := exc.getChannel(m.namespace, "", "")
-				sub.pubSub.PUnsubscribe(sub.msgCh, channel)
-			}
-		case m := <-exc.delSubscriber:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				sub.pubSub.Close()
-				close(sub.msgCh)
-				delete(exc.subscribers, m.conn)
-			}
-		}
+// newClient returns the redis client for cfg, whose defaults are already set.
+// ContextTimeoutEnabled makes go-redis honour context deadlines; without it a
+// command waits for its own read timeout whatever the context says.
+func newClient(cfg Config) redis.UniversalClient {
+	if len(cfg.Clusters) > 0 {
+		return redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:                 cfg.Clusters,
+			Password:              cfg.Password,
+			DialTimeout:           cfg.DialTimeout,
+			PoolSize:              cfg.MaxActive,
+			ContextTimeoutEnabled: true,
+		})
 	}
+
+	return redis.NewClient(&redis.Options{
+		Network:               cfg.Network,
+		Addr:                  cfg.Addr,
+		Password:              cfg.Password,
+		DialTimeout:           cfg.DialTimeout,
+		PoolSize:              cfg.MaxActive,
+		ContextTimeoutEnabled: true,
+	})
 }
 
-// Close shuts down the run loop, terminates any outstanding subscriber
-// connections, and releases the connection pool. It is safe to call Close more
-// than once; subsequent calls are no-ops.
+// Close closes the subscriber of every connection and then the redis client.
+// It returns the error of closing the client. Calling Close again does
+// nothing and returns nil.
 func (exc *StackExchange) Close() error {
 	var err error
 	exc.closeOnce.Do(func() {
-		close(exc.done)
-		err = exc.pool.Close()
+		exc.mu.Lock()
+		exc.closed = true
+		subscribers := exc.subscribers
+		exc.subscribers = make(map[*neffos.Conn]*redis.PubSub)
+		exc.mu.Unlock()
+
+		for _, ps := range subscribers {
+			ps.Close()
+		}
+
+		err = exc.client.Close()
 	})
+
 	return err
 }
 
+// getChannel returns the channel a message for namespace, room or connection
+// connID is published to. A room shares the channel of its namespace, see the
+// package documentation.
 func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 	if connID != "" {
 		// publish direct and let the server-side do the checks
@@ -206,12 +180,25 @@ func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 		return exc.channel + "." + connID + "."
 	}
 
-	if namespace == "" && room != "" {
-		// should never happen but give info for debugging.
-		panic("namespace cannot be empty when sending to a namespace's room")
-	}
-
 	return exc.channel + "." + namespace + "."
+}
+
+// askChannel returns the channel that carries the reply to the Server.Ask
+// waiting on token.
+func (exc *StackExchange) askChannel(token string) string {
+	return exc.channel + ".ask." + token
+}
+
+// timeoutContext returns a context that ends after the configured DialTimeout.
+func (exc *StackExchange) timeoutContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), exc.dialTimeout)
+}
+
+func (exc *StackExchange) subscriber(c *neffos.Conn) *redis.PubSub {
+	exc.mu.Lock()
+	ps := exc.subscribers[c]
+	exc.mu.Unlock()
+	return ps
 }
 
 // OnConnect prepares the connection redis subscriber
@@ -219,32 +206,36 @@ func (exc *StackExchange) getChannel(namespace, room, connID string) string {
 // It's called automatically after the neffos server's OnConnect (if any)
 // on incoming client connections.
 func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
-	redisMsgCh := make(chan radix.PubSubMessage)
+	// A redis that accepts the connection but never answers must not hold
+	// the websocket handshake forever.
+	ctx, cancel := exc.timeoutContext()
+	defer cancel()
+
+	ps := exc.client.Subscribe(ctx, exc.getChannel("", "", c.ID()))
+	// Receive waits for the subscription to be confirmed, or for its error.
+	if _, err := ps.Receive(ctx); err != nil {
+		ps.Close()
+		return err
+	}
+
+	exc.mu.Lock()
+	if exc.closed {
+		exc.mu.Unlock()
+		ps.Close()
+		return errClosed
+	}
+	exc.subscribers[c] = ps
+	exc.mu.Unlock()
+
+	// The channel is closed when ps is closed, which ends this goroutine.
 	go func() {
-		for redisMsg := range redisMsgCh {
-			// neffos.Debugf("[%s] send to client: [%s]", c.ID(), string(redisMsg.Message))
-			msg := c.DeserializeMessage(neffos.TextMessage, redisMsg.Message)
+		for m := range ps.Channel() {
+			msg := c.DeserializeMessage(neffos.TextMessage, []byte(m.Payload))
 			msg.FromStackExchange = true
 
 			c.Write(msg)
 		}
 	}()
-
-	pubSub := radix.PersistentPubSub("", "", exc.connFunc)
-	s := &subscriber{
-		conn:   c,
-		pubSub: pubSub,
-		msgCh:  redisMsgCh,
-	}
-	selfChannel := exc.getChannel("", "", c.ID())
-	pubSub.PSubscribe(redisMsgCh, selfChannel)
-
-	select {
-	case exc.addSubscriber <- s:
-	case <-exc.done:
-		pubSub.Close()
-		close(redisMsgCh)
-	}
 
 	return nil
 }
@@ -253,7 +244,8 @@ func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
 // It's called automatically on neffos broadcasting.
 func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	for _, msg := range msgs {
-		if !exc.publish(msg) {
+		if err := exc.publish(context.Background(), msg); err != nil {
+			neffos.Debugf("redis stackexchange: publish: %v", err)
 			return false
 		}
 	}
@@ -261,78 +253,122 @@ func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	return true
 }
 
-func (exc *StackExchange) publish(msg neffos.Message) bool {
-	// channel := exc.getMessageChannel(c.ID(), msg)
+func (exc *StackExchange) publish(ctx context.Context, msg neffos.Message) error {
 	channel := exc.getChannel(msg.Namespace, msg.Room, msg.To)
-	// neffos.Debugf("[%s] publish to channel [%s] the data [%s]\n", msg.FromExplicit, channel, string(msg.Serialize()))
-
-	err := exc.publishCommand(channel, msg.Serialize())
-	return err == nil
+	return exc.client.Publish(ctx, channel, msg.Serialize()).Err()
 }
 
-func (exc *StackExchange) publishCommand(channel string, b []byte) error {
-	cmd := radix.FlatCmd(nil, "PUBLISH", channel, b)
-	return exc.pool.Do(cmd)
-}
-
-// Ask implements the server Ask feature for redis. It blocks until response.
+// Ask implements the server Ask feature for redis. It blocks until the reply
+// arrives on the ask channel of token, or ctx is done.
 func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
-	sub := radix.PersistentPubSub("", "", exc.connFunc)
-	msgCh := make(chan radix.PubSubMessage)
-	err = sub.Subscribe(msgCh, token)
-	if err != nil {
+	exc.mu.Lock()
+	closed := exc.closed
+	exc.mu.Unlock()
+	if closed {
+		return response, errClosed
+	}
+
+	ps := exc.client.Subscribe(ctx, exc.askChannel(token))
+	defer ps.Close()
+
+	// Subscribe before publishing, so the reply cannot be missed.
+	if _, err = ps.Receive(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 		return
 	}
-	defer sub.Close()
 
-	if !exc.publish(msg) {
-		return response, neffos.ErrWrite
+	if err = exc.publish(ctx, msg); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return response, ctxErr
+		}
+		neffos.Debugf("redis stackexchange: ask publish: %v", err)
+		return response, fmt.Errorf("%w: %v", neffos.ErrWrite, err)
 	}
+
+	// ReceiveMessage only stops on a context deadline, not on cancellation,
+	// so it runs on its own goroutine. Closing ps on return ends it.
+	type result struct {
+		m   *redis.Message
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		m, err := ps.ReceiveMessage(ctx)
+		resCh <- result{m, err}
+	}()
 
 	select {
 	case <-ctx.Done():
-		err = ctx.Err()
-	case redisMsg := <-msgCh:
-		response = neffos.DeserializeMessage(neffos.TextMessage, redisMsg.Message, false, false)
-		err = response.Err
-	}
+		return response, ctx.Err()
+	case res := <-resCh:
+		if res.err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return response, ctxErr
+			}
+			return response, res.err
+		}
 
-	return
+		response = neffos.DeserializeMessage(neffos.TextMessage, []byte(res.m.Payload), false, false)
+		return response, response.Err
+	}
 }
 
-// NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
+// NotifyAsk publishes msg, the reply to the Server.Ask waiting on token, to
+// that Ask's channel. It's called on a server connection's read when a
+// message answers an Ask.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 	msg.ClearWait()
-	return exc.publishCommand(token, msg.Serialize())
+	return exc.client.Publish(context.Background(), exc.askChannel(token), msg.Serialize()).Err()
 }
 
 // Subscribe subscribes to a specific namespace,
 // it's called automatically on neffos namespace connected.
+// It sends SUBSCRIBE and returns without waiting for the confirmation.
+// A failure is reported through neffos.Debugf.
 func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
-	select {
-	case exc.subscribe <- subscribeAction{conn: c, namespace: namespace}:
-	case <-exc.done:
+	ps := exc.subscriber(c)
+	if ps == nil {
+		return
+	}
+
+	ctx, cancel := exc.timeoutContext()
+	defer cancel()
+
+	if err := ps.Subscribe(ctx, exc.getChannel(namespace, "", "")); err != nil {
+		neffos.Debugf("redis stackexchange: [%s] subscribe to namespace %q: %v", c.ID(), namespace, err)
 	}
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
 // it's called automatically on neffos namespace disconnect.
+// A failure is reported through neffos.Debugf.
 func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
-	select {
-	case exc.unsubscribe <- unsubscribeAction{conn: c, namespace: namespace}:
-	case <-exc.done:
+	ps := exc.subscriber(c)
+	if ps == nil {
+		return
+	}
+
+	ctx, cancel := exc.timeoutContext()
+	defer cancel()
+
+	if err := ps.Unsubscribe(ctx, exc.getChannel(namespace, "", "")); err != nil {
+		neffos.Debugf("redis stackexchange: [%s] unsubscribe from namespace %q: %v", c.ID(), namespace, err)
 	}
 }
 
-// OnDisconnect terminates the connection's subscriber that
-// created on the `OnConnect` method.
-// It unsubscribes to all opened channels and
-// closes the internal read messages channel.
+// OnDisconnect closes the connection's subscriber that OnConnect created.
+// That unsubscribes it from every channel and ends its read goroutine.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	select {
-	case exc.delSubscriber <- closeAction{conn: c}:
-	case <-exc.done:
+	exc.mu.Lock()
+	ps := exc.subscribers[c]
+	delete(exc.subscribers, c)
+	exc.mu.Unlock()
+
+	if ps != nil {
+		ps.Close()
 	}
 }

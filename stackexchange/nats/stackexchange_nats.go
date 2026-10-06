@@ -1,9 +1,44 @@
+// Package nats provides a neffos StackExchange that scales neffos servers out
+// through nats publish and subscribe.
+//
+// Every neffos server that uses the same nats server and the same
+// SubjectPrefix shares its broadcasts with the others. The exchange keeps two
+// nats connections for its whole life, one to publish and one to subscribe,
+// no matter how many websocket connections it serves.
+//
+// Subject names, for the SubjectPrefix (default "neffos"):
+//
+//	<prefix>.<namespace>    broadcasts to a namespace, and to its rooms
+//	<prefix>.<connID>       messages sent to one connection (Message.To)
+//	<prefix>.ask.<token>    replies to a Server.Ask
+//
+// A message for a room goes to its namespace subject. Each server then writes
+// it only to the connections that joined that room. The namespace and
+// connection names are the ones earlier neffos versions used, so older and
+// newer servers on the same nats still share broadcasts for namespaces made
+// of plain characters. Server.Ask needs every server on this version.
+//
+// The characters nats gives a meaning to in a subject (".", "*", ">" and
+// whitespace) are replaced with "_" in the namespace, the connection ID and
+// the ask token, and an empty namespace becomes "_". Two namespaces that only
+// differ in those characters, such as "a.b" and "a_b", share a subject. That
+// costs some extra traffic and nothing else, because each server drops a
+// message for a namespace its connection did not join.
+//
+// A cross-server Server.Ask works like this: the asking server subscribes to
+// <prefix>.ask.<token> and publishes the message to the target connection's
+// subject. The server that holds the connection writes it to the client and
+// receives the reply. The reply matches no local wait, so neffos hands it to
+// NotifyAsk, which publishes it to <prefix>.ask.<token>.
 package nats
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kataras/neffos"
 
@@ -21,47 +56,30 @@ type StackExchange struct {
 	// set this to different values across your apps.
 	SubjectPrefix string
 
-	publisher   *nats.Conn
-	subscribers map[*neffos.Conn]*subscriber
+	// timeout bounds every call that waits on nats for a websocket
+	// connection: OnConnect, Subscribe and the subscribe step of Ask.
+	// It is the nats connect timeout (nats.Timeout option).
+	timeout time.Duration
 
-	addSubscriber chan *subscriber
-	subscribe     chan subscribeAction
-	unsubscribe   chan unsubscribeAction
-	delSubscriber chan closeAction
-	// done is closed by Close to signal the run loop to exit and to let
-	// any goroutine that sends on the action channels drop its work cleanly.
-	done      chan struct{}
-	closeOnce sync.Once
+	publisher  *nats.Conn
+	subscriber *nats.Conn
+
+	mu            sync.Mutex
+	subscriptions map[*neffos.Conn]map[string]*nats.Subscription
+	closed        bool
+	closeOnce     sync.Once
 }
 
-var _ neffos.StackExchange = (*StackExchange)(nil)
-
-type (
-	subscriber struct {
-		conn    *neffos.Conn
-		subConn *nats.Conn
-
-		// To unsubscribe a connection per namespace, set on subscribe channel.
-		// Key is the subject pattern, with lock for any case, although
-		// they shouldn't execute in parallel from neffos conn itself.
-		subscriptions map[string]*nats.Subscription
-		mu            sync.RWMutex
-	}
-
-	subscribeAction struct {
-		conn      *neffos.Conn
-		namespace string
-	}
-
-	unsubscribeAction struct {
-		conn      *neffos.Conn
-		namespace string
-	}
-
-	closeAction struct {
-		conn *neffos.Conn
-	}
+var (
+	_ neffos.StackExchange       = (*StackExchange)(nil)
+	_ neffos.StackExchangeCloser = (*StackExchange)(nil)
 )
+
+// errClosed is returned by OnConnect after Close.
+var errClosed = errors.New("nats stackexchange: closed")
+
+// notifyAskFlushTimeout bounds the flush that sends an Ask reply.
+const notifyAskFlushTimeout = 5 * time.Second
 
 // With accepts a nats.Options structure
 // which contains the whole configuration
@@ -84,27 +102,16 @@ func With(options nats.Options) nats.Option {
 // nats.UserCredentials("./userCredsFile") at the second variadic input argument.
 //
 // Options can be used to register nats error and close handlers too.
+// The exchange also reports nats errors, disconnects and reconnects through
+// neffos.Debugf, after calling the handlers given here.
 //
 // Alternatively, use the `With(nats.Options)` function to
 // customize the client through struct fields.
+//
+// It opens two nats connections, one to publish and one to subscribe, and
+// fails if either cannot connect. The nats.Timeout option (2s by default)
+// also bounds how long OnConnect and Subscribe wait for the nats server.
 func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error) {
-	// For subscribing:
-	// Use a single client or create new for each new incoming websocket connection?
-	// - nats does not have a connection pool and
-	// - it uses callbacks for subscribers and
-	// so I assumed it's tend to be uses as single client BUT inside its source code:
-	// - the connect itself is done under its nats.go/Conn.connect()
-	// - the reading is done through loop waits for each server message
-	//   and it parses and stores field data using connection-level locks.
-	// - and the subscriber at nats.go/Conn#waitForMsgs(s *Subscription) for channel use
-	// also uses connection-level locks. ^ this is slower than callbacks,
-	// callbacks are more low level there as far as my research goes.
-	// So I will proceed with making a new nats connection for each websocket connection,
-	// if anyone with more experience on nats than me has a different approach
-	// we should listen to and process with actions on making it more efficient.
-	// For publishing:
-	// Create a connection, here, which will only be used to Publish.
-
 	// Cache the options to be used on every client and
 	// respect any customization by caller.
 	opts := nats.GetDefaultOptions()
@@ -112,10 +119,6 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 		url = nats.DefaultURL
 	}
 	opts.Url = url
-	// TODO: export the neffos.debugEnabled
-	// and set that:
-	// opts.Verbose = true
-
 	opts.NoEcho = true
 
 	for _, opt := range options {
@@ -136,118 +139,110 @@ func NewStackExchange(url string, options ...nats.Option) (*StackExchange, error
 	// are respected, no check for duplications.
 	opts.Servers = append(opts.Servers, servers...)
 
-	pubConn, err := opts.Connect()
+	withDebugHandlers(&opts)
+
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = nats.DefaultTimeout
+	}
+
+	publisher, err := opts.Connect()
 	if err != nil {
+		return nil, err
+	}
+
+	subscriber, err := opts.Connect()
+	if err != nil {
+		publisher.Close()
 		return nil, err
 	}
 
 	exc := &StackExchange{
 		opts:          opts,
 		SubjectPrefix: "neffos",
-		publisher:     pubConn,
-
-		subscribers:   make(map[*neffos.Conn]*subscriber),
-		addSubscriber: make(chan *subscriber),
-		delSubscriber: make(chan closeAction),
-		subscribe:     make(chan subscribeAction),
-		unsubscribe:   make(chan unsubscribeAction),
-		done:          make(chan struct{}),
+		timeout:       timeout,
+		publisher:     publisher,
+		subscriber:    subscriber,
+		subscriptions: make(map[*neffos.Conn]map[string]*nats.Subscription),
 	}
-
-	go exc.run()
 
 	return exc, nil
 }
 
-func (exc *StackExchange) run() {
-	for {
-		select {
-		case <-exc.done:
-			// drain remaining subscribers so we don't leak their nats connections.
-			for c, sub := range exc.subscribers {
-				if sub.subConn.IsConnected() {
-					sub.subConn.Close()
-				}
-				delete(exc.subscribers, c)
-			}
-			return
-		case s := <-exc.addSubscriber:
-			exc.subscribers[s.conn] = s
-		case m := <-exc.subscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				if sub.subConn.IsClosed() {
-					// neffos.Debugf("[%s] has an unexpected nats connection closing on subscribe", m.conn.ID())
-					delete(exc.subscribers, m.conn)
-					continue
-				}
-
-				subject := exc.getSubject(m.namespace, "", "")
-				// neffos.Debugf("[%s] subscribed to [%s]", m.conn.ID(), subject)
-				subscription, err := sub.subConn.Subscribe(subject, makeMsgHandler(sub.conn))
-				if err != nil {
-					continue
-				}
-				sub.subConn.Flush()
-				if err = sub.subConn.LastError(); err != nil {
-					// neffos.Debugf("[%s] OnSubscribe [%s] Last Error: %v", m.conn, subject, err)
-					continue
-				}
-
-				sub.mu.Lock()
-				if sub.subscriptions == nil {
-					sub.subscriptions = make(map[string]*nats.Subscription)
-				}
-				sub.subscriptions[subject] = subscription
-				sub.mu.Unlock()
-			}
-		case m := <-exc.unsubscribe:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				if sub.subConn.IsClosed() {
-					// neffos.Debugf("[%s] has an unexpected nats connection closing on unsubscribe", m.conn.ID())
-					delete(exc.subscribers, m.conn)
-					continue
-				}
-
-				subject := exc.getSubject(m.namespace, "", "")
-				// neffos.Debugf("[%s] unsubscribed from [%s]", subject)
-				if sub.subscriptions == nil {
-					continue
-				}
-
-				sub.mu.RLock()
-				subscription, ok := sub.subscriptions[subject]
-				sub.mu.RUnlock()
-				if ok {
-					subscription.Unsubscribe()
-				}
-			}
-		case m := <-exc.delSubscriber:
-			if sub, ok := exc.subscribers[m.conn]; ok {
-				// neffos.Debugf("[%s] disconnected", m.conn.ID())
-				if sub.subConn.IsConnected() {
-					sub.subConn.Close()
-				}
-
-				delete(exc.subscribers, m.conn)
-			}
+// withDebugHandlers chains neffos.Debugf after the caller's nats error,
+// disconnect and reconnect handlers. neffos.Debugf prints nothing unless
+// neffos.EnableDebug was called.
+func withDebugHandlers(opts *nats.Options) {
+	asyncErr := opts.AsyncErrorCB
+	opts.AsyncErrorCB = func(nc *nats.Conn, sub *nats.Subscription, err error) {
+		if asyncErr != nil {
+			asyncErr(nc, sub, err)
 		}
+		subject := ""
+		if sub != nil {
+			subject = sub.Subject
+		}
+		neffos.Debugf("nats stackexchange: error on subject %q: %v", subject, err)
+	}
+
+	disconnected := opts.DisconnectedErrCB
+	opts.DisconnectedErrCB = func(nc *nats.Conn, err error) {
+		if disconnected != nil {
+			disconnected(nc, err)
+		}
+		if err != nil {
+			neffos.Debugf("nats stackexchange: disconnected: %v", err)
+		}
+	}
+
+	reconnected := opts.ReconnectedCB
+	opts.ReconnectedCB = func(nc *nats.Conn) {
+		if reconnected != nil {
+			reconnected(nc)
+		}
+		neffos.Debugf("nats stackexchange: reconnected to %s", nc.ConnectedUrl())
 	}
 }
 
-// Nats does not allow ending with ".", it uses pattern matching.
+// subjectReplacer turns the characters that have a meaning in a nats subject
+// into "_", so a namespace, connection ID or ask token is always one plain token.
+var subjectReplacer = strings.NewReplacer(
+	".", "_",
+	"*", "_",
+	">", "_",
+	" ", "_",
+	"\t", "_",
+	"\r", "_",
+	"\n", "_",
+)
+
+// subjectToken returns s as a single valid subject token. An empty s becomes "_".
+// Different inputs can map to the same token, for example "a.b" and "a_b".
+func subjectToken(s string) string {
+	if s == "" {
+		return "_"
+	}
+	return subjectReplacer.Replace(s)
+}
+
+// getSubject returns the subject for a message. A message with a connID goes
+// to that connection's subject; any other message, room messages included,
+// goes to its namespace subject. It never panics: an empty namespace becomes "_".
 func (exc *StackExchange) getSubject(namespace, room, connID string) string {
 	if connID != "" {
 		// publish direct and let the server-side do the checks
 		// of valid or invalid message to send on this particular client.
-		return exc.SubjectPrefix + "." + connID
+		return exc.SubjectPrefix + "." + subjectToken(connID)
 	}
 
-	if namespace == "" && room != "" {
-		// should never happen but give info for debugging.
-		panic("namespace cannot be empty when sending to a namespace's room")
-	}
+	// Rooms share their namespace subject: the interface has no room
+	// subscribe, and each server filters room messages per connection.
+	return exc.SubjectPrefix + "." + subjectToken(namespace)
+}
 
-	return exc.SubjectPrefix + "." + namespace
+// askSubject returns the subject a Server.Ask waits on for its reply.
+func (exc *StackExchange) askSubject(token string) string {
+	return exc.SubjectPrefix + ".ask." + subjectToken(token)
 }
 
 func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
@@ -259,54 +254,50 @@ func makeMsgHandler(c *neffos.Conn) nats.MsgHandler {
 	}
 }
 
-// OnConnect prepares the connection nats subscriber
-// and subscribes to itself for direct neffos messages.
-// It's called automatically after the neffos server's OnConnect (if any)
-// on incoming client connections.
+// OnConnect subscribes the connection to its own subject for direct neffos
+// messages. It's called automatically after the neffos server's OnConnect
+// (if any) on incoming client connections.
+// It waits for the nats server to confirm the subscription for at most the
+// nats connect timeout and returns an error if it does not.
 func (exc *StackExchange) OnConnect(c *neffos.Conn) error {
-	subConn, err := exc.opts.Connect()
+	exc.mu.Lock()
+	closed := exc.closed
+	exc.mu.Unlock()
+	if closed {
+		return errClosed
+	}
+
+	subject := exc.getSubject("", "", c.ID())
+	sub, err := exc.subscriber.Subscribe(subject, makeMsgHandler(c))
 	if err != nil {
-		// neffos.Debugf("[%s] OnConnect Error: %v", c, err)
+		neffos.Debugf("[%s] nats stackexchange: subscribe to %q: %v", c.ID(), subject, err)
 		return err
 	}
 
-	selfSubject := exc.getSubject("", "", c.ID())
-	// unsubscribes automatically on close.
-	_, err = subConn.Subscribe(selfSubject, makeMsgHandler(c))
-	if err != nil {
-		// neffos.Debugf("[%s] OnConnect.SelfSubscribe Error: %v", c, err)
+	if err = exc.subscriber.FlushTimeout(exc.timeout); err != nil {
+		neffos.Debugf("[%s] nats stackexchange: confirm subscription to %q: %v", c.ID(), subject, err)
+		sub.Unsubscribe()
 		return err
 	}
 
-	subConn.Flush()
-
-	if err = subConn.LastError(); err != nil {
-		// maybe an invalid subject, send back to the client which will window.alert it.
-		// neffos.Debugf("[%s] OnConnect.SelfSubscribe Last Error: %v", c, err)
-		return err
+	exc.mu.Lock()
+	if exc.closed {
+		exc.mu.Unlock()
+		sub.Unsubscribe()
+		return errClosed
 	}
-
-	s := &subscriber{
-		conn:    c,
-		subConn: subConn,
-	}
-
-	select {
-	case exc.addSubscriber <- s:
-	case <-exc.done:
-		if subConn.IsConnected() {
-			subConn.Close()
-		}
-	}
+	exc.subscriptions[c] = map[string]*nats.Subscription{subject: sub}
+	exc.mu.Unlock()
 
 	return nil
 }
 
 // Publish publishes messages through nats.
 // It's called automatically on neffos broadcasting.
+// It returns false on the first message nats refuses.
 func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	for _, msg := range msgs {
-		if !exc.publish(msg) {
+		if err := exc.publish(msg); err != nil {
 			return false
 		}
 	}
@@ -314,101 +305,183 @@ func (exc *StackExchange) Publish(msgs []neffos.Message) bool {
 	return true
 }
 
-func (exc *StackExchange) publish(msg neffos.Message) bool {
+func (exc *StackExchange) publish(msg neffos.Message) error {
 	subject := exc.getSubject(msg.Namespace, msg.Room, msg.To)
-	b := msg.Serialize()
-
-	err := exc.publisher.Publish(subject, b)
-	// Let's not add logging options, let
-	// any custom nats error handler alone.
-	return err == nil
+	if err := exc.publisher.Publish(subject, msg.Serialize()); err != nil {
+		neffos.Debugf("nats stackexchange: publish to %q: %v", subject, err)
+		return err
+	}
+	return nil
 }
 
-// Ask implements server Ask for nats. It blocks.
+// Ask implements server Ask for nats. It blocks until the reply arrives or
+// ctx is done. It subscribes to the reply subject, waits for the nats server
+// to confirm that (bounded by ctx and the nats connect timeout), publishes
+// msg and then waits for one reply. It starts no goroutine.
 func (exc *StackExchange) Ask(ctx context.Context, msg neffos.Message, token string) (response neffos.Message, err error) {
-	// for some reason we can't use the exc.publisher.Subscribe,
-	// so create a new connection for subscription which will be terminated on message receive or timeout.
-	subConn, err := exc.opts.Connect()
-
-	if err != nil {
-		return
-	}
-
-	ch := make(chan neffos.Message)
-	sub, err := subConn.Subscribe(token, func(m *nats.Msg) {
-		ch <- neffos.DeserializeMessage(neffos.TextMessage, m.Data, false, false)
-	})
-
+	sub, err := exc.subscriber.SubscribeSync(exc.askSubject(token))
 	if err != nil {
 		return response, err
 	}
-
 	defer sub.Unsubscribe()
-	defer subConn.Close()
 
-	if !exc.publish(msg) {
-		return response, neffos.ErrWrite
+	flushCtx, cancel := context.WithTimeout(ctx, exc.timeout)
+	err = exc.subscriber.FlushWithContext(flushCtx)
+	cancel()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return response, ctxErr
+		}
+		return response, err
 	}
 
-	select {
-	case <-ctx.Done():
-		return response, ctx.Err()
-	case response = <-ch:
-		return response, response.Err
+	if err = exc.publish(msg); err != nil {
+		return response, fmt.Errorf("%w: %v", neffos.ErrWrite, err)
 	}
+
+	m, err := sub.NextMsgWithContext(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return response, ctxErr
+		}
+		return response, err
+	}
+
+	response = neffos.DeserializeMessage(neffos.TextMessage, m.Data, false, false)
+	return response, response.Err
 }
 
 // NotifyAsk notifies and unblocks a "msg" subscriber, called on a server connection's read when expects a result.
+// It publishes the reply to the ask subject of token and waits up to 5s for
+// nats to take it.
 func (exc *StackExchange) NotifyAsk(msg neffos.Message, token string) error {
 	msg.ClearWait()
-	err := exc.publisher.Publish(token, msg.Serialize())
-	if err != nil {
+	if err := exc.publisher.Publish(exc.askSubject(token), msg.Serialize()); err != nil {
 		return err
 	}
-	exc.publisher.Flush()
-	return exc.publisher.LastError()
+	return exc.publisher.FlushTimeout(notifyAskFlushTimeout)
 }
 
 // Subscribe subscribes to a specific namespace,
 // it's called automatically on neffos namespace connected.
+// It waits for the nats server to confirm the subscription for at most the
+// nats connect timeout. Errors go to neffos.Debugf.
 func (exc *StackExchange) Subscribe(c *neffos.Conn, namespace string) {
-	select {
-	case exc.subscribe <- subscribeAction{conn: c, namespace: namespace}:
-	case <-exc.done:
+	subject := exc.getSubject(namespace, "", "")
+
+	exc.mu.Lock()
+	subs, ok := exc.subscriptions[c]
+	if !ok {
+		// not connected through OnConnect, or already disconnected or closed.
+		exc.mu.Unlock()
+		return
+	}
+	if _, ok := subs[subject]; ok {
+		exc.mu.Unlock()
+		return
+	}
+	sub, err := exc.subscriber.Subscribe(subject, makeMsgHandler(c))
+	if err != nil {
+		exc.mu.Unlock()
+		neffos.Debugf("[%s] nats stackexchange: subscribe to %q: %v", c.ID(), subject, err)
+		return
+	}
+	subs[subject] = sub
+	exc.mu.Unlock()
+
+	if err = exc.subscriber.FlushTimeout(exc.timeout); err != nil {
+		// The subscription stays; nats registers it again once it reconnects.
+		neffos.Debugf("[%s] nats stackexchange: confirm subscription to %q: %v", c.ID(), subject, err)
 	}
 }
 
 // Unsubscribe unsubscribes from a specific namespace,
 // it's called automatically on neffos namespace disconnect.
+// It does not wait for the nats server. Errors go to neffos.Debugf.
 func (exc *StackExchange) Unsubscribe(c *neffos.Conn, namespace string) {
-	select {
-	case exc.unsubscribe <- unsubscribeAction{conn: c, namespace: namespace}:
-	case <-exc.done:
+	subject := exc.getSubject(namespace, "", "")
+
+	exc.mu.Lock()
+	sub, ok := exc.subscriptions[c][subject]
+	if ok {
+		delete(exc.subscriptions[c], subject)
+	}
+	exc.mu.Unlock()
+
+	if !ok {
+		return
+	}
+	if err := sub.Unsubscribe(); err != nil {
+		neffos.Debugf("[%s] nats stackexchange: unsubscribe from %q: %v", c.ID(), subject, err)
 	}
 }
 
-// OnDisconnect terminates the connection's subscriber that
-// created on the `OnConnect` method.
-// It unsubscribes to all opened channels and
-// closes the internal read messages channel.
+// OnDisconnect removes every subscription the connection holds, its own
+// subject and its namespaces.
 // It's called automatically when a connection goes offline,
 // manually by server or client or by network failure.
 func (exc *StackExchange) OnDisconnect(c *neffos.Conn) {
-	select {
-	case exc.delSubscriber <- closeAction{conn: c}:
-	case <-exc.done:
+	exc.mu.Lock()
+	subs := exc.subscriptions[c]
+	delete(exc.subscriptions, c)
+	exc.mu.Unlock()
+
+	for subject, sub := range subs {
+		if err := sub.Unsubscribe(); err != nil {
+			neffos.Debugf("[%s] nats stackexchange: unsubscribe from %q: %v", c.ID(), subject, err)
+		}
 	}
 }
 
-// Close shuts down the run loop, closes the publisher and any outstanding
-// subscriber connections. It is safe to call Close more than once;
-// subsequent calls are no-ops.
+// Close drains the subscriber connection, so messages already received are
+// still delivered, and then closes the publisher connection. It waits for the
+// drain for at most the nats drain timeout plus 5s, and falls back to closing
+// the subscriber when draining fails.
+// It returns the first error met. It is safe to call Close more than once;
+// later calls return nil.
 func (exc *StackExchange) Close() error {
+	var err error
 	exc.closeOnce.Do(func() {
-		close(exc.done)
-		if exc.publisher != nil && exc.publisher.IsConnected() {
-			exc.publisher.Close()
-		}
+		exc.mu.Lock()
+		exc.closed = true
+		exc.subscriptions = make(map[*neffos.Conn]map[string]*nats.Subscription)
+		exc.mu.Unlock()
+
+		err = exc.drainSubscriber()
+		exc.publisher.Close()
 	})
-	return nil
+	return err
+}
+
+func (exc *StackExchange) drainSubscriber() error {
+	closed := exc.subscriber.StatusChanged(nats.CLOSED)
+	defer exc.subscriber.RemoveStatusListener(closed)
+
+	if err := exc.subscriber.Drain(); err != nil {
+		exc.subscriber.Close()
+		if errors.Is(err, nats.ErrConnectionClosed) {
+			// already closed, for example by the caller's own handlers.
+			return nil
+		}
+		return err
+	}
+
+	drainTimeout := exc.opts.DrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = nats.DefaultDrainTimeout
+	}
+	// nats adds a flush of up to 5s after draining the subscriptions.
+	timer := time.NewTimer(drainTimeout + 5*time.Second + time.Second)
+	defer timer.Stop()
+
+	select {
+	case <-closed:
+	case <-timer.C:
+		exc.subscriber.Close()
+		return nats.ErrDrainTimeout
+	}
+
+	// Drain reports its own failures (a timeout, a failed flush) as the
+	// connection's last error.
+	return exc.subscriber.LastError()
 }

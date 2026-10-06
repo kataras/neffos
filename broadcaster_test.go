@@ -16,13 +16,13 @@ func TestBroadcasterDeliversMessages(t *testing.T) {
 		ok   bool
 	}
 	resCh := make(chan result, 1)
+	// take the head before the goroutine starts, as Upgrade does, so the
+	// broadcast below is seen however late the goroutine runs.
+	entry := b.head()
 	go func() {
-		msgs, ok := b.waitUntilClosed(closeCh)
+		msgs, _, ok := b.waitUntilClosed(entry, closeCh)
 		resCh <- result{msgs, ok}
 	}()
-
-	// give the receiver a moment to subscribe to the current entry.
-	time.Sleep(10 * time.Millisecond)
 
 	want := []Message{{Namespace: "ns", Event: "e", Body: []byte("hi")}}
 	b.broadcast(want)
@@ -50,7 +50,7 @@ func TestBroadcasterCloseChAborts(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		msgs, ok := b.waitUntilClosed(closeCh)
+		msgs, _, ok := b.waitUntilClosed(b.head(), closeCh)
 		resCh <- result{msgs, ok}
 	}()
 
@@ -80,6 +80,10 @@ func TestBroadcasterConcurrentReceiversAndBroadcasts(t *testing.T) {
 
 	closeChs := make([]chan struct{}, receivers)
 
+	// take the head before any receiver starts, as Upgrade does, so every
+	// receiver sees every broadcast below however late it runs.
+	head := b.head()
+
 	// Each receiver consumes broadcasts in a loop. When closeCh fires they
 	// exit. The test verifies that no receiver ever sees a nil messages slice
 	// with ok=true (which would mean a broadcast was delivered without payload).
@@ -88,22 +92,21 @@ func TestBroadcasterConcurrentReceiversAndBroadcasts(t *testing.T) {
 		wg.Add(1)
 		go func(closeCh chan struct{}) {
 			defer wg.Done()
+			entry := head
 			for {
-				msgs, ok := b.waitUntilClosed(closeCh)
+				msgs, next, ok := b.waitUntilClosed(entry, closeCh)
 				if !ok {
 					return
 				}
 				if msgs == nil {
-					t.Errorf("ok=true but msgs is nil — receiver woke without payload")
+					t.Errorf("ok=true but msgs is nil: receiver woke without payload")
 					return
 				}
 				received.Add(1)
+				entry = next
 			}
 		}(closeChs[i])
 	}
-
-	// give receivers time to subscribe.
-	time.Sleep(20 * time.Millisecond)
 
 	var bwg sync.WaitGroup
 	for i := range broadcasts {
@@ -115,11 +118,15 @@ func TestBroadcasterConcurrentReceiversAndBroadcasts(t *testing.T) {
 	}
 	bwg.Wait()
 
-	// give receivers time to wake on the last broadcast.
-	time.Sleep(50 * time.Millisecond)
-
-	if got := received.Load(); got == 0 {
-		t.Fatal("expected at least some deliveries, got zero")
+	// every receiver follows the chain from the same head, so each one
+	// delivers every broadcast; wait for the total rather than sleeping.
+	const want = receivers * broadcasts
+	deadline := time.Now().Add(5 * time.Second)
+	for received.Load() < want && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := received.Load(); got != want {
+		t.Fatalf("expected %d deliveries, got %d", want, got)
 	}
 
 	// Tear down receivers and wait for them to exit.
@@ -127,4 +134,36 @@ func TestBroadcasterConcurrentReceiversAndBroadcasts(t *testing.T) {
 		close(ch)
 	}
 	wg.Wait()
+}
+
+// TestBroadcastChainAdvances publishes two broadcasts before the consumer
+// wakes. Following the chain, the consumer must see both, in order, and then
+// wait on the entry after the second one.
+func TestBroadcastChainAdvances(t *testing.T) {
+	b := newBroadcaster()
+	closeCh := make(chan struct{})
+
+	entry := b.head()
+
+	b.broadcast([]Message{{Event: "first"}})
+	b.broadcast([]Message{{Event: "second"}})
+
+	msgs, next, ok := b.waitUntilClosed(entry, closeCh)
+	if !ok || len(msgs) != 1 || msgs[0].Event != "first" {
+		t.Fatalf("expected the first broadcast, got ok=%v msgs=%v", ok, msgs)
+	}
+
+	msgs, next, ok = b.waitUntilClosed(next, closeCh)
+	if !ok || len(msgs) != 1 || msgs[0].Event != "second" {
+		t.Fatalf("expected the second broadcast, got ok=%v msgs=%v", ok, msgs)
+	}
+
+	if next != b.head() {
+		t.Fatal("expected the consumer to wait on the current head after the last broadcast")
+	}
+
+	close(closeCh)
+	if msgs, _, ok := b.waitUntilClosed(next, closeCh); ok || msgs != nil {
+		t.Fatalf("expected ok=false and nil msgs after closeCh, got ok=%v msgs=%v", ok, msgs)
+	}
 }

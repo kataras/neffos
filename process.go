@@ -2,35 +2,28 @@ package neffos
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 // processes is a collection of `process`.
 type processes struct {
 	entries map[string]*process
-	locker  *sync.RWMutex
+	mu      sync.Mutex
 }
 
 func newProcesses() *processes {
 	return &processes{
 		entries: make(map[string]*process),
-		locker:  new(sync.RWMutex),
 	}
 }
 
 func (p *processes) get(name string) *process {
-	p.locker.RLock()
-	entry := p.entries[name]
-	p.locker.RUnlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	if entry == nil {
-		entry = &process{
-			finished: make(chan struct{}),
-		}
-
-		p.locker.Lock()
+	entry, ok := p.entries[name]
+	if !ok {
+		entry = new(process)
 		p.entries[name] = entry
-		p.locker.Unlock()
 	}
 
 	return entry
@@ -39,52 +32,57 @@ func (p *processes) get(name string) *process {
 // process is used on connections on specific actions that needs to wait for an answer from the other side.
 // Take for example the `Conn#handleMessage.tryNamespace` which waits for `Conn#askConnect` to finish on the specific namespace.
 //
-// Lifecycle: Start -> Done -> [optional] Signal. Done is idempotent (subsequent
-// calls are no-ops). Signal must be called at most once; double-call panics.
-// Wait blocks until Done; after Done it returns immediately.
+// A process is restartable: Start begins a run, Done ends it and releases any
+// waiters, and Start may be called again afterwards to begin a new run. Wait
+// blocks only while a run is in progress; it returns immediately otherwise,
+// including for a process that was never started.
 type process struct {
-	done atomic.Uint32
-
-	finished chan struct{}
-	waiting  sync.WaitGroup
+	mu      sync.Mutex
+	running bool
+	done    chan struct{}
 }
 
-// Signal closes the finished channel. Must be called at most once per process —
-// double-Signal panics because Go closes a closed channel with a runtime panic.
-func (p *process) Signal() {
-	close(p.finished)
-}
-
-// Finished returns the read-only channel of `finished`.
-// It gets fired when `Signal` is called.
-func (p *process) Finished() <-chan struct{} {
-	return p.finished
-}
-
-// Done releases waiters on this process. Idempotent: subsequent calls are no-ops.
-func (p *process) Done() {
-	if !p.done.CompareAndSwap(0, 1) {
-		return
-	}
-
-	p.waiting.Done()
-}
-
-// Wait blocks until Done has been called. If Done was already called, Wait
-// returns immediately.
-func (p *process) Wait() {
-	if p.done.Load() == 1 {
-		return
-	}
-	p.waiting.Wait()
-}
-
-// Start makes future `Wait` calls to hold until `Done`.
+// Start marks the process as running, so that `Wait` blocks until the matching `Done`.
+// Safe to call again after a previous `Done` to begin a new run.
 func (p *process) Start() {
-	p.waiting.Add(1)
+	p.mu.Lock()
+	p.running = true
+	p.done = make(chan struct{})
+	p.mu.Unlock()
 }
 
-// isDone reports whether process is finished.
+// Done ends the current run and releases any goroutines blocked in `Wait`.
+// It is a no-op if the process isn't currently running (double `Done`, or
+// `Done` without a prior `Start`).
+func (p *process) Done() {
+	p.mu.Lock()
+	if !p.running {
+		p.mu.Unlock()
+		return
+	}
+	p.running = false
+	done := p.done
+	p.mu.Unlock()
+
+	close(done)
+}
+
+// Wait blocks until `Done` is called, but only while the process is running;
+// otherwise it returns immediately.
+func (p *process) Wait() {
+	p.mu.Lock()
+	running, done := p.running, p.done
+	p.mu.Unlock()
+
+	if running {
+		<-done
+	}
+}
+
+// isDone reports whether the process is not currently running.
 func (p *process) isDone() bool {
-	return p.done.Load() == 1
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return !p.running
 }

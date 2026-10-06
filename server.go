@@ -67,17 +67,23 @@ type Server struct {
 	// Defaults to false.
 	FireDisconnectAlways bool
 
-	mu         sync.RWMutex
 	namespaces Namespaces
 
-	// connection read/write timeouts.
-	readTimeout  time.Duration
-	writeTimeout time.Duration
+	// per-connection settings from the ConnHandler (timeouts, heartbeat,
+	// message size cap).
+	settings connSettings
 
-	count atomic.Uint64
+	// mu guards connections and count. It is never held while user callbacks
+	// run or while another lock is taken.
+	mu          sync.RWMutex
+	connections map[*Conn]struct{}
+	count       atomic.Uint64
+	// readers counts the goroutines that read from a registered connection
+	// (startReader and the broadcaster waiter). Add runs under mu together
+	// with the registration, so it happens before any Wait that follows a
+	// snapshot taken under mu.
+	readers sync.WaitGroup
 
-	connections       map[*Conn]struct{}
-	connect           chan *Conn
 	disconnect        chan *Conn
 	actions           chan action
 	broadcastMessages chan []Message
@@ -91,9 +97,11 @@ type Server struct {
 
 	closed atomic.Uint32
 	// done is closed by Close() to signal the start() loop to exit and to let
-	// goroutines that send to s.disconnect/s.connect/s.actions/s.broadcastMessages
+	// goroutines that send to s.disconnect/s.actions/s.broadcastMessages
 	// drop their work cleanly during shutdown.
 	done chan struct{}
+	// exchangeCloseOnce closes the StackExchange at most once.
+	exchangeCloseOnce sync.Once
 
 	// OnUpgradeError can be optionally registered to catch upgrade errors.
 	OnUpgradeError func(err error)
@@ -104,6 +112,8 @@ type Server struct {
 	OnConnect func(c *Conn) error
 	// OnDisconnect can be optionally registered to notify about a connection's disconnect.
 	// Don't confuse it with the `OnNamespaceDisconnect`, this callback is for the entire client side connection.
+	// During Close and Shutdown, OnDisconnect may run on the closing goroutine
+	// concurrently with the dispatch loop; protect shared state in the callback.
 	OnDisconnect func(c *Conn)
 }
 
@@ -115,16 +125,14 @@ type Server struct {
 //
 // See examples for more.
 func New(upgrader Upgrader, connHandler ConnHandler) *Server {
-	readTimeout, writeTimeout := getTimeouts(connHandler)
+	settings := getSettings(connHandler)
 	namespaces := connHandler.GetNamespaces()
 	s := &Server{
 		uuid:              uuid.NewString(),
 		upgrader:          upgrader,
 		namespaces:        namespaces,
-		readTimeout:       readTimeout,
-		writeTimeout:      writeTimeout,
+		settings:          settings,
 		connections:       make(map[*Conn]struct{}),
-		connect:           make(chan *Conn, 1),
 		disconnect:        make(chan *Conn),
 		actions:           make(chan action),
 		broadcastMessages: make(chan []Message),
@@ -174,31 +182,15 @@ func (s *Server) start() {
 		select {
 		case <-s.done:
 			return
-		case c := <-s.connect:
-			s.connections[c] = struct{}{}
-			s.count.Add(1)
 		case c := <-s.disconnect:
-			if _, ok := s.connections[c]; ok {
-				delete(s.connections, c)
-				s.count.Add(^uint64(0))
-				if s.OnDisconnect != nil {
-					// don't fire disconnect if was immediately closed on the `OnConnect` server event.
-					if !s.FireDisconnectAlways && (!c.readiness.isReady() || (c.readiness.err != nil)) {
-						continue
-					}
-					s.OnDisconnect(c)
-				}
-
-				if s.usesStackExchange() {
-					s.StackExchange.OnDisconnect(c)
-				}
-			}
+			s.removeConn(c)
 		case msgs := <-s.broadcastMessages:
-			for c := range s.connections {
+			for _, c := range s.snapshot() {
 				publishMessages(c, msgs)
 			}
 		case act := <-s.actions:
-			for c := range s.connections {
+			// a snapshot, so act.call may read the connection set itself.
+			for _, c := range s.snapshot() {
 				act.call(c)
 			}
 
@@ -210,31 +202,160 @@ func (s *Server) start() {
 	}
 }
 
-// Close terminates the server and all of its connections, client connections are getting notified.
-// Close is idempotent: subsequent calls are no-ops.
-//
-// Close fires c.Close() for every connection synchronously (each connection's
-// OnNamespaceDisconnect / OnRoomLeave callbacks run before this method returns),
-// signals the internal dispatch loop to exit, and (when the configured
-// StackExchange implements StackExchangeCloser) releases its broker
-// connections. After Close returns, the server no longer accepts Upgrade calls
-// and any pending Broadcast/Ask calls will fail.
-func (s *Server) Close() {
-	if s.closed.CompareAndSwap(0, 1) {
-		s.Do(func(c *Conn) {
-			c.Close()
-		}, false)
-		close(s.done)
-		if closer, ok := s.StackExchange.(StackExchangeCloser); ok {
-			closer.Close()
-		}
+// addConn registers c unless the server is closed and reports whether it did.
+// readers is the number of reader goroutines the caller starts for c once
+// addConn returns true.
+func (s *Server) addConn(c *Conn, readers int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// checked under mu: Close sets closed before it takes its snapshot under
+	// mu, so a connection is either in that snapshot or never registered.
+	if s.closed.Load() > 0 {
+		return false
+	}
+
+	s.connections[c] = struct{}{}
+	s.count.Add(1)
+	s.readers.Add(readers)
+	return true
+}
+
+// removeConn unregisters c and fires the server's `OnDisconnect` and the
+// StackExchange's `OnDisconnect` outside the lock. It does nothing if c is not
+// registered, so each connection is reported once.
+func (s *Server) removeConn(c *Conn) {
+	s.mu.Lock()
+	_, ok := s.connections[c]
+	if ok {
+		delete(s.connections, c)
+		s.count.Add(^uint64(0))
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	// don't fire disconnect if was immediately closed on the `OnConnect` server event.
+	if s.OnDisconnect != nil && (s.FireDisconnectAlways || (c.readiness.isReady() && c.readiness.err == nil)) {
+		s.OnDisconnect(c)
+	}
+
+	if s.usesStackExchange() {
+		s.StackExchange.OnDisconnect(c)
 	}
 }
 
-var (
-	errServerClosed  = errors.New("server closed")
-	errInvalidMethod = errors.New("no valid request method")
-)
+// snapshot returns the registered connections at this point in time.
+func (s *Server) snapshot() []*Conn {
+	s.mu.RLock()
+	conns := make([]*Conn, 0, len(s.connections))
+	for c := range s.connections {
+		conns = append(conns, c)
+	}
+	s.mu.RUnlock()
+
+	return conns
+}
+
+// closeExchange closes the StackExchange once, when it implements StackExchangeCloser.
+func (s *Server) closeExchange() {
+	s.exchangeCloseOnce.Do(func() {
+		if closer, ok := s.StackExchange.(StackExchangeCloser); ok {
+			closer.Close()
+		}
+	})
+}
+
+// Close terminates the server and all of its connections, client connections are getting notified.
+// Close is idempotent: subsequent calls are no-ops.
+//
+// Close closes every connection with CloseGoingAway and the reason "server
+// closed", all of them at the same time, and waits for them: each
+// connection's OnNamespaceDisconnect / OnRoomLeave callbacks and the server's
+// OnDisconnect run once per connection before this method returns. The
+// OnNamespaceDisconnect / OnRoomLeave callbacks of different connections may
+// run concurrently, as they already can in normal operation. OnDisconnect
+// may run on the closing goroutine concurrently with the dispatch loop;
+// protect shared state in the callback.
+//
+// It then signals the internal dispatch loop to exit and (when the configured
+// StackExchange implements StackExchangeCloser) releases its broker
+// connections. Close does not wait for event callbacks that are still
+// running; use Shutdown for that.
+// After Close, Upgrade and Ask return ErrServerClosed, and Do and
+// Broadcast return without doing anything.
+func (s *Server) Close() {
+	if s.terminateAll("server closed") {
+		s.closeExchange()
+	}
+}
+
+// Shutdown closes the server like Close, with CloseGoingAway and the reason
+// "server shutting down", and then waits until every connection's reader
+// goroutine has returned, which includes any event callback still running.
+// It gives up when ctx is done and returns ctx.Err(); otherwise it returns
+// nil. The StackExchange is closed after the wait, or when ctx gives up.
+//
+// Do not call Shutdown from inside an event callback or OnConnect /
+// OnDisconnect: it would wait for the callback that called it, until ctx is
+// done.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	s.terminateAll("server shutting down")
+	defer s.closeExchange()
+
+	// terminateAll has set closed and taken its snapshot under mu, so no
+	// registration can call readers.Add after this point.
+	done := make(chan struct{})
+	go func() {
+		s.readers.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// terminateAll marks the server closed, terminates every connection with
+// CloseGoingAway and reason (concurrently, one goroutine per connection),
+// unregisters each one, and stops the dispatch loop. It
+// reports false, doing nothing, when the server was already closed.
+func (s *Server) terminateAll(reason string) bool {
+	if !s.closed.CompareAndSwap(0, 1) {
+		return false
+	}
+
+	// Each Terminate may wait up to the write timeout for its close frame,
+	// so the connections close in parallel. removeConn then runs in order.
+	conns := s.snapshot()
+	var wg sync.WaitGroup
+	for _, c := range conns {
+		wg.Go(func() { c.Terminate(CloseGoingAway, reason) })
+	}
+	wg.Wait()
+
+	for _, c := range conns {
+		s.removeConn(c)
+	}
+
+	close(s.done)
+	return true
+}
+
+// ErrServerClosed is returned by `Server#Upgrade` and `Server#Ask`
+// after `Server#Close` was called.
+var ErrServerClosed = errors.New("server closed")
+
+var errInvalidMethod = errors.New("no valid request method")
 
 // URLParamAsHeaderPrefix is the prefix that server parses the url parameters as request headers.
 // The client's `URLParamAsHeaderPrefix` must match.
@@ -300,7 +421,7 @@ func (s *Server) Upgrade(
 ) (*Conn, error) {
 	if s.closed.Load() > 0 {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return nil, errServerClosed
+		return nil, ErrServerClosed
 	}
 
 	if r.Method == http.MethodHead {
@@ -342,8 +463,7 @@ func (s *Server) Upgrade(
 	}
 	c.serverConnID = genServerConnID(s, c)
 
-	c.readTimeout = s.readTimeout
-	c.writeTimeout = s.writeTimeout
+	c.applySettings(s.settings)
 	c.server = s
 
 	retriesHeaderValue := r.Header.Get(websocketReconectHeaderKey)
@@ -351,16 +471,40 @@ func (s *Server) Upgrade(
 		c.ReconnectTries, _ = strconv.Atoi(retriesHeaderValue)
 	}
 
-	if !s.usesStackExchange() && !s.SyncBroadcaster {
-		go func(c *Conn) {
-			for s.waitMessages(c) {
-			}
-		}(c)
+	waitBroadcasts := !s.usesStackExchange() && !s.SyncBroadcaster
+	readers := 1
+	if waitBroadcasts {
+		readers++
 	}
 
-	s.connect <- c
+	if !s.addConn(c, readers) {
+		// the response is already hijacked, so no status can be written;
+		// send a close frame when the socket can, else drop the connection.
+		if closer, ok := socket.(SocketCloser); !ok || closer.Close(CloseGoingAway, "server closed", time.Second) != nil {
+			socket.NetConn().Close()
+		}
+		return nil, ErrServerClosed
+	}
 
-	go c.startReader()
+	if waitBroadcasts {
+		// take the head before any goroutine starts, so every broadcast made
+		// from here on (OnConnect included) reaches this connection.
+		entry := s.broadcaster.head()
+		go func() {
+			defer s.readers.Done()
+			for entry != nil {
+				entry = s.waitMessages(c, entry)
+			}
+		}()
+	}
+
+	go func() {
+		defer s.readers.Done()
+		c.startReader()
+	}()
+
+	// it waits for the ack, so it never pings a connection OnConnect rejects.
+	c.startHeartbeat()
 
 	// Before `OnConnect` in order to be able
 	// to Broadcast inside the `OnConnect` custom func.
@@ -368,6 +512,16 @@ func (s *Server) Upgrade(
 		if err := s.StackExchange.OnConnect(c); err != nil {
 			c.readiness.unwait(err)
 			return nil, err
+		}
+
+		// Close may have run while the exchange was connecting: its
+		// StackExchange.OnDisconnect then came before this OnConnect
+		// finished. Tell the exchange again (unsubscribing is idempotent)
+		// and skip the user's OnConnect.
+		if s.closed.Load() > 0 {
+			s.StackExchange.OnDisconnect(c)
+			c.readiness.unwait(ErrServerClosed)
+			return nil, ErrServerClosed
 		}
 	}
 
@@ -412,13 +566,19 @@ type action struct {
 
 // Do loops through all connected connections and fires "fn" once per connection.
 // Callers can use this to manipulate connections outside an event callback.
+// fn may call `GetConnections` and `GetConnectionsByNamespace`.
 //
 // Do not perform long work inside fn: it runs on the server's dispatch goroutine
-// and delays accept of new connections, disconnects, and broadcasts until it returns.
+// and delays other Do calls, disconnect notifications and SyncBroadcaster
+// broadcasts until it returns.
 //
 // If async is true Do returns immediately; otherwise it blocks until every
-// connection has been processed.
+// connection has been processed. After `Close`, Do returns without calling fn.
 func (s *Server) Do(fn func(*Conn), async bool) {
+	if s.closed.Load() > 0 {
+		return
+	}
+
 	act := action{call: fn}
 	if !async {
 		// Buffered to cap 1 so the dispatch loop never blocks on a caller that
@@ -426,8 +586,14 @@ func (s *Server) Do(fn func(*Conn), async bool) {
 		act.done = make(chan struct{}, 1)
 	}
 
-	s.actions <- act
+	select {
+	case s.actions <- act:
+	case <-s.done:
+		return
+	}
+
 	if !async {
+		// the loop runs an accepted action to the end before it can see done.
 		<-act.done
 	}
 }
@@ -436,12 +602,12 @@ func publishMessages(c *Conn, msgs []Message) bool {
 	for _, msg := range msgs {
 		if msg.from == c.ID() {
 			// if the message is not supposed to return back to any connection with this ID.
-			return true
+			continue
 		}
 
 		// if "To" field is given then send to a specific connection.
 		if msg.To != "" && msg.To != c.ID() {
-			return true
+			continue
 		}
 
 		// c.Write may fail if the message is not supposed to end to this client
@@ -454,13 +620,19 @@ func publishMessages(c *Conn, msgs []Message) bool {
 	return true
 }
 
-func (s *Server) waitMessages(c *Conn) bool {
-	msgs, ok := s.broadcaster.waitUntilClosed(c.closeCh)
+// waitMessages waits for entry to be published, writes its messages to c and
+// returns the entry to wait on next. It returns nil when c is closed.
+func (s *Server) waitMessages(c *Conn, entry *broadcastEntry) *broadcastEntry {
+	msgs, next, ok := s.broadcaster.waitUntilClosed(entry, c.closeCh)
 	if !ok {
-		return false
+		return nil
 	}
 
-	return publishMessages(c, msgs)
+	if !publishMessages(c, msgs) {
+		return nil
+	}
+
+	return next
 }
 
 type stringerValue struct{ v string }
@@ -522,7 +694,14 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
 	}
 
 	if s.SyncBroadcaster {
-		s.broadcastMessages <- msgs
+		if s.closed.Load() > 0 {
+			return
+		}
+
+		select {
+		case s.broadcastMessages <- msgs:
+		case <-s.done:
+		}
 		return
 	}
 
@@ -534,7 +713,7 @@ func (s *Server) Broadcast(exceptSender fmt.Stringer, msgs ...Message) {
 // If msg.To is set, the reply comes from that specific connection. Otherwise Ask
 // returns the first reply received from any connection that handles the event.
 //
-// Always call Ask with a context that has a deadline (context.WithTimeout) — a
+// Always call Ask with a context that has a deadline (context.WithTimeout). A
 // connection that goes silent will otherwise pin this goroutine forever.
 //
 // When `StackExchange` is configured, the wait is routed through it so the reply
@@ -544,11 +723,17 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 		ctx = context.TODO()
 	}
 
-	msg.wait = genWait(false)
+	if s.closed.Load() > 0 {
+		return Message{}, ErrServerClosed
+	}
+
+	msg.wait = genWait(false) + "-" + s.uuid[:8]
 
 	if s.usesStackExchange() {
-		msg.wait = genWaitStackExchange(msg.wait)
-		return s.StackExchange.Ask(ctx, msg, msg.wait)
+		// the exchange waits on the clean token; the wire carries the marked one.
+		token := msg.wait
+		msg.wait = genWaitStackExchange(token)
+		return s.StackExchange.Ask(ctx, msg, token)
 	}
 
 	// Buffered to cap 1 so a replier never blocks if ctx fires before we read.
@@ -570,6 +755,8 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 	select {
 	case <-ctx.Done():
 		return Message{}, ctx.Err()
+	case <-s.done:
+		return Message{}, ErrServerClosed
 	case receive := <-ch:
 		return receive, receive.Err
 	}
@@ -579,17 +766,17 @@ func (s *Server) Ask(ctx context.Context, msg Message) (Message, error) {
 // all connected connections to a specific "namespace" on a specific time point.
 // Do not use this function frequently, it is not designed to be fast or cheap, use it for debugging or logging every 'x' time.
 //
-// Not thread safe.
+// It is safe for concurrent use, including from inside a `Do` callback.
 func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn {
 	conns := make(map[string]*NSConn)
 
-	s.mu.RLock()
-	for c := range s.connections {
+	// the namespace lookups run on a snapshot, so mu is never held together
+	// with a connection's own locks.
+	for _, c := range s.snapshot() {
 		if ns := c.Namespace(namespace); ns != nil {
 			conns[ns.Conn.ID()] = ns
 		}
 	}
-	s.mu.RUnlock()
 
 	return conns
 }
@@ -598,15 +785,13 @@ func (s *Server) GetConnectionsByNamespace(namespace string) map[string]*NSConn 
 // all connected connections to the server on a specific time point.
 // Do not use this function frequently, it is not designed to be fast or cheap, use it for debugging or logging every 'x' time.
 //
-// Not thread safe.
+// It is safe for concurrent use, including from inside a `Do` callback.
 func (s *Server) GetConnections() map[string]*Conn {
-	conns := make(map[string]*Conn)
-
-	s.mu.RLock()
-	for c := range s.connections {
+	snapshot := s.snapshot()
+	conns := make(map[string]*Conn, len(snapshot))
+	for _, c := range snapshot {
 		conns[c.ID()] = c
 	}
-	s.mu.RUnlock()
 
 	return conns
 }

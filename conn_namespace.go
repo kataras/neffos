@@ -50,37 +50,56 @@ func (ns *NSConn) String() string {
 // `ns.Conn.Server().Broadcast(nil, msgs...)` but reads more clearly inside an
 // event callback. Delivery is at-most-once; see Server.Broadcast for details.
 //
-// This is a server-side helper: calling it on a client-side NSConn panics.
+// This is a server-side helper: on a client-side NSConn it does nothing.
 func (ns *NSConn) Broadcast(msgs ...Message) {
+	if ns == nil || ns.Conn.IsClient() {
+		return
+	}
+
 	ns.Conn.server.Broadcast(nil, msgs...)
 }
 
 // BroadcastOthers sends msgs to every connection except this one. Equivalent to
 // `ns.Conn.Server().Broadcast(ns.Conn, msgs...)`.
 //
-// This is a server-side helper: calling it on a client-side NSConn panics.
+// This is a server-side helper: on a client-side NSConn it does nothing.
 func (ns *NSConn) BroadcastOthers(msgs ...Message) {
+	if ns == nil || ns.Conn.IsClient() {
+		return
+	}
+
 	ns.Conn.server.Broadcast(ns.Conn, msgs...)
 }
 
 // Emit method sends a message to the remote side
 // with its `Message.Namespace` filled to this specific namespace.
+// It is `Send(event, body) == nil`.
 func (ns *NSConn) Emit(event string, body []byte) bool {
-	if ns == nil {
-		return false
-	}
+	return ns.Send(event, body) == nil
+}
 
-	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body})
+// Send sends a message to the remote side with its `Message.Namespace`
+// filled to this specific namespace, and returns nil once it was handed off
+// to the socket. A nil NSConn returns ErrBadNamespace; see `Conn.Send` for
+// the other errors.
+func (ns *NSConn) Send(event string, body []byte) error {
+	return ns.send(Message{Event: event, Body: body})
 }
 
 // EmitBinary acts like `Emit` but it sets the `Message.SetBinary` to true
 // and sends the data as binary, the receiver's Message in javascript-side is Uint8Array.
 func (ns *NSConn) EmitBinary(event string, body []byte) bool {
+	return ns.send(Message{Event: event, Body: body, SetBinary: true}) == nil
+}
+
+// send fills msg.Namespace and sends msg through the connection.
+func (ns *NSConn) send(msg Message) error {
 	if ns == nil {
-		return false
+		return ErrBadNamespace
 	}
 
-	return ns.Conn.Write(Message{Namespace: ns.namespace, Event: event, Body: body, SetBinary: true})
+	msg.Namespace = ns.namespace
+	return ns.Conn.Send(msg)
 }
 
 // Ask method writes a message to the remote side and blocks until a response or an error received.
@@ -136,13 +155,16 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 		return nil
 	}
 
-	ns.roomsMutex.Lock()
-	defer ns.roomsMutex.Unlock()
+	// No lock is held while asking or firing events, so callbacks may read the
+	// namespace's rooms. A room left meanwhile is skipped.
+	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave, IsLocal: true}
+	for _, room := range ns.snapshotRooms() {
+		if ns.Room(room) == nil {
+			continue
+		}
 
-	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave, IsLocal: true, locked: true}
-	for room := range ns.rooms {
 		leaveMsg.Room = room
-		if err := ns.askRoomLeave(ctx, leaveMsg, false); err != nil {
+		if err := ns.askRoomLeave(ctx, leaveMsg); err != nil {
 			return err
 		}
 	}
@@ -150,21 +172,38 @@ func (ns *NSConn) LeaveAll(ctx context.Context) error {
 	return nil
 }
 
+// snapshotRooms returns the names of the joined rooms.
+func (ns *NSConn) snapshotRooms() []string {
+	ns.roomsMutex.RLock()
+	defer ns.roomsMutex.RUnlock()
+
+	names := make([]string, 0, len(ns.rooms))
+	for name := range ns.rooms {
+		names = append(names, name)
+	}
+	return names
+}
+
+// forceLeaveAll removes every joined room and then fires OnRoomLeave and
+// OnRoomLeft for each, without holding roomsMutex.
 func (ns *NSConn) forceLeaveAll(isLocal bool) {
 	ns.roomsMutex.Lock()
-	defer ns.roomsMutex.Unlock()
-
-	leaveMsg := Message{Namespace: ns.namespace, Event: OnRoomLeave, IsForced: true, IsLocal: isLocal}
+	rooms := make([]string, 0, len(ns.rooms))
 	for room := range ns.rooms {
-		leaveMsg.Room = room
-		ns.events.fireEvent(ns, leaveMsg)
+		rooms = append(rooms, room)
+	}
+	clear(ns.rooms)
+	ns.roomsMutex.Unlock()
 
-		delete(ns.rooms, room)
+	leaveMsg := Message{Namespace: ns.namespace, IsForced: true, IsLocal: isLocal}
+	for _, room := range rooms {
+		leaveMsg.Room = room
+
+		leaveMsg.Event = OnRoomLeave
+		ns.events.fireEvent(ns, leaveMsg)
 
 		leaveMsg.Event = OnRoomLeft
 		ns.events.fireEvent(ns, leaveMsg)
-
-		leaveMsg.Event = OnRoomLeave
 	}
 }
 
@@ -177,7 +216,7 @@ func (ns *NSConn) Disconnect(ctx context.Context) error {
 	return ns.Conn.askDisconnect(ctx, Message{
 		Namespace: ns.namespace,
 		Event:     OnNamespaceDisconnect,
-	}, true)
+	})
 }
 
 func (ns *NSConn) askRoomJoin(ctx context.Context, roomName string) (*Room, error) {
@@ -226,8 +265,7 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 	if !ok {
 		err := ns.events.fireEvent(ns, msg)
 		if err != nil {
-			msg.Err = err
-			ns.Conn.Write(msg)
+			ns.Conn.replyError(msg, err)
 			return
 		}
 		ns.roomsMutex.Lock()
@@ -241,20 +279,12 @@ func (ns *NSConn) replyRoomJoin(msg Message) {
 	ns.Conn.writeEmptyReply(msg.wait)
 }
 
-func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) error {
+func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message) error {
 	if ns == nil {
 		return nil
 	}
 
-	if lock {
-		ns.roomsMutex.RLock()
-	}
-	_, ok := ns.rooms[msg.Room]
-	if lock {
-		ns.roomsMutex.RUnlock()
-	}
-
-	if !ok {
+	if ns.Room(msg.Room) == nil {
 		return ErrBadRoom
 	}
 
@@ -269,15 +299,9 @@ func (ns *NSConn) askRoomLeave(ctx context.Context, msg Message, lock bool) erro
 		return err
 	}
 
-	if lock {
-		ns.roomsMutex.Lock()
-	}
-
+	ns.roomsMutex.Lock()
 	delete(ns.rooms, msg.Room)
-
-	if lock {
-		ns.roomsMutex.Unlock()
-	}
+	ns.roomsMutex.Unlock()
 
 	msg.Event = OnRoomLeft
 	ns.events.fireEvent(ns, msg)
@@ -314,8 +338,7 @@ func (ns *NSConn) replyRoomLeave(msg Message) {
 	// server-side, check for error on the local event first.
 	err := ns.events.fireEvent(ns, msg)
 	if err != nil {
-		msg.Err = err
-		ns.Conn.Write(msg)
+		ns.Conn.replyError(msg, err)
 		return
 	}
 

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,8 +94,9 @@ type Message struct {
 	// This field is not filled on sending/receiving.
 	IsNative bool
 
-	// Useful rarely internally on `Conn#Write` namespace and rooms checks, i.e `Conn#DisconnectAll` and `NSConn#RemoveAll`.
-	// If true then the writer's checks will not lock connectedNamespacesMutex or roomsMutex again. May be useful in the future, keep that solution.
+	// If true then the `Conn#Write` namespace and room checks do not lock connectedNamespacesMutex or roomsMutex,
+	// for a caller that already holds them. Nothing sets it today: `Conn#DisconnectAll` and `NSConn#LeaveAll`
+	// no longer write while holding those locks. May be useful in the future, keep that solution.
 	locked bool
 
 	// if server or client should write using Binary message or if the incoming message was readen as binary.
@@ -149,9 +151,10 @@ var (
 // If the "v" value is `MessageObjectMarshaler` then it returns the result of its `Marshal` method,
 // otherwise the DefaultMarshaler will be used instead.
 // Errors are pushed to the result, use the object's Marshal method to catch those when necessary.
+// A nil "v" gives a nil body.
 func Marshal(v any) []byte {
 	if v == nil {
-		panic("nil assigment")
+		return nil
 	}
 
 	var (
@@ -171,12 +174,16 @@ func Marshal(v any) []byte {
 	return body
 }
 
+// errUnmarshalNil is returned by Message.Unmarshal for a nil "outPtr".
+var errUnmarshalNil = errors.New("neffos: Unmarshal(nil)")
+
 // Unmarshal unmarshals this Message's body to the "outPtr".
 // The "outPtr" must be a pointer to a value that can customize its decoded value
 // by implementing the `MessageObjectUnmarshaler`, otherwise the `DefaultUnmarshaler` will be used instead.
+// A nil "outPtr" returns an error.
 func (m *Message) Unmarshal(outPtr any) error {
 	if outPtr == nil {
-		panic("nil assigment")
+		return errUnmarshalNil
 	}
 
 	if unmarshaler, ok := outPtr.(MessageObjectUnmarshaler); ok {
@@ -220,9 +227,14 @@ func (m *Message) ClearWait() bool {
 	return false
 }
 
+// waitSeq makes wait tokens unique within the process even when the clock
+// does not move between two calls.
+var waitSeq atomic.Uint64
+
+// genWait returns a new wait token: base36(UnixNano) + "-" + base36(sequence),
+// prefixed with '$' for client-side connections.
 func genWait(isClientConn bool) string {
-	now := time.Now().UnixNano()
-	wait := strconv.FormatInt(now, 10)
+	wait := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.FormatUint(waitSeq.Add(1), 36)
 
 	if isClientConn {
 		wait = string(waitComesFromClientPrefix) + wait
@@ -235,15 +247,15 @@ func genWait(isClientConn bool) string {
 // 	return string(waitIsConfirmationPrefix) + wait
 // }
 
+// genWaitStackExchange marks a wait token as routed through the stack exchange
+// by inserting '!' after its first character. Server-side deserialization
+// removes it again and sets Message.FromStackExchange.
 func genWaitStackExchange(wait string) string {
-	if len(wait) < 2 {
+	if wait == "" {
 		return ""
 	}
 
-	// This is the second special character.
-	// If found, it is removed on the deserialization
-	// and Message.FromStackExchange is set to true.
-	return string(wait[0]+waitComesFromStackExchange) + wait[1:]
+	return wait[:1] + string(waitComesFromStackExchange) + wait[1:]
 }
 
 var (
@@ -279,12 +291,9 @@ func serializeMessage(msg Message) (out []byte) {
 	if msg.IsNative && msg.wait == "" {
 		out = msg.Body
 	} else {
-		if msg.FromExplicit != "" {
-			if msg.wait != "" {
-				// this should never happen unless manual set of FromExplicit by end-developer which is forbidden by the higher level calls.
-				panic("msg.wait and msg.FromExplicit cannot work together")
-			}
-
+		// both share the first field; the wait token wins because a reply
+		// depends on it, while FromExplicit only filters the sender.
+		if msg.FromExplicit != "" && msg.wait == "" {
 			msg.wait = msg.FromExplicit
 		}
 		out = serializeOutput(msg.wait, escape(msg.Namespace), escape(msg.Room), escape(msg.Event), msg.Body, msg.Err, msg.isNoOp)
@@ -339,6 +348,14 @@ func serializeOutput(wait, namespace, room, event string,
 // and returns a neffos Message.
 // When allowNativeMessages only Body is filled and check about message format is skipped.
 func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages bool) Message {
+	return deserializeMessage(msgTyp, b, allowNativeMessages, shouldHandleOnlyNativeMessages, true)
+}
+
+// deserializeMessage is DeserializeMessage with control over the stack-exchange
+// marker: when stripMarker is true a marked wait token ("x!yz") loses its
+// marker and the message reports FromStackExchange; when false the token is
+// kept as it arrived, which is what a client must echo back.
+func deserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shouldHandleOnlyNativeMessages, stripMarker bool) Message {
 	wait, namespace, room, event, body, isNoOp, isInvalid, err := deserializeInput(b, allowNativeMessages, shouldHandleOnlyNativeMessages)
 
 	fromExplicit := ""
@@ -347,7 +364,7 @@ func DeserializeMessage(msgTyp MessageType, b []byte, allowNativeMessages, shoul
 		wait = ""
 	}
 
-	fromStackExchange := len(wait) > 2 && wait[1] == waitComesFromStackExchange
+	fromStackExchange := stripMarker && len(wait) > 2 && wait[1] == waitComesFromStackExchange
 	if fromStackExchange {
 		// remove the second special char, we need to reform it,
 		// this wait token is compared to the waiter side as it's without the information about stackexchnage.

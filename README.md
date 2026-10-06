@@ -2,14 +2,15 @@
 
 [![neffos chat example](https://github.com/neffos-contrib/bootstrap-chat/raw/master/screenshot.png)](https://github.com/neffos-contrib/bootstrap-chat)
 
-[![build status](https://img.shields.io/github/actions/workflow/status/kataras/neffos/ci.yml?style=for-the-badge)](https://github.com/kataras/neffos/actions) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/neffos)<!--[![godocs](https://img.shields.io/badge/go-%20docs-488AC7.svg?style=for-the-badge)](https://godoc.org/github.com/kataras/neffos)--> [![view examples](https://img.shields.io/badge/learn%20by-examples-0077b3.svg?style=for-the-badge)](https://github.com/kataras/neffos/tree/master/_examples) [![chat](https://img.shields.io/gitter/room/neffos-framework/community.svg?color=blue&logo=gitter&style=for-the-badge)](https://gitter.im/neffos-framework/community) [![frontend pkg](https://img.shields.io/badge/JS%20-client-BDB76B.svg?style=for-the-badge)](https://github.com/kataras/neffos.js)
+[![build status](https://img.shields.io/github/actions/workflow/status/kataras/neffos/ci.yml?style=for-the-badge)](https://github.com/kataras/neffos/actions) [![report card](https://img.shields.io/badge/report%20card-a%2B-ff3333.svg?style=for-the-badge)](https://goreportcard.com/report/github.com/kataras/neffos) [![pkg.go.dev](https://img.shields.io/badge/go-reference-488AC7.svg?style=for-the-badge)](https://pkg.go.dev/github.com/kataras/neffos) [![view examples](https://img.shields.io/badge/learn%20by-examples-0077b3.svg?style=for-the-badge)](https://github.com/kataras/neffos/tree/master/_examples) [![frontend pkg](https://img.shields.io/badge/JS%20-client-BDB76B.svg?style=for-the-badge)](https://github.com/kataras/neffos.js)
 
 ## About neffos
 
-Neffos is a cross-platform real-time framework with expressive, elegant API written in [Go](https://go.dev). Neffos takes the pain out of development by easing common tasks used in real-time backend and frontend applications such as:
+Neffos is a cross-platform real-time framework with an expressive, elegant API written in [Go](https://go.dev). Neffos eases common tasks needed in real-time backend and frontend applications, such as:
 
-- Scale-out using redis or nats[*](_examples/scale-out)
+- Scale-out using redis or nats[*](_examples/07-scale-out), with `StackExchangeCloser` to release it on shutdown and `NSConn.Broadcast` for a same-server send
 - Adaptive request upgradation and server dialing
+- Three backends: gorilla, gobwas, coder
 - Acknowledgements
 - Namespaces
 - Rooms
@@ -18,10 +19,20 @@ Neffos is a cross-platform real-time framework with expressive, elegant API writ
 - Request-Response architecture
 - Error Awareness
 - Asynchronous Broadcast
+- Heartbeat, close status codes and a message size limit
+- Graceful shutdown
 - Timeouts
 - Encoding
-- Reconnection
-- Modern neffos API client for Browsers, Nodejs[*](https://github.com/kataras/neffos.js) and Go
+- Reconnection (neffos.js)
+- Modern neffos API client for Browsers, Node.js[*](https://github.com/kataras/neffos.js) and Go
+
+## Installation
+
+Go 1.26 or later is required.
+
+```sh
+go get github.com/kataras/neffos@latest
+```
 
 ## Learning neffos
 
@@ -44,37 +55,25 @@ func runServer() {
 
         t, err := time.Parse("01-02-2006", date)
         if err != nil {
-            if n := ns.Conn.Increment("tries"); n >= 3 && n%3 == 0 {
-                // Return custom error text to the client.
-                return fmt.Errorf("Why not try this one? 06-24-2019")
-            } else if n >= 6 && n%2 == 0 {
-                // Fire the "notify" client event.
-                ns.Emit("notify", []byte("What are you doing?"))
-            }
             // Return the parse error back to the client.
             return err
         }
 
-        weekday := t.Weekday()
-
-        if weekday == time.Saturday || weekday == time.Sunday {
-            return neffos.Reply([]byte("day off"))
+        if t.Weekday() == time.Saturday || t.Weekday() == time.Sunday {
+            // Fire the "notify" client event instead of replying.
+            return ns.Send("notify", []byte("day off"))
         }
 
         // Reply back to the client.
-        responseText := fmt.Sprintf("it's %s, do your job.", weekday)
+        responseText := fmt.Sprintf("it is %s, do your job.", t.Weekday())
         return neffos.Reply([]byte(responseText))
     })
 
-    websocketServer := neffos.New(gorilla.DefaultUpgrader, events)
-
-    // Fire the "/v1:notify" event to all clients after server's 1 minute.
-    time.AfterFunc(1*time.Minute, func() {
-        websocketServer.Broadcast(nil, neffos.Message{
-            Namespace: "/v1",
-            Event:     "notify",
-            Body:      []byte("server is up and running for 1 minute"),
-        })
+    // WithTimeout adds a read timeout and a heartbeat on top of the namespaces.
+    websocketServer := neffos.New(gorilla.DefaultUpgrader, neffos.WithTimeout{
+        ReadTimeout:  60 * time.Second,
+        PingInterval: 20 * time.Second,
+        Namespaces:   events,
     })
 
     router := http.NewServeMux()
@@ -118,7 +117,7 @@ func runClient() {
         var date string
         fmt.Scanf("%s", &date)
 
-        // Send to the server and wait reply to this message.
+        // Send to the server and wait for a reply to this message.
         response, err := c.Ask(ctx, "workday", []byte(date))
         if err != nil {
             if neffos.IsCloseError(err) {
@@ -135,13 +134,24 @@ func runClient() {
         }
 
         // >> 06-29-2019
-        // it's a day off!
+        // it is a day off!
         //
         // >> 06-24-2019
-        // it's Monday, do your job.
+        // it is Monday, do your job.
         fmt.Println(string(response.Body))
     }
 }
+```
+
+## Browser Client
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/neffos.js@0.3/dist/neffos.global.min.js"></script>
+<script>(async () => {
+  const conn = await neffos.dial("ws://localhost:8080", { "/v1": { notify: (ns, msg) => console.log(msg.Body) } });
+  const nsConn = await conn.connect("/v1");
+  await nsConn.ask("workday", "06-24-2019");
+})();</script>
 ```
 
 ## Javascript Client
@@ -150,15 +160,13 @@ Navigate to: <https://github.com/kataras/neffos.js>
 
 </details>
 
-Neffos contains extensive and thorough **[wiki](https://github.com/kataras/neffos/wiki)** making it easy to get started with the framework.
+Neffos has an extensive and thorough **[wiki](https://github.com/kataras/neffos/wiki)**, which makes it easy to get started with the framework.
 
-For a more detailed technical documentation you can head over to our [godocs](https://godoc.org/github.com/kataras/neffos). And for executable code you can always visit the [_examples](_examples/) repository's subdirectory.
+For detailed technical documentation, head over to [pkg.go.dev](https://pkg.go.dev/github.com/kataras/neffos). For executable code, visit the [_examples](_examples/) directory.
 
-### Do you like to read while traveling?
+## What's new
 
-You can [download](https://www.iris-go.com/neffos-book.pdf) a PDF version of the **E-Book** today and be participated in the development of neffos.
-
-[![https://iris-go.com/images/neffos-book-overview.png](https://iris-go.com/images/neffos-book-overview.png)](https://www.iris-go.com/neffos-book.pdf)
+See [HISTORY.md](HISTORY.md) for the full changelog. If you are upgrading from a v0.0.x release, read the migration guide on the wiki: [Migrating-to-v0.1.0](https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0).
 
 ## Contributing
 

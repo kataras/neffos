@@ -110,12 +110,12 @@ func (s *stackExchangeWrapper) Publish(msgs []Message) bool {
 
 func (s *stackExchangeWrapper) Ask(ctx context.Context, msg Message, token string) (Message, error) {
 	// we run Ask and if one is failing then we keep trying for all stackexchanges.
-	msg, err := s.parent.Ask(ctx, msg, token)
+	reply, err := s.parent.Ask(ctx, msg, token)
 	if err != nil {
-		msg, err = s.current.Ask(ctx, msg, token)
+		reply, err = s.current.Ask(ctx, msg, token)
 	}
 
-	return msg, err
+	return reply, err
 }
 
 func (s *stackExchangeWrapper) NotifyAsk(msg Message, token string) error {

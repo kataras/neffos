@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>neffos scale-out chat</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }
+  #log { border-top: 1px solid #ccc; margin-top: 1rem; padding-top: .5rem; white-space: pre-wrap; }
+  .me { color: #a33; }
+</style>
+</head>
+<body>
+<p>Connected to <strong id="server"></strong>. Type a line, or <code>/msg bob text</code> for a private message.</p>
+<form id="form">
+  <input id="text" autocomplete="off" disabled>
+  <button disabled>Send</button>
+</form>
+<div id="log"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/neffos.js@0.3/dist/neffos.global.min.js"></script>
+<script>
+  const log = document.getElementById("log");
+  const form = document.getElementById("form");
+  const text = document.getElementById("text");
+  document.getElementById("server").textContent = location.host;
+
+  function show(line, cls) {
+    const div = document.createElement("div");
+    div.textContent = line;
+    if (cls) div.className = cls;
+    log.prepend(div);
+  }
+
+  async function main() {
+    // Browsers cannot set handshake headers, so the name travels as ?name=.
+    const name = prompt("Your name:") || "guest";
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const url = scheme + "://" + location.host + "/ws?name=" + encodeURIComponent(name);
+
+    const conn = await neffos.dial(url, {
+      chat: {
+        Chat: (nsConn, msg) => show(msg.text()),
+        Notice: (nsConn, msg) => show("* " + msg.text()),
+        Private: (nsConn, msg) => show("(private) " + msg.text()),
+      },
+    }, { reconnect: 2000 });
+
+    const chat = await conn.connect("chat");
+    show("you are " + name + " on " + location.host);
+    for (const el of form.elements) el.disabled = false;
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const line = text.value.trim();
+      text.value = "";
+      if (!line) return;
+      if (line.startsWith("/msg ")) {
+        chat.emit("Private", line.slice(5));
+      } else {
+        chat.emit("Chat", line);
+      }
+      show("me: " + line, "me");
+    };
+  }
+
+  main().catch((err) => show("error: " + err));
+</script>
+</body>
+</html>

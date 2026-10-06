@@ -18,7 +18,7 @@ var debugPrinter any
 // Logf(string, ...any) or
 // Printf(string, ...any)
 //
-// If EnableDebug is called but the "printer" value is nil
+// If EnableDebug is called but the "printer" value is nil, or it has none of these methods,
 // then neffos will print debug messages through a new log.Logger prefixed with "| neffos |".
 //
 // Note that neffos, currently, uses debug mode only on the build state of the events.
@@ -31,8 +31,10 @@ func EnableDebug(printer any) {
 		return
 	}
 
-	if _, boolean := printer.(bool); boolean {
-		// if for some reason by accident EnableDebug(true) instead of a printer value.
+	switch printer.(type) {
+	case debugfer, logfer, printfer:
+	default:
+		// nil, EnableDebug(true) by accident, or a value that cannot print.
 		printer = nil
 	}
 	if printer == nil {
@@ -85,7 +87,8 @@ func Debugf(format string, args ...any) {
 	case printfer:
 		printer.Printf(format, args...)
 	default:
-		panic("unsported debug printer")
+		// unreachable through EnableDebug, which only stores supported printers.
+		log.Printf(format, args...)
 	}
 }
 

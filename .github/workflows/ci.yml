@@ -14,7 +14,21 @@ jobs:
 
     strategy:
       matrix:
-        go_version: [1.26.x]
+        go_version: [1.26.x, 1.27.x]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      nats:
+        image: nats:2-alpine
+        ports: ["4222:4222"]
+
+    env:
+      NEFFOS_REDIS_ADDR: 127.0.0.1:6379
+      NEFFOS_NATS_URL: nats://127.0.0.1:4222
+
     steps:
 
     - name: Set up Go 1.x
@@ -34,13 +48,9 @@ jobs:
     - name: Test (with race detector)
       run: go test -v -race -count=1 ./...
 
-    - name: Setup examples for testing
-      run: ./.github/scripts/setup_examples_test.bash
-
-    - name: Test examples
-      continue-on-error: true
+    - name: Vet and test examples
       working-directory: _examples
-      run: go test -v -mod=mod -cover -race ./...
+      run: go vet ./... && go test -count=1 ./...
 
   lint:
     name: Static Analysis
@@ -63,7 +73,7 @@ jobs:
 
     - name: gofmt check
       run: |
-        unformatted=$(gofmt -l . | grep -v '^_examples/')
+        unformatted=$(gofmt -l .)
         if [ -n "$unformatted" ]; then
           echo "::error::gofmt found unformatted files:"
           echo "$unformatted"

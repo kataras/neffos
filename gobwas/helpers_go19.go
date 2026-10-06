@@ -1,6 +1,3 @@
-//go:build go1.9
-// +build go1.9
-
 package gobwas
 
 import gobwas "github.com/gobwas/ws"

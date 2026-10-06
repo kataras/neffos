@@ -79,12 +79,26 @@ func (nss Namespaces) On(namespace, eventName string, msgHandler MessageHandlerF
 
 // WithTimeout completes the `ConnHandler` interface.
 // Can be used to register namespaces and events or just events on an empty namespace
-// with Read and Write timeouts.
+// with Read and Write timeouts, a heartbeat and a message size cap.
 //
 // See `New` and `Dial`.
 type WithTimeout struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// PingInterval, when above zero, makes the connection ping the remote
+	// side every PingInterval and close if no pong arrives within the same
+	// interval. It needs a Socket that implements SocketPinger; with any
+	// other Socket it does nothing. Pongs are handled on the reader
+	// goroutine, so an event callback that runs longer than PingInterval
+	// delays them and the heartbeat then closes the connection with a timeout.
+	PingInterval time.Duration
+	// MaxMessageSize, when above zero, caps the size in bytes of one
+	// incoming message. A bigger message closes the connection with
+	// CloseMessageTooBig, and Conn.Err reports ErrMessageTooBig. It needs a
+	// Socket that implements SocketReadLimiter; with any other Socket it
+	// does nothing.
+	MaxMessageSize int64
 
 	Namespaces Namespaces
 	Events     Events
@@ -96,18 +110,55 @@ func (t WithTimeout) GetNamespaces() Namespaces {
 	return JoinConnHandlers(t.Namespaces, t.Events).GetNamespaces()
 }
 
-func getTimeouts(h ConnHandler) (readTimeout time.Duration, writeTimeout time.Duration) {
-	if t, ok := h.(WithTimeout); ok {
-		readTimeout = t.ReadTimeout
-		writeTimeout = t.WriteTimeout
-	}
+// connSettings are the per-connection settings a ConnHandler can carry.
+type connSettings struct {
+	readTimeout, writeTimeout time.Duration
+	pingInterval              time.Duration
+	maxMessageSize            int64
+}
 
-	if s, ok := h.(*Struct); ok {
-		readTimeout = s.readTimeout
-		writeTimeout = s.writeTimeout
-	}
+func (s connSettings) isZero() bool {
+	return s == connSettings{}
+}
 
-	return
+// merge returns s with every non-zero field of other copied over it.
+func (s connSettings) merge(other connSettings) connSettings {
+	if other.readTimeout != 0 {
+		s.readTimeout = other.readTimeout
+	}
+	if other.writeTimeout != 0 {
+		s.writeTimeout = other.writeTimeout
+	}
+	if other.pingInterval != 0 {
+		s.pingInterval = other.pingInterval
+	}
+	if other.maxMessageSize != 0 {
+		s.maxMessageSize = other.maxMessageSize
+	}
+	return s
+}
+
+// getSettings returns the settings carried by a WithTimeout or a *Struct
+// handler, or zero settings for any other handler.
+func getSettings(h ConnHandler) connSettings {
+	switch t := h.(type) {
+	case WithTimeout:
+		return connSettings{
+			readTimeout:    t.ReadTimeout,
+			writeTimeout:   t.WriteTimeout,
+			pingInterval:   t.PingInterval,
+			maxMessageSize: t.MaxMessageSize,
+		}
+	case *Struct:
+		return connSettings{
+			readTimeout:    t.readTimeout,
+			writeTimeout:   t.writeTimeout,
+			pingInterval:   t.pingInterval,
+			maxMessageSize: t.maxMessageSize,
+		}
+	default:
+		return connSettings{}
+	}
 }
 
 // EventMatcherFunc is a type of which a Struct matches the methods with neffos events.
@@ -124,6 +175,8 @@ type Struct struct {
 	// then it matches the events based on the result string or false if this method shouldn't register as event.
 	eventMatcher              EventMatcherFunc
 	readTimeout, writeTimeout time.Duration
+	pingInterval              time.Duration
+	maxMessageSize            int64
 
 	// This field is set when external dependency injection system is used.
 	injector StructInjector
@@ -179,6 +232,28 @@ func (s *Struct) SetTimeouts(read, write time.Duration) *Struct {
 	s.readTimeout = read
 	s.writeTimeout = write
 
+	return s
+}
+
+// SetPingInterval sets the heartbeat interval. Above zero, the connection
+// pings the remote side every d and closes if no pong arrives within d.
+// It needs a Socket that implements SocketPinger.
+// See `WithTimeout.PingInterval`.
+//
+// Defaults to 0, no heartbeat.
+func (s *Struct) SetPingInterval(d time.Duration) *Struct {
+	s.pingInterval = d
+	return s
+}
+
+// SetMaxMessageSize caps the size in bytes of one incoming message. Above
+// zero, a bigger message closes the connection with CloseMessageTooBig. It
+// needs a Socket that implements SocketReadLimiter.
+// See `WithTimeout.MaxMessageSize`.
+//
+// Defaults to 0, no cap except the one of the `Upgrader` or `Dialer`.
+func (s *Struct) SetMaxMessageSize(n int64) *Struct {
+	s.maxMessageSize = n
 	return s
 }
 
@@ -286,10 +361,18 @@ func (s *Struct) GetNamespaces() Namespaces { // completes the `ConnHandler` int
 //
 // Later handlers override earlier ones on event-name collisions within the
 // same namespace.
+//
+// The settings of `WithTimeout` and `Struct` inputs (timeouts, PingInterval,
+// MaxMessageSize) are kept: the result is then a `WithTimeout`, and a later
+// non-zero setting overrides an earlier one. Without any setting the result
+// is a `Namespaces`.
 func JoinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 	namespaces := Namespaces{}
+	var settings connSettings
 
 	for _, h := range connHandlers {
+		settings = settings.merge(getSettings(h))
+
 		for namespace, events := range h.GetNamespaces() {
 			if events == nil {
 				continue
@@ -303,5 +386,15 @@ func JoinConnHandlers(connHandlers ...ConnHandler) ConnHandler {
 		}
 	}
 
-	return namespaces
+	if settings.isZero() {
+		return namespaces
+	}
+
+	return WithTimeout{
+		ReadTimeout:    settings.readTimeout,
+		WriteTimeout:   settings.writeTimeout,
+		PingInterval:   settings.pingInterval,
+		MaxMessageSize: settings.maxMessageSize,
+		Namespaces:     namespaces,
+	}
 }

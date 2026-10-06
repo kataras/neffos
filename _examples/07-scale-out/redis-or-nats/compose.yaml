@@ -1,0 +1,34 @@
+# Two neffos servers sharing one Redis:
+#
+#   docker compose up --build
+#
+# then open http://localhost:8080 and http://localhost:9090 and chat between them.
+# The build context is the repository root, because _examples/go.mod replaces
+# github.com/kataras/neffos with the code in that root.
+services:
+  redis:
+    image: redis:7-alpine
+
+  app1:
+    build:
+      context: ../../..
+      dockerfile: _examples/07-scale-out/redis-or-nats/Dockerfile
+    command: ["-addr", ":8080", "-exchange", "redis", "server"]
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+
+  app2:
+    build:
+      context: ../../..
+      dockerfile: _examples/07-scale-out/redis-or-nats/Dockerfile
+    command: ["-addr", ":9090", "-exchange", "redis", "server"]
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "9090:9090"
+    depends_on:
+      - redis

@@ -36,6 +36,16 @@ func (c *Client) Close() {
 	c.conn.Close()
 }
 
+// Conn returns the client-side connection. Use it to read `Conn.Err` after
+// NotifyClose fires, or to call `Conn.Terminate` and `Conn.Send`.
+func (c *Client) Conn() *Conn {
+	if c == nil {
+		return nil
+	}
+
+	return c.conn
+}
+
 // WaitServerConnect method blocks until server manually calls the connection's `Connect`
 // on the `Server#OnConnected` event.
 //
@@ -85,15 +95,15 @@ func Dial(ctx context.Context, dial Dialer, url string, connHandler ConnHandler)
 	}
 
 	c := newConn(underline, connHandler.GetNamespaces())
-	readTimeout, writeTimeout := getTimeouts(connHandler)
-	c.readTimeout = readTimeout
-	c.writeTimeout = writeTimeout
+	c.applySettings(getSettings(connHandler))
 
 	go c.startReader()
 
 	if err = c.sendClientACK(); err != nil {
 		return nil, err
 	}
+
+	c.startHeartbeat()
 
 	return &Client{conn: c, ID: c.id, NotifyClose: c.closeCh}, nil
 }

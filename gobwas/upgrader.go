@@ -1,6 +1,7 @@
 package gobwas
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/kataras/neffos"
@@ -15,11 +16,22 @@ var DefaultUpgrader = Upgrader(gobwas.HTTPUpgrader{})
 // Should be used on `neffos.New` to construct the neffos server.
 func Upgrader(upgrader gobwas.HTTPUpgrader) neffos.Upgrader {
 	return func(w http.ResponseWriter, r *http.Request) (neffos.Socket, error) {
-		underline, _, _, err := upgrader.Upgrade(r, w)
+		underline, rw, _, err := upgrader.Upgrade(r, w)
 		if err != nil {
 			return nil, err
 		}
 
-		return newSocket(underline, r, false), nil
+		s := newSocket(underline, r, false)
+
+		// net/http may have read past the handshake already, so the first
+		// frames a client sent right behind its request can sit in this
+		// buffer. Read them before going back to the connection.
+		if rw != nil {
+			if n := rw.Reader.Buffered(); n > 0 {
+				s.reader.Source = io.MultiReader(io.LimitReader(rw.Reader, int64(n)), underline)
+			}
+		}
+
+		return s, nil
 	}
 }

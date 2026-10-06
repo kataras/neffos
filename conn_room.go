@@ -30,12 +30,24 @@ func (r *Room) String() string {
 
 // Emit method sends a message to the remote side with its `Message.Room` filled to this specific room
 // and `Message.Namespace` to the underline `NSConn`'s namespace.
+// It is `Send(event, body) == nil`.
 func (r *Room) Emit(event string, body []byte) bool {
-	return r.NSConn.Conn.Write(Message{
-		Namespace: r.NSConn.namespace,
-		Room:      r.Name,
-		Event:     event,
-		Body:      body,
+	return r.Send(event, body) == nil
+}
+
+// Send sends a message to the remote side with its `Message.Room` filled to
+// this specific room and `Message.Namespace` to the underline `NSConn`'s
+// namespace, and returns nil once it was handed off to the socket. A nil Room
+// returns ErrBadRoom; see `Conn.Send` for the other errors.
+func (r *Room) Send(event string, body []byte) error {
+	if r == nil {
+		return ErrBadRoom
+	}
+
+	return r.NSConn.send(Message{
+		Room:  r.Name,
+		Event: event,
+		Body:  body,
 	})
 }
 
@@ -46,5 +58,5 @@ func (r *Room) Leave(ctx context.Context) error {
 		Namespace: r.NSConn.namespace,
 		Room:      r.Name,
 		Event:     OnRoomLeave,
-	}, true)
+	})
 }

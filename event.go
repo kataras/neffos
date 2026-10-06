@@ -1,12 +1,13 @@
 package neffos
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"strings"
+	"unicode/utf8"
 )
 
 // MessageHandlerFunc is the definition type of the events' callback.
@@ -15,7 +16,7 @@ import (
 // See examples for more.
 type MessageHandlerFunc func(*NSConn, Message) error
 
-var (
+const (
 	// OnNamespaceConnect is the event name which its callback is fired right before namespace connect,
 	// if non-nil error then the remote connection's `Conn.Connect` will fail and send that error text.
 	// Connection is not ready to emit data to the namespace.
@@ -59,14 +60,99 @@ func IsSystemEvent(event string) bool {
 }
 
 // CloseError can be used to send and close a remote connection in the event callback's return statement.
+//
+// Code is the close code. Reason is a human-readable explanation, used as the
+// error text when there is no underlying error. A literal such as
+// CloseError{Code: 1008} is valid.
 type CloseError struct {
 	error
-	Code int
+	Code   int
+	Reason string
 }
 
+// Error returns "[Code] text", where text is the underlying error's message
+// or, without one, the Reason.
 func (err CloseError) Error() string {
-	return fmt.Sprintf("[%d] %s", err.Code, err.error.Error())
+	if err.error != nil {
+		return fmt.Sprintf("[%d] %s", err.Code, err.error.Error())
+	}
+
+	return fmt.Sprintf("[%d] %s", err.Code, err.Reason)
 }
+
+// Unwrap returns the underlying error, if any, so errors.Is and errors.As
+// can see through a CloseError.
+func (err CloseError) Unwrap() error {
+	return err.error
+}
+
+// Close status codes from RFC 6455 section 7.4 and the IANA registry. Pass
+// them to Conn.Terminate or return them in a CloseError, and compare them
+// with the result of CloseStatus.
+const (
+	CloseNormalClosure           = 1000
+	CloseGoingAway               = 1001
+	CloseProtocolError           = 1002
+	CloseUnsupportedData         = 1003
+	CloseNoStatusReceived        = 1005
+	CloseAbnormalClosure         = 1006
+	CloseInvalidFramePayloadData = 1007
+	ClosePolicyViolation         = 1008
+	CloseMessageTooBig           = 1009
+	CloseMandatoryExtension      = 1010
+	CloseInternalServerErr       = 1011
+	CloseServiceRestart          = 1012
+	CloseTryAgainLater           = 1013
+	CloseTLSHandshake            = 1015
+)
+
+// CloseStatus returns the close code of err when err is or wraps a
+// CloseError, and -1 otherwise.
+func CloseStatus(err error) int {
+	if ce, ok := errors.AsType[CloseError](err); ok {
+		return ce.Code
+	}
+
+	return -1
+}
+
+// maxCloseReasonLen is the longest close reason that fits in a close frame:
+// 125 bytes of control frame payload minus the 2-byte code.
+const maxCloseReasonLen = 123
+
+// closeFrame returns the code and reason to send in a close frame for err.
+// A CloseError gives its own code and its Reason, or its underlying error's
+// text when Reason is empty. Any other error closes normally with no reason.
+// The reason is cut to maxCloseReasonLen bytes on a UTF-8 boundary.
+func closeFrame(err error) (int, string) {
+	ce, ok := errors.AsType[CloseError](err)
+	if !ok {
+		return CloseNormalClosure, ""
+	}
+
+	reason := ce.Reason
+	if reason == "" && ce.error != nil {
+		reason = ce.error.Error()
+	}
+
+	return ce.Code, truncateCloseReason(reason)
+}
+
+func truncateCloseReason(reason string) string {
+	if len(reason) <= maxCloseReasonLen {
+		return reason
+	}
+
+	n := maxCloseReasonLen
+	for n > 0 && !utf8.RuneStart(reason[n]) {
+		n--
+	}
+	return reason[:n]
+}
+
+// ErrMessageTooBig is the error Conn.Err reports after the remote side sent a
+// message bigger than WithTimeout.MaxMessageSize.
+var ErrMessageTooBig = errors.New("message too big")
 
 // IsDisconnectError reports whether the "err" is a timeout or a closed connection error.
 func IsDisconnectError(err error) bool {
@@ -96,33 +182,34 @@ func IsCloseError(err error) bool {
 		return true
 	}
 
-	netErr, ok := errors.AsType[*net.OpError](err)
-	if !ok {
-		return false
-	}
-	if netErr.Err == nil {
-		return false
-	}
-
-	if _, ok := errors.AsType[*os.SyscallError](netErr.Err); ok {
+	// "use of closed network connection", wrapped or not.
+	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
 
-	return strings.HasSuffix(err.Error(), "use of closed network connection")
+	netErr, ok := errors.AsType[*net.OpError](err)
+	if !ok || netErr.Err == nil {
+		return false
+	}
+
+	_, ok = errors.AsType[*os.SyscallError](netErr.Err)
+	return ok
 }
 
-// IsTimeoutError reports whether the "err" is caused by a defined timeout.
+// IsTimeoutError reports whether the "err" is caused by a defined timeout:
+// a net.Error whose Timeout method reports true, os.ErrDeadlineExceeded or
+// context.DeadlineExceeded, wrapped or not.
 func IsTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	netErr, ok := errors.AsType[*net.OpError](err)
-	if !ok {
-		return false
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
-	// poll.TimeoutError is the /internal/poll of the go language itself, we can't use it directly.
-	return netErr.Timeout()
+
+	netErr, ok := errors.AsType[net.Error](err)
+	return ok && netErr.Timeout()
 }
 
 type reply struct {

@@ -23,7 +23,7 @@ func TestConnect(t *testing.T) {
 		emptyEvents                    = neffos.Events{}
 	)
 
-	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{
+	ts := newTestServers(t, neffos.Namespaces{
 		"":           emptyEvents,
 		namespace:    emptyEvents,
 		onlyOnServer: emptyEvents,
@@ -34,15 +34,18 @@ func TestConnect(t *testing.T) {
 		},
 		namespaceThatShouldErrOnClient: emptyEvents,
 	})
-	defer teardownServer()
 
-	err := runTestClient("localhost:8080", neffos.Namespaces{
+	ts.dial(t, neffos.Namespaces{
 		"":           emptyEvents,
 		namespace:    emptyEvents,
 		onlyOnClient: emptyEvents,
 		namespaceThatShouldErrOnServer: neffos.Events{
 			neffos.OnNamespaceConnected: func(c *neffos.NSConn, msg neffos.Message) error {
-				t.Fatalf("%s namespace shouldn't be accessible to the client to connect", namespaceThatShouldErrOnServer)
+				// Must never fire: the server rejects this namespace, so the
+				// failure should surface at the `client.Connect` call below,
+				// not here. This closure runs on the connection's own
+				// goroutine, so t.Error (not t.Fatal) is required.
+				t.Errorf("%s namespace shouldn't be accessible to the client to connect", namespaceThatShouldErrOnServer)
 				return nil
 			},
 		},
@@ -52,7 +55,7 @@ func TestConnect(t *testing.T) {
 			},
 		},
 	},
-		func(dialer string, client *neffos.Client) {
+		func(backend string, client *neffos.Client) {
 			defer client.Close()
 
 			// should success, empty namespace naming is allowed and it's defined on both server and client-side.
@@ -87,10 +90,7 @@ func TestConnect(t *testing.T) {
 				t.Fatalf("%s namespace connect should give a local event's error by the client of the neffos.ErrBadNamespace but got: %v", namespaceThatShouldErrOnServer, err)
 			}
 
-		})()
-	if err != nil {
-		t.Fatal(err)
-	}
+		})
 }
 
 func TestAsk(t *testing.T) {
@@ -114,14 +114,13 @@ func TestAsk(t *testing.T) {
 		}
 	}
 
-	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+	ts := newTestServers(t, neffos.Namespaces{namespace: neffos.Events{
 		pingEvent: func(c *neffos.NSConn, msg neffos.Message) error {
 			// c.Emit("event", pongMessage)
 			return neffos.Reply(pongMessage) // changes only body; ns,event remains.
 		}}})
-	defer teardownServer()
 
-	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: neffos.Events{}}, func(dialer string, client *neffos.Client) {
+	ts.dial(t, neffos.Namespaces{namespace: neffos.Events{}}, func(backend string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(context.TODO(), namespace)
@@ -134,18 +133,15 @@ func TestAsk(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			testMessage(dialer, i, msg)
+			testMessage(backend, i, msg)
 		}
 
 		msg, err := c.Ask(context.TODO(), pingEvent, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		testMessage(dialer, -1, msg)
-	})()
-	if err != nil {
-		t.Fatal(err)
-	}
+		testMessage(backend, -1, msg)
+	})
 }
 func TestOnAnyEvent(t *testing.T) {
 	var (
@@ -162,12 +158,15 @@ func TestOnAnyEvent(t *testing.T) {
 				msg.Event != expectedMessage.Event ||
 				!bytes.Equal(msg.Body, expectedMessage.Body) {
 
-				t.Fatalf("expected message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+				// testMessage also runs on the client connection's own
+				// goroutine (via the registered event handler below), so it
+				// must use t.Error, not t.Fatal.
+				t.Errorf("expected message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
 			}
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+	ts := newTestServers(t, neffos.Namespaces{namespace: neffos.Events{
 		neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
 			if neffos.IsSystemEvent(msg.Event) { // skip connect/disconnect messages.
 				return nil
@@ -175,16 +174,15 @@ func TestOnAnyEvent(t *testing.T) {
 
 			return neffos.Reply(msg.Body)
 		}}})
-	defer teardownServer()
 
-	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: neffos.Events{
+	ts.dial(t, neffos.Namespaces{namespace: neffos.Events{
 		expectedMessage.Event: func(c *neffos.NSConn, msg neffos.Message) error {
 			defer wg.Done()
 			testMessage(msg)
 
 			return nil
 		},
-	}}, func(dialer string, client *neffos.Client) {
+	}}, func(backend string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(context.TODO(), namespace)
@@ -201,10 +199,7 @@ func TestOnAnyEvent(t *testing.T) {
 			t.Fatal(err)
 		}
 		testMessage(msg)
-	})()
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 }
 
 func TestOnNativeMessageAndMessageError(t *testing.T) {
@@ -215,6 +210,8 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 		eventErrorText                 = "this event will give error by server"
 		nativeMessage                  = []byte("this is a native/raw websocket message")
 		events                         = neffos.Events{
+			// Runs on the connection's own goroutine (triggered by an
+			// incoming native message), so it must use t.Error, not t.Fatal.
 			neffos.OnNativeMessage: func(c *neffos.NSConn, msg neffos.Message) error {
 				defer wg.Done()
 
@@ -225,7 +222,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 				}
 
 				if !reflect.DeepEqual(expectedMessage, msg) {
-					t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+					t.Errorf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
 				}
 
 				return nil
@@ -239,28 +236,28 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 				return errors.New(eventErrorText)
 			},
 		})
-	teardownServer := runTestServer("localhost:8080", serverHandler)
-	defer teardownServer()
+	ts := newTestServers(t, serverHandler)
 
 	clientHandler := neffos.JoinConnHandlers(neffos.Namespaces{namespace: events},
 		neffos.Events{
+			// Runs on the client connection's own goroutine (triggered by the
+			// server's error reply), so it must use t.Error, not t.Fatal.
 			eventThatWillGiveErrorByServer: func(c *neffos.NSConn, msg neffos.Message) error {
 				defer wg.Done()
 				if !c.Conn.IsClient() {
-					t.Fatalf("this should only be executed by client-side, if not then the JoinConnHandlers didn't work as expected")
+					t.Errorf("this should only be executed by client-side, if not then the JoinConnHandlers didn't work as expected")
 				}
 
 				if msg.Err == nil {
-					t.Fatalf("expected an error from event: %s", eventThatWillGiveErrorByServer)
-				}
-				if expected, got := eventErrorText, msg.Err.Error(); expected != got {
-					t.Fatalf("expected an error from event: %s to match: '%s' but got: '%s'", eventThatWillGiveErrorByServer, expected, got)
+					t.Errorf("expected an error from event: %s", eventThatWillGiveErrorByServer)
+				} else if expected, got := eventErrorText, msg.Err.Error(); expected != got {
+					t.Errorf("expected an error from event: %s to match: '%s' but got: '%s'", eventThatWillGiveErrorByServer, expected, got)
 				}
 				return nil
 			},
 		})
 
-	err := runTestClient("localhost:8080", clientHandler, func(dialer string, client *neffos.Client) {
+	ts.dial(t, clientHandler, func(backend string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(context.TODO(), namespace)
@@ -279,10 +276,7 @@ func TestOnNativeMessageAndMessageError(t *testing.T) {
 		c.Emit(eventThatWillGiveErrorByServer, []byte("doesn't matter"))
 
 		wg.Wait()
-	})()
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 }
 
 func TestOnNativeMessageOnly(t *testing.T) {
@@ -292,6 +286,8 @@ func TestOnNativeMessageOnly(t *testing.T) {
 		namespace     = ""
 		nativeMessage = []byte("this is a native/raw websocket message")
 		events        = neffos.Events{
+			// Runs on the connection's own goroutine, so it must use t.Error,
+			// not t.Fatal.
 			neffos.OnNativeMessage: func(c *neffos.NSConn, msg neffos.Message) error {
 				defer wg.Done()
 
@@ -302,7 +298,7 @@ func TestOnNativeMessageOnly(t *testing.T) {
 				}
 
 				if !reflect.DeepEqual(expectedMessage, msg) {
-					t.Fatalf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
+					t.Errorf("expected a native message to be:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
 				}
 
 				return nil
@@ -310,10 +306,9 @@ func TestOnNativeMessageOnly(t *testing.T) {
 		}
 	)
 
-	teardownServer := runTestServer("localhost:8080", events)
-	defer teardownServer()
+	ts := newTestServers(t, events)
 
-	err := runTestClient("localhost:8080", events, func(dialer string, client *neffos.Client) {
+	ts.dial(t, events, func(backend string, client *neffos.Client) {
 		defer client.Close()
 
 		c, err := client.Connect(context.TODO(), namespace)
@@ -328,97 +323,5 @@ func TestOnNativeMessageOnly(t *testing.T) {
 		})
 
 		wg.Wait()
-	})()
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 }
-
-// No need to encourage users to use go routines for event sending even if it's totally safe in neffos.
-// It works but ^
-// func TestSimultaneouslyEventsRoutines(t *testing.T) {
-// 	// test multiple goroutines sending events, it should work because the lib it is designed to take care of these things.
-// 	var (
-// 		wg               sync.WaitGroup
-// 		namespace        = "namespace1"
-// 		event1           = "event1"
-// 		event2           = "event2"
-// 		event3           = "event3"
-// 		expectedMessages = map[string]neffos.Message{
-// 			event1: {
-// 				Namespace: namespace,
-// 				Event:     event1,
-// 				Body:      []byte("body1"),
-// 			},
-// 			event2: {
-// 				Namespace: namespace,
-// 				Event:     event2,
-// 				Body:      []byte("body2"),
-// 			},
-// 			event3: {
-// 				Namespace: namespace,
-// 				Event:     event3,
-// 				Body:      []byte("body3"),
-// 			},
-// 		}
-// 		events = neffos.Events{
-// 			neffos.OnAnyEvent: func(c *neffos.NSConn, msg neffos.Message) error {
-// 				if neffos.IsSystemEvent(msg.Event) {
-// 					return nil
-// 				}
-
-// 				expectedMessage := expectedMessages[msg.Event]
-
-// 				if !reflect.DeepEqual(msg, expectedMessage) {
-// 					t.Fatalf("expected message:\n%#+v\n\tbut got:\n%#+v", expectedMessage, msg)
-// 				}
-
-// 				if c.Conn.IsClient() {
-// 					// wait for server's reply to the client's send act before done with this event test.
-// 					defer wg.Done()
-// 				} else {
-// 					// send back to the client the message as it's.
-// 					return neffos.Reply(msg.Body)
-// 				}
-
-// 				return nil
-// 			},
-// 		}
-// 	)
-
-// 	teardownServer := runTestServer("localhost:8080", neffos.Namespaces{namespace: events})
-// 	defer teardownServer()
-
-// 	err := runTestClient("localhost:8080", neffos.Namespaces{namespace: events},
-// 		func(dialer string, client *neffos.Client) {
-// 			defer client.Close()
-
-// 			c, err := client.Connect(nil, namespace)
-// 			if err != nil {
-// 				t.Fatal(err)
-// 			}
-
-// 			send := func(event string) {
-// 				wg.Add(1)
-// 				msg := expectedMessages[event]
-// 				c.Emit(msg.Event, msg.Body)
-// 			}
-
-// 			for i := 0; i < 5; i++ {
-// 				go send(event1)
-// 				go send(event2)
-// 				go send(event3)
-// 			}
-
-// 			for i := 0; i < 5; i++ {
-// 				go send(event3)
-// 				go send(event2)
-// 				go send(event1)
-// 			}
-
-// 			wg.Wait()
-// 		})()
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// }

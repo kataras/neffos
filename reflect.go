@@ -27,7 +27,7 @@ func isZero(v reflect.Value) bool {
 			// if has input arguments (1 is for the value receiver, so > 1 for the actual input args)
 			// if output argument is not boolean
 			// then skip this IsZero user-defined function.
-			if !ok || f.Type.NumIn() > 1 || f.Type.NumOut() != 1 && f.Type.Out(0).Kind() != reflect.Bool {
+			if !ok || f.Type.NumIn() > 1 || f.Type.NumOut() != 1 || f.Type.Out(0).Kind() != reflect.Bool {
 				return zero
 			}
 

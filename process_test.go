@@ -2,7 +2,7 @@ package neffos
 
 import (
 	"fmt"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +20,7 @@ func TestProcessWaitDone(t *testing.T) {
 		if p.isDone() {
 			return fmt.Errorf("%s process should be running", testProcessName)
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(50 * time.Millisecond)
 		return nil
 	}
 
@@ -37,58 +37,13 @@ func TestProcessWaitDone(t *testing.T) {
 	}
 }
 
-func TestProcessSingalFinished(t *testing.T) {
-	var testProcessName = "default"
-	procs := newProcesses()
-	p := procs.get(testProcessName)
-
-	var count uint32
-
-	worker := func() error {
-		p.Start()
-		defer p.Done()
-
-		tc := time.NewTicker(time.Second)
-		defer tc.Stop()
-
-		for {
-			select {
-			case <-tc.C:
-				atomic.AddUint32(&count, 1)
-			case <-p.Finished():
-				return nil
-			}
-		}
-	}
-
-	g := new(errgroup.Group)
-	g.Go(worker)
-
-	var sleepSecs uint32 = 2
-	time.Sleep(time.Duration(sleepSecs) * time.Second)
-	p.Signal()
-	p.Wait()
-	if !procs.get(testProcessName).isDone() {
-		t.Fatalf("%s process should be stopped", testProcessName)
-	}
-
-	if err := g.Wait(); err != nil {
-		t.Fatal(err)
-	}
-
-	if counts := atomic.LoadUint32(&count); counts != sleepSecs {
-		t.Fatalf("%s process should tik-tok for %d seconds but: %d", testProcessName, sleepSecs, counts)
-	}
-}
-
 func TestProcessDoneIdempotent(t *testing.T) {
 	procs := newProcesses()
 	p := procs.get("done-twice")
 	p.Start()
 
 	p.Done()
-	// Second Done must be a no-op rather than panicking with "negative WaitGroup
-	// counter".
+	// Second Done must be a no-op rather than panicking with "close of closed channel".
 	p.Done()
 
 	if !p.isDone() {
@@ -106,5 +61,102 @@ func TestProcessDoneIdempotent(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Wait did not return immediately after Done")
+	}
+}
+
+func TestProcessRestart(t *testing.T) {
+	procs := newProcesses()
+	p := procs.get("restart")
+
+	// First run.
+	p.Start()
+	if p.isDone() {
+		t.Fatal("expected process to be running right after Start")
+	}
+	p.Done()
+	if !p.isDone() {
+		t.Fatal("expected process to be done after Done")
+	}
+	p.Wait() // not running anymore, must return immediately.
+
+	// Second run: Start again must make Wait block until the new Done.
+	p.Start()
+	if p.isDone() {
+		t.Fatal("expected process to be running after the second Start")
+	}
+
+	waitReturned := make(chan struct{})
+	go func() {
+		p.Wait()
+		close(waitReturned)
+	}()
+
+	select {
+	case <-waitReturned:
+		t.Fatal("Wait returned before the second Done was called")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	p.Done()
+
+	select {
+	case <-waitReturned:
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return after the second Done")
+	}
+
+	if !p.isDone() {
+		t.Fatal("expected process to be done after the second Done")
+	}
+}
+
+func TestProcessWaitWithoutStartReturns(t *testing.T) {
+	procs := newProcesses()
+	p := procs.get("never-started")
+
+	if !p.isDone() {
+		t.Fatal("expected a never-started process to report isDone")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait blocked on a process that was never started")
+	}
+}
+
+func TestProcessesGetSamePointerConcurrently(t *testing.T) {
+	procs := newProcesses()
+	const name = "shared"
+	const goroutines = 50
+
+	var (
+		wg      sync.WaitGroup
+		results = make([]*process, goroutines)
+	)
+
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			results[i] = procs.get(name)
+		}(i)
+	}
+	wg.Wait()
+
+	first := results[0]
+	if first == nil {
+		t.Fatal("expected a non-nil process")
+	}
+	for i, p := range results {
+		if p != first {
+			t.Fatalf("goroutine %d got a different *process pointer than goroutine 0", i)
+		}
 	}
 }

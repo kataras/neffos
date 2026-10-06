@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lobby</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+  form { display: flex; gap: .5rem; }
+  input { flex: 1; padding: .3rem; }
+  #log { margin-top: 1rem; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+  .me { color: #666; }
+  .notice { color: #a50; }
+  .error { color: #b00; }
+</style>
+</head>
+<body>
+<h1>Lobby</h1>
+<p>Sign in as alice, bob or carol (the demo token is the name plus <code>-token</code>). Then type a line, or one of
+<code>/msg bob text</code>, <code>/join general</code>, <code>/leave</code>, <code>/leave all</code>, <code>/rooms</code>,
+<code>/who</code>, <code>/who general</code>, <code>/wave</code>, <code>/quit</code>.</p>
+
+<form id="signin">
+  <input id="name" placeholder="your name" value="alice" autocomplete="off">
+  <button>Sign in</button>
+</form>
+<form id="chat" hidden>
+  <input id="line" autocomplete="off" placeholder="type a line or a /command">
+  <button>Send</button>
+</form>
+<div id="log"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/neffos.js@0.3/dist/neffos.global.min.js"></script>
+<script>
+  const log = document.getElementById("log");
+
+  function show(text, cls) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    if (cls) div.className = cls;
+    log.prepend(div);
+  }
+
+  // The handlers mirror the Go client's clientEvents.
+  const handlers = {
+    chat: {
+      _OnNamespaceConnected: (ns, msg) => {
+        const again = ns.conn.wasReconnected() ? " (reconnected)" : "";
+        show(`you are in "${msg.Namespace}"${again}`);
+      },
+      _OnNamespaceDisconnect: (ns, msg) => {
+        const info = ns.conn.closeInfo; // set when the socket dropped, not after /quit
+        if (!msg.IsForced || !info) return;
+        show(`connection closed: ${info.code} ${info.reason}, redialing in five seconds`, "error");
+      },
+      _OnRoomJoined: (ns, msg) => show(`you joined #${msg.Room}`),
+      _OnRoomLeft: (ns, msg) => show(`you left #${msg.Room}`),
+      Chat: (ns, msg) => {
+        const m = msg.unmarshal(); // {from, text}, as the server's chatMessage
+        show(`${msg.Room ? "#" + msg.Room + " " : ""}${m.from}: ${m.text}`);
+      },
+      Private: (ns, msg) => {
+        if (msg.Err) { // the server refused our own private message
+          show(`not sent: ${msg.Err.message}`, "error");
+          return;
+        }
+        const m = msg.unmarshal();
+        show(`(private) ${m.from}: ${m.text}`);
+      },
+      Notice: (ns, msg) => show(`* ${msg.text()}`, "notice"),
+      Wave: (ns, msg) => {
+        const bytes = [...msg.bytes()].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+        show(`wave in a ${msg.SetBinary ? "binary" : "text"} frame: ${bytes}`);
+      },
+      Ping: (ns, msg) => {
+        show("* the operator pinged you", "notice");
+        return neffos.reply("pong from " + name);
+      },
+    },
+  };
+
+  let name = "";
+  let conn;
+  let room; // the current room's name; empty means the whole namespace
+
+  document.getElementById("signin").onsubmit = async (e) => {
+    e.preventDefault();
+    name = document.getElementById("name").value.trim();
+    if (!name) return;
+
+    // Browsers cannot set handshake headers, so the token goes in the URL.
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${scheme}://${location.host}/ws?token=${encodeURIComponent(name + "-token")}`;
+    try {
+      conn = await neffos.dial(url, handlers, { reconnect: 5000 });
+      await conn.connect("chat");
+    } catch (err) {
+      show(`cannot sign in: ${err.message}`, "error");
+      return;
+    }
+    document.getElementById("signin").hidden = true;
+    document.getElementById("chat").hidden = false;
+    document.getElementById("line").focus();
+  };
+
+  document.getElementById("chat").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("line");
+    const line = input.value.trim();
+    input.value = "";
+    if (!line) return;
+
+    // Look the namespace up every time: after a reconnect it is a new one.
+    const ns = conn.namespace("chat");
+    if (!ns) {
+      show("not connected yet", "error");
+      return;
+    }
+
+    const [cmd, ...rest] = line.split(" ");
+    const arg = rest.join(" ");
+    try {
+      switch (cmd) {
+        case "/quit":
+          conn.close();
+          show("connection closed");
+          document.getElementById("chat").hidden = true;
+          break;
+        case "/msg": { // /msg bob some text
+          const [to, ...words] = rest;
+          ns.emit("Private", neffos.marshal({ to, text: words.join(" ") }));
+          break;
+        }
+        case "/join": // /join general
+          await ns.joinRoom(arg);
+          room = arg;
+          break;
+        case "/leave": // /leave leaves the current room, /leave all every room
+          if (arg === "all") {
+            await ns.leaveAll();
+          } else {
+            await ns.room(room)?.leave();
+          }
+          room = "";
+          break;
+        case "/rooms":
+          show(ns.roomNames().map((r) => "#" + r).join(" ") || "no rooms");
+          break;
+        case "/wave":
+          ns.emitBinary("Wave", new Uint8Array([0x00, 0x7f, 0xff, 0x7f]));
+          break;
+        case "/who": { // /who for everyone online, /who general for one room
+          const reply = await ns.ask("Who", arg);
+          show(`online: ${reply.unmarshal().join(", ")}`);
+          break;
+        }
+        default: {
+          const body = neffos.marshal({ text: line });
+          const target = room ? ns.room(room) : ns;
+          (target ?? ns).emit("Chat", body);
+          show(`${room ? "#" + room + " " : ""}me: ${line}`, "me");
+        }
+      }
+    } catch (err) {
+      show(`${cmd}: ${err.message}`, "error");
+    }
+  };
+</script>
+</body>
+</html>
