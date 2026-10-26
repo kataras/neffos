@@ -10,7 +10,7 @@ Developers are not forced to upgrade if they don't really need it. Upgrade whene
 
 **How to upgrade**: Open your command-line and execute this command: `go get github.com/kataras/neffos@latest` and `go mod tidy`.
 
-# Next
+# Mo, 26 October 2026 | v0.0.25
 
 ### Highlights
 
@@ -29,10 +29,10 @@ Developers are not forced to upgrade if they don't really need it. Upgrade whene
 ### Breaking changes
 
 **Go 1.27 or later is required** (`go 1.27` in `go.mod`). Everything below is a compile-time break; the fix for
-each is in the right column. The wire protocol is unchanged, so v0.0.x servers, v0.1.0 servers and neffos.js
+each is in the right column. The wire protocol is unchanged, so v0.0.24 servers, v0.0.25 servers and neffos.js
 0.3 clients keep talking to each other.
 
-| v0.0.x | v0.1.0 |
+| v0.0.24 and earlier | v0.0.25 |
 |---|---|
 | `neffos.Marshal(v) []byte` | `neffos.Marshal(v) ([]byte, error)`; or `c.SendObject(event, v)`, `room.SendObject(event, v)`, `c.AskObject[Reply](ctx, event, v)`, `neffos.ReplyObject(v)` |
 | `msg.Unmarshal(&v)` | unchanged; or `v, err := msg.As[T]()` |
@@ -218,12 +218,12 @@ each is in the right column. The wire protocol is unchanged, so v0.0.x servers, 
 - A plain error returned from `Server.OnConnect` now closes the handshake with code 1008
   (`ClosePolicyViolation`) and the error text as the reason; `ErrServerClosed` closes it with code 1001
   (`CloseGoingAway`).
-- A `CloseError` returned from any event callback now closes the connection with its code. Before v0.1.0 this
+- A `CloseError` returned from any event callback now closes the connection with its code. Before v0.0.25 this
   was documented but not done: only an error reply was sent.
 - `StackExchange.OnDisconnect` now fires for every removed connection, including one that `Server.OnConnect`
   rejected.
 - nats subjects are sanitised: a namespace containing `.`, `*`, `>` or whitespace now maps to `<prefix>.a_b`
-  rather than `<prefix>.a.b`, so v0.0.x and v0.1.0 servers sharing one nats no longer share such namespaces.
+  rather than `<prefix>.a.b`, so v0.0.24 and v0.0.25 servers sharing one nats no longer share such namespaces.
   The redis exchange moved from PSUBSCRIBE to SUBSCRIBE, so namespaces with glob characters now work; channel
   names for ordinary namespaces are unchanged.
 - During `Server.Close` and `Server.Shutdown` a namespace or room is already removed when its forced
@@ -255,16 +255,16 @@ each is in the right column. The wire protocol is unchanged, so v0.0.x servers, 
 - The API outline on the README and the wiki's Getting-started page is a Mermaid class diagram, rendered by
   GitHub, in place of the old ASCII drawing; the wiki keeps the source (`_assets/api-outline.mmd`) and rendered
   SVG and PNG copies for PDF exports.
-- The migration notes for existing v0.0.x code live on the wiki:
-  https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0
+- The migration notes for code written against v0.0.24 or earlier live on the wiki:
+  https://github.com/kataras/neffos/wiki/Migrating-to-v0.0.25
 
 ### Upgrading
 
 See the wiki page for the full migration guide:
-https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0
+https://github.com/kataras/neffos/wiki/Migrating-to-v0.0.25
 
 ### neffos.js pairing
 
 neffos.js 0.3.0 ships ESM, CommonJS and browser (global) builds from one source, with `ws` as an optional
 dependency that is only imported dynamically when the build needs it (so a browser or Deno bundle never pulls
-it in). It speaks the same wire protocol as both neffos (Go) v0.0.x and v0.1.x.
+it in). It speaks the same wire protocol as neffos (Go) v0.0.25 and every earlier v0.0.x release.

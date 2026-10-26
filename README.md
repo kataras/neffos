@@ -229,7 +229,7 @@ For detailed technical documentation, head over to [pkg.go.dev](https://pkg.go.d
 
 ## What's new
 
-See [HISTORY.md](HISTORY.md) for the full changelog. If you are upgrading from a v0.0.x release, read the migration guide on the wiki: [Migrating-to-v0.1.0](https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0).
+See [HISTORY.md](HISTORY.md) for the full changelog. If you are upgrading from v0.0.24 or earlier, read the migration guide on the wiki: [Migrating-to-v0.0.25](https://github.com/kataras/neffos/wiki/Migrating-to-v0.0.25).
 
 ## Contributing
 

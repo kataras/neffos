@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/kataras/iris/v14 v14.0.0-00010101000000-000000000000
-	github.com/kataras/neffos v0.1.0
+	github.com/kataras/neffos v0.0.25
 )
 
 require (
@@ -38,8 +38,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Iris v14 is not published yet and neffos v0.1.0 is not tagged yet: build
-// against the sibling checkouts. Remove both lines when they are.
+// Iris v14 is not published yet: build it from the sibling checkout and remove
+// that line when it is. neffos is replaced by the parent checkout so this example
+// tracks the repository, as _examples/go.mod does.
 replace (
 	github.com/kataras/iris/v14 => ../../../../iris-private
 	github.com/kataras/neffos => ../../..

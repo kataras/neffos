@@ -147,6 +147,6 @@ Browsers cannot set handshake headers, so names and tokens travel as query param
 
 ## Where to go next
 
-- The [wiki](https://github.com/kataras/neffos/wiki) explains the concepts behind these examples; every section above names its pages. Coming from v0.0.x? Read [Migrating to v0.1.0](https://github.com/kataras/neffos/wiki/Migrating-to-v0.1.0).
+- The [wiki](https://github.com/kataras/neffos/wiki) explains the concepts behind these examples; every section above names its pages. Coming from v0.0.24 or earlier? Read [Migrating to v0.0.25](https://github.com/kataras/neffos/wiki/Migrating-to-v0.0.25).
 - The [API reference](https://pkg.go.dev/github.com/kataras/neffos) on pkg.go.dev lists every type and method.
 - Questions and bug reports go to [GitHub issues](https://github.com/kataras/neffos/issues).

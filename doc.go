@@ -106,7 +106,7 @@
 //
 //	https://github.com/kataras/neffos
 //
-// Wiki, including the v0.1.0 migration guide:
+// Wiki, including the v0.0.25 migration guide:
 //
 //	https://github.com/kataras/neffos/wiki
 //

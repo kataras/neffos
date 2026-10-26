@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/gobwas/ws v1.4.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/kataras/neffos v0.1.0
+	github.com/kataras/neffos v0.0.25
 	github.com/robfig/cron/v3 v3.0.1
 	google.golang.org/protobuf v1.36.11
 )
