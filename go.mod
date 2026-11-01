@@ -6,7 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/gobwas/ws v1.4.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/nats-io/nats.go v1.54.0
+	github.com/nats-io/nats.go v1.55.0
 	github.com/redis/go-redis/v9 v9.23.0
 	golang.org/x/sync v0.23.0
 )
